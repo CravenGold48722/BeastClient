@@ -24,7 +24,7 @@ public final class FlightHack extends Hack
 	implements UpdateListener, IsPlayerInWaterListener, AirStrafingSpeedListener
 {
 	public final SliderSetting horizontalSpeed = new SliderSetting(
-		"Horizontal Speed", 1, 0.05, 10, 0.05, ValueDisplay.DECIMAL);
+		"Horizontal Speed", 1, 0.05, 20, 0.05, ValueDisplay.DECIMAL);
 	
 	public final SliderSetting verticalSpeed = new SliderSetting(
 		"Vertical Speed",
@@ -150,3 +150,4 @@ public final class FlightHack extends Hack
 		event.setInWater(false);
 	}
 }
+

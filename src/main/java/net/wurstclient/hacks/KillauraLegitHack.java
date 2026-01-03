@@ -59,7 +59,7 @@ public final class KillauraLegitHack extends Hack implements UpdateListener,
 				.withSuffix("ms").withLabel(0, "off"));
 	
 	private final SliderSetting rotationSpeed =
-		new SliderSetting("Rotation Speed", 600, 10, 3600, 10,
+		new SliderSetting("Rotation Speed", 600, 10, 7200, 10,
 			ValueDisplay.DEGREES.withSuffix("/s"));
 	
 	private final EnumSetting<Priority> priority = new EnumSetting<>("Priority",
@@ -307,3 +307,4 @@ public final class KillauraLegitHack extends Hack implements UpdateListener,
 		}
 	}
 }
+

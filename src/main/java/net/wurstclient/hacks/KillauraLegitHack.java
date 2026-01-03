@@ -44,7 +44,7 @@ public final class KillauraLegitHack extends Hack implements UpdateListener,
 	HandleInputListener, MouseUpdateListener, RenderListener
 {
 	private final SliderSetting range =
-		new SliderSetting("Range", 4.25, 1, 4.25, 0.05, ValueDisplay.DECIMAL);
+		new SliderSetting("Range", 10, 1, 10, 0.05, ValueDisplay.DECIMAL);
 	
 	private final AttackSpeedSliderSetting speed =
 		new AttackSpeedSliderSetting();
@@ -307,4 +307,5 @@ public final class KillauraLegitHack extends Hack implements UpdateListener,
 		}
 	}
 }
+
 

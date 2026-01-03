@@ -101,8 +101,8 @@ public final class CriticalsHack extends Hack
 	
 	private void doMiniJump()
 	{
-		MC.player.push(0, 0.1, 0);
-		MC.player.fallDistance = 0.1F;
+		MC.player.push(0, 0.25, 0);
+		MC.player.fallDistance = 0.25F;
 		MC.player.setOnGround(false);
 	}
 	
@@ -131,3 +131,4 @@ public final class CriticalsHack extends Hack
 		}
 	}
 }
+

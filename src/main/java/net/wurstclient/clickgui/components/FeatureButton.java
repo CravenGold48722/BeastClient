@@ -19,6 +19,7 @@ import net.wurstclient.clickgui.Component;
 import net.wurstclient.clickgui.SettingsWindow;
 import net.wurstclient.clickgui.Window;
 import net.wurstclient.hacks.TooManyHaxHack;
+import net.wurstclient.util.BeastColors;
 import net.wurstclient.util.ChatUtils;
 import net.wurstclient.util.RenderUtils;
 
@@ -100,37 +101,47 @@ public final class FeatureButton extends Component
 		if(hFeature)
 			GUI.setTooltip(feature.getWrappedDescription(200));
 		
+		boolean enabled = feature.isEnabled();
+		
 		// buttons
-		context.fill(x1, y1, x3, y2,
-			getButtonColor(feature.isEnabled(), hFeature));
+		context.fill(x1, y1, x3, y2, getButtonColor(enabled, hFeature));
 		if(hasSettings)
 			context.fill(x3, y1, x2, y2, getButtonColor(false, hSettings));
 		
 		context.guiRenderState.up();
 		
 		// outlines
-		int outlineColor = 0xFFBC0000;
-		RenderUtils.drawBorder2D(context, x1, y1, x2, y2, outlineColor);
+		ClickGui.drawAccentBorder(context, x1, y1, x2, y2);
 		if(hasSettings)
-			RenderUtils.drawLine2D(context, x3, y1, x3, y2, outlineColor);
+			RenderUtils.drawGradientVLine2D(context, x3, y1, y2, 1F);
 		
 		// arrow
 		if(hasSettings)
 			ClickGuiIcons.drawMinimizeArrow(context, x3, y1 + 0.5F, x2,
 				y2 - 0.5F, hSettings, !isSettingsWindowOpen());
-		
+			
 		// text
+		// An enabled feature is labelled in flat light red rather than the
+		// moving gradient, so that "this is on" stays readable at a glance.
 		String name = feature.getName();
 		int tx = x1 + (x3 - x1 - TR.width(name)) / 2;
 		int ty = y1 + 2;
-		context.text(TR, name, tx, ty, GUI.getTxtColor(), false);
+		if(enabled)
+			context.text(TR, name, tx, ty, BeastColors.SELECTED_RED, false);
+		else
+			ClickGui.drawAccentText(context, TR, name, tx, ty);
 	}
 	
 	private int getButtonColor(boolean enabled, boolean hovering)
 	{
-		float[] rgb = enabled ? new float[]{0, 1, 0} : GUI.getBgColor();
 		float opacity = GUI.getOpacity() * (hovering ? 1.5F : 1);
-		return RenderUtils.toIntColor(rgb, opacity);
+		
+		// Enabled features light up in red instead of the old green.
+		if(enabled)
+			return BeastColors.withOpacity(BeastColors.SELECTED_FILL,
+				Math.min(1F, opacity + 0.35F));
+		
+		return RenderUtils.toIntColor(GUI.getBgColor(), opacity);
 	}
 	
 	@Override

@@ -14,6 +14,7 @@ import net.wurstclient.Feature;
 import net.wurstclient.hacks.ClickGuiHack;
 import net.wurstclient.hacks.NavigatorHack;
 import net.wurstclient.hacks.TooManyHaxHack;
+import net.wurstclient.util.ToggleAnnouncer;
 
 public abstract class Hack extends Feature
 {
@@ -24,6 +25,33 @@ public abstract class Hack extends Feature
 	private boolean enabled;
 	private final boolean stateSaved =
 		!getClass().isAnnotationPresent(DontSaveState.class);
+	
+	/**
+	 * Set immediately before a toggle that the user themselves asked for, and
+	 * consumed by the very next {@link #setEnabled(boolean)} call.
+	 *
+	 * <p>
+	 * Only user-initiated toggles get announced. Hacks routinely drive each
+	 * other - AimAssist's auto-combo flips AutoSprint on and off every single
+	 * tick to reset sprint between hits - and announcing that would bury the
+	 * chat under hundreds of messages a minute.
+	 *
+	 * <p>
+	 * Consuming it on entry (rather than at the end) is what keeps a hack that
+	 * switches itself back off inside {@code onEnable} - ClickGUI and Navigator
+	 * both do - from announcing an instant "on" followed by "off".
+	 */
+	private static boolean userInitiatedToggle;
+	
+	/**
+	 * Marks the next hack toggle as something the user asked for, so that it
+	 * gets announced. Called from the ClickGUI, TabGUI, Navigator, keybinds and
+	 * commands.
+	 */
+	public static void markUserInitiatedToggle()
+	{
+		userInitiatedToggle = true;
+	}
 	
 	public Hack(String name)
 	{
@@ -83,6 +111,11 @@ public abstract class Hack extends Feature
 	
 	public final void setEnabled(boolean enabled)
 	{
+		// Always consumed on entry, even when the toggle is then rejected, so
+		// the marker can never leak into an unrelated toggle later on.
+		boolean announce = userInitiatedToggle;
+		userInitiatedToggle = false;
+		
 		if(this.enabled == enabled)
 			return;
 		
@@ -92,8 +125,15 @@ public abstract class Hack extends Feature
 		
 		this.enabled = enabled;
 		
+		// NavigatorHack and ClickGuiHack open a screen and immediately switch
+		// themselves back off, so they stay out of the HackList.
 		if(!(this instanceof NavigatorHack || this instanceof ClickGuiHack))
 			WURST.getHud().getHackList().updateState(this);
+			
+		// Every hack announces its toggle - but only when the user is the one
+		// who asked for it.
+		if(announce)
+			ToggleAnnouncer.announce(this, enabled);
 		
 		if(enabled)
 			onEnable();
@@ -113,6 +153,9 @@ public abstract class Hack extends Feature
 	@Override
 	public final void doPrimaryAction()
 	{
+		// This is only ever reached by a user clicking or selecting the
+		// feature in the ClickGUI, TabGUI or Navigator.
+		markUserInitiatedToggle();
 		setEnabled(!enabled);
 	}
 	

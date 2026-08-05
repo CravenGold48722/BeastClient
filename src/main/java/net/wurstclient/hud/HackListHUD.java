@@ -21,6 +21,7 @@ import net.wurstclient.hack.Hack;
 import net.wurstclient.other_features.HackListOtf;
 import net.wurstclient.other_features.HackListOtf.Mode;
 import net.wurstclient.other_features.HackListOtf.Position;
+import net.wurstclient.util.RenderUtils;
 
 public final class HackListHUD implements UpdateListener
 {
@@ -128,6 +129,15 @@ public final class HackListHUD implements UpdateListener
 		}
 	}
 	
+	/**
+	 * The hack list is painted with the accent gradient so it matches the rest
+	 * of the UI, except while RainbowUI is on - that hack owns the color.
+	 */
+	private boolean useGradient()
+	{
+		return !WurstClient.INSTANCE.getHax().rainbowUiHack.isEnabled();
+	}
+	
 	private void drawString(GuiGraphicsExtractor context, String s)
 	{
 		Font tr = WurstClient.MC.font;
@@ -145,7 +155,11 @@ public final class HackListHUD implements UpdateListener
 		
 		context.text(tr, s, posX + 1, posY + 1, CommonColors.BLACK, false);
 		context.guiRenderState.up();
-		context.text(tr, s, posX, posY, textColor | CommonColors.BLACK, false);
+		if(useGradient())
+			RenderUtils.drawGradientText(context, tr, s, posX, posY, 1F, false);
+		else
+			context.text(tr, s, posX, posY, textColor | CommonColors.BLACK,
+				false);
 		
 		posY += 9;
 	}
@@ -173,7 +187,11 @@ public final class HackListHUD implements UpdateListener
 		int alpha = (int)(255 * (1 - offset / 4)) << 24;
 		context.text(tr, s, (int)posX + 1, posY + 1, 0x04000000 | alpha, false);
 		context.guiRenderState.up();
-		context.text(tr, s, (int)posX, posY, textColor | alpha, false);
+		if(useGradient())
+			RenderUtils.drawGradientText(context, tr, s, (int)posX, posY,
+				(alpha >>> 24) / 255F, false);
+		else
+			context.text(tr, s, (int)posX, posY, textColor | alpha, false);
 		
 		posY += 9;
 	}

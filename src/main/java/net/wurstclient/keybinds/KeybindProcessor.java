@@ -129,6 +129,7 @@ public final class KeybindProcessor
 				return;
 			}
 			
+			Hack.markUserInitiatedToggle();
 			hack.setEnabled(!hack.isEnabled());
 		}
 	}

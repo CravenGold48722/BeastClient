@@ -13,6 +13,8 @@ import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.gen.Accessor;
+import org.spongepowered.asm.mixin.gen.Invoker;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -29,13 +31,22 @@ import net.minecraft.network.chat.MessageSignature;
 import net.wurstclient.WurstClient;
 import net.wurstclient.event.EventManager;
 import net.wurstclient.events.ChatInputListener.ChatInputEvent;
+import net.wurstclient.mixinterface.IChatComponent;
 
 @Mixin(ChatComponent.class)
-public class ChatComponentMixin
+public abstract class ChatComponentMixin implements IChatComponent
 {
 	@Shadow
 	@Final
 	private List<GuiMessage.Line> trimmedMessages;
+	
+	@Accessor("allMessages")
+	@Override
+	public abstract List<GuiMessage> wurst_getAllMessages();
+	
+	@Invoker("refreshTrimmedMessages")
+	@Override
+	public abstract void wurst_refreshTrimmedMessages();
 	
 	@Inject(
 		method = "addMessage(Lnet/minecraft/network/chat/Component;Lnet/minecraft/network/chat/MessageSignature;Lnet/minecraft/client/multiplayer/chat/GuiMessageSource;Lnet/minecraft/client/multiplayer/chat/GuiMessageTag;)V",

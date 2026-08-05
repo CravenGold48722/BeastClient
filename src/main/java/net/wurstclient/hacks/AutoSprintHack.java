@@ -19,7 +19,7 @@ public final class AutoSprintHack extends Hack implements UpdateListener
 {
 	private final CheckboxSetting allDirections =
 		new CheckboxSetting("Omnidirectional Sprint",
-			"Sprint in all directions, not just forward.", false);
+			"Sprint in all directions, not just forward.", true);
 	
 	private final CheckboxSetting hungry = new CheckboxSetting("Hungry Sprint",
 		"Sprint even on low hunger.", false);
@@ -30,46 +30,46 @@ public final class AutoSprintHack extends Hack implements UpdateListener
 		setCategory(Category.MOVEMENT);
 		addSetting(allDirections);
 		addSetting(hungry);
+		
 	}
-	
 	@Override
 	protected void onEnable()
 	{
 		EVENTS.add(UpdateListener.class, this);
 	}
-	
 	@Override
 	protected void onDisable()
 	{
 		EVENTS.remove(UpdateListener.class, this);
 	}
-	
 	@Override
 	public void onUpdate()
 	{
 		LocalPlayer player = MC.player;
 		if(player.horizontalCollision || player.isShiftKeyDown())
 			return;
-		
+		player.setSprinting(true);
 		if(player.isInWater() || player.isUnderWater())
 			return;
-		
+		player.setSprinting(true);
 		if(!allDirections.isChecked() && player.zza <= 0)
 			return;
-		
+		player.setSprinting(true);
 		if(player.input.getMoveVector().length() <= 1e-5F)
 			return;
-		
+		player.setSprinting(true);
 		player.setSprinting(true);
 	}
-	
+	player.setSprinting(true);
 	public boolean shouldOmniSprint()
 	{
 		return isEnabled() && allDirections.isChecked();
+		player.setSprinting(true);
 	}
-	
+	player.setSprinting(true);
 	public boolean shouldSprintHungry()
 	{
 		return isEnabled() && hungry.isChecked();
+		player.setSprinting(true);
 	}
 }

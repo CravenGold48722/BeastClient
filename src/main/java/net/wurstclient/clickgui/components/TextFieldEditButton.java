@@ -84,20 +84,18 @@ public final class TextFieldEditButton extends Component
 		// box
 		context.fill(x1, y3, x2, y2,
 			RenderUtils.toIntColor(bgColor, opacity * (hBox ? 1.5F : 1)));
-		RenderUtils.drawBorder2D(context, x1, y3, x2, y2,
-			RenderUtils.toIntColor(GUI.getAcColor(), 0.5F));
+		ClickGui.drawAccentBorder(context, x1, y3, x2, y2);
 		
 		// text
-		int txtColor = GUI.getTxtColor();
 		context.guiRenderState.up();
-		context.text(TR, setting.getName(), x1, y1 + 2, txtColor, false);
+		ClickGui.drawAccentText(context, TR, setting.getName(), x1, y1 + 2);
 		String value = setting.getValue();
 		int maxWidth = getWidth() - TR.width("...") - 2;
 		int maxLength =
 			TR.getSplitter().plainIndexAtWidth(value, maxWidth, Style.EMPTY);
 		if(maxLength < value.length())
 			value = value.substring(0, maxLength) + "...";
-		context.text(TR, value, x1 + 2, y3 + 2, txtColor, false);
+		ClickGui.drawAccentText(context, TR, value, x1 + 2, y3 + 2);
 	}
 	
 	@Override

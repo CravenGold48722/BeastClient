@@ -113,9 +113,8 @@ public final class PlantTypeComponent extends Component
 		// boxes
 		context.fill(x3, y3, x4, y2, getFillColor(hHarvest));
 		context.fill(x5, y3, x6, y2, getFillColor(hReplant));
-		int outlineColor = RenderUtils.toIntColor(GUI.getAcColor(), 0.5F);
-		RenderUtils.drawBorder2D(context, x3, y3, x4, y2, outlineColor);
-		RenderUtils.drawBorder2D(context, x5, y3, x6, y2, outlineColor);
+		ClickGui.drawAccentBorder(context, x3, y3, x4, y2);
+		ClickGui.drawAccentBorder(context, x5, y3, x6, y2);
 		
 		// checks
 		if(setting.isHarvestingEnabled())
@@ -125,9 +124,9 @@ public final class PlantTypeComponent extends Component
 		
 		// text
 		String name = setting.getName();
-		context.text(TR, name, x3 + 2, y1 + 3, GUI.getTxtColor(), false);
-		context.text(TR, HARVEST, x4 + 2, y3 + 2, GUI.getTxtColor(), false);
-		context.text(TR, REPLANT, x6 + 2, y3 + 2, GUI.getTxtColor(), false);
+		ClickGui.drawAccentText(context, TR, name, x3 + 2, y1 + 3);
+		ClickGui.drawAccentText(context, TR, HARVEST, x4 + 2, y3 + 2);
+		ClickGui.drawAccentText(context, TR, REPLANT, x6 + 2, y3 + 2);
 	}
 	
 	private int getFillColor(boolean hovering)

@@ -10,10 +10,15 @@ package net.wurstclient.hacks;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityEvent;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
+import net.wurstclient.events.PacketInputListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.mixinterface.IMultiPlayerGameMode;
@@ -23,25 +28,64 @@ import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.util.InventoryUtils;
 
 @SearchTags({"auto totem", "offhand", "off-hand"})
-public final class AutoTotemHack extends Hack implements UpdateListener
+public final class AutoTotemHack extends Hack
+	implements UpdateListener, PacketInputListener
 {
 	private final CheckboxSetting showCounter = new CheckboxSetting(
 		"Show totem counter", "Displays the number of totems you have.", true);
 	
 	private final SliderSetting delay = new SliderSetting("Delay",
-		"Amount of ticks to wait before equipping the next totem.", 0, 0, 20, 1,
-		ValueDisplay.INTEGER);
+		"Amount of ticks to wait before equipping the next totem.\n\n"
+			+ "Ignored right after a totem pops - the replacement always goes"
+			+ " in immediately.",
+		0, 0, 20, 1, ValueDisplay.INTEGER);
 	
 	private final SliderSetting health = new SliderSetting("Health",
 		"Won't equip a totem until your health reaches this value or falls"
-			+ " below it.\n" + "0 = always active",
+			+ " below it.\n" + "0 = always active\n\n"
+			+ "Ignored right after a totem pops.",
 		0, 0, 10, 0.5, ValueDisplay.DECIMAL.withSuffix(" hearts")
 			.withLabel(1, "1 heart").withLabel(0, "ignore"));
+	
+	private final CheckboxSetting overrideInput =
+		new CheckboxSetting("Override input",
+			"Freezes your movement input for the single tick in which a"
+				+ " replacement totem is being equipped, so nothing you are"
+				+ " holding down can interfere with the swap.",
+			true);
 	
 	private int nextTickSlot;
 	private int totems;
 	private int timer;
 	private boolean wasTotemInOffhand;
+	
+	/**
+	 * Set from the network thread the instant the server tells us a totem
+	 * popped, and consumed on a following client tick. Volatile because it is
+	 * written off-thread.
+	 */
+	private volatile boolean totemPopped;
+	
+	/**
+	 * How many more ticks the pop still counts as urgent.
+	 *
+	 * <p>
+	 * The pop effect and the packet that empties the offhand slot don't
+	 * necessarily land on the same tick, so urgency has to survive a few ticks
+	 * of the offhand still looking full. It's bounded so a pop we could never
+	 * act on (no totems left, container open) can't silently freeze the
+	 * player's input minutes later.
+	 */
+	private int urgentTicksLeft;
+	
+	/** How long a pop stays urgent, in ticks. */
+	private static final int URGENT_WINDOW_TICKS = 60;
+	
+	/**
+	 * True while this tick is being spent re-equipping a totem after a pop.
+	 * Read by LocalPlayerMixin to zero out movement input for that tick.
+	 */
+	private boolean overridingInput;
 	
 	public AutoTotemHack()
 	{
@@ -50,6 +94,7 @@ public final class AutoTotemHack extends Hack implements UpdateListener
 		addSetting(showCounter);
 		addSetting(delay);
 		addSetting(health);
+		addSetting(overrideInput);
 	}
 	
 	@Override
@@ -71,24 +116,92 @@ public final class AutoTotemHack extends Hack implements UpdateListener
 		totems = 0;
 		timer = 0;
 		wasTotemInOffhand = false;
-		EVENTS.add(UpdateListener.class, this);
+		totemPopped = false;
+		urgentTicksLeft = 0;
+		overridingInput = false;
+		
+		// Registered at the front of the listener list so that a totem is back
+		// in the offhand before any other hack gets a chance to run that tick.
+		EVENTS.addFirst(UpdateListener.class, this);
+		EVENTS.add(PacketInputListener.class, this);
 	}
 	
 	@Override
 	protected void onDisable()
 	{
 		EVENTS.remove(UpdateListener.class, this);
+		EVENTS.remove(PacketInputListener.class, this);
+		overridingInput = false;
+		totemPopped = false;
+		urgentTicksLeft = 0;
+	}
+	
+	/**
+	 * Watches for the server-sent "this entity was saved by a totem" effect so
+	 * a replacement can go in on the very next tick, instead of waiting to
+	 * notice that the offhand went empty.
+	 */
+	@Override
+	public void onReceivedPacket(PacketInputEvent event)
+	{
+		if(!(event.getPacket() instanceof ClientboundEntityEventPacket packet))
+			return;
+		
+		if(packet.getEventId() != EntityEvent.PROTECTED_FROM_DEATH)
+			return;
+			
+		// This runs on the network thread, so everything it touches is read
+		// defensively.
+		try
+		{
+			ClientLevel level = MC.level;
+			if(level == null || MC.player == null)
+				return;
+			
+			Entity entity = packet.getEntity(level);
+			if(entity == MC.player)
+				totemPopped = true;
+			
+		}catch(Exception e)
+		{
+			// A torn read of the entity list is harmless here - worst case we
+			// miss one pop and fall back to the normal offhand check below.
+		}
+	}
+	
+	/**
+	 * Whether movement input should be suppressed this tick because a totem is
+	 * being swapped in. Read from LocalPlayerMixin.
+	 */
+	public boolean isOverridingInput()
+	{
+		return isEnabled() && overridingInput && overrideInput.isChecked();
 	}
 	
 	@Override
 	public void onUpdate()
 	{
+		// The override only ever lasts for the tick that does the swap.
+		overridingInput = false;
+		
 		finishMovingTotem();
 		
 		int nextTotemSlot = searchForTotems();
 		
+		// Open the urgency window when a pop is first seen, then let it tick
+		// down. It can't be consumed right here, because the offhand slot may
+		// not have been emptied by the server yet.
+		if(totemPopped)
+		{
+			totemPopped = false;
+			urgentTicksLeft = URGENT_WINDOW_TICKS;
+		}else if(urgentTicksLeft > 0)
+			urgentTicksLeft--;
+		
 		if(isTotem(MC.player.getOffhandItem()))
 		{
+			// A totem is in place, so there is nothing urgent left to do.
+			urgentTicksLeft = 0;
 			wasTotemInOffhand = true;
 			return;
 		}
@@ -102,14 +215,26 @@ public final class AutoTotemHack extends Hack implements UpdateListener
 		if(nextTotemSlot == -1)
 			return;
 		
-		float healthF = health.getValueF();
-		if(healthF > 0 && MC.player.getHealth() > healthF * 2F)
-			return;
-		
 		// don't move items while a container is open
 		if(MC.screen instanceof AbstractContainerScreen
 			&& !(MC.screen instanceof InventoryScreen
 				|| MC.screen instanceof CreativeModeInventoryScreen))
+			return;
+			
+		// A pop outranks everything: it skips the health gate, skips the
+		// delay, and freezes movement input for this tick so that nothing the
+		// player is holding down can get in the way.
+		if(urgentTicksLeft > 0)
+		{
+			urgentTicksLeft = 0;
+			timer = 0;
+			overridingInput = true;
+			moveToOffhand(nextTotemSlot);
+			return;
+		}
+		
+		float healthF = health.getValueF();
+		if(healthF > 0 && MC.player.getHealth() > healthF * 2F)
 			return;
 		
 		if(timer > 0)

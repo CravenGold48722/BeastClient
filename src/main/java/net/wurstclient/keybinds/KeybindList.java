@@ -34,6 +34,30 @@ public final class KeybindList
 	{
 		this.keybindsFile = new KeybindsFile(keybindsFile);
 		this.keybindsFile.load(this);
+		migrateToClickGuiDefault();
+	}
+	
+	/**
+	 * ClickGUI used to sit on RightControl while the Navigator owned
+	 * RightShift. Now that ClickGUI is the primary interface, those two swap.
+	 *
+	 * <p>
+	 * This only rewrites a config that still has both keys at their old
+	 * defaults, so anyone who deliberately rebound either key keeps their
+	 * setup.
+	 */
+	private void migrateToClickGuiDefault()
+	{
+		if(!"navigator".equals(getCommands("key.keyboard.right.shift"))
+			|| !"clickgui".equals(getCommands("key.keyboard.right.control")))
+			return;
+		
+		keybinds.removeIf(kb -> "key.keyboard.right.shift".equals(kb.getKey())
+			|| "key.keyboard.right.control".equals(kb.getKey()));
+		keybinds.add(new Keybind("key.keyboard.right.shift", "clickgui"));
+		keybinds.add(new Keybind("key.keyboard.right.control", "navigator"));
+		keybinds.sort(null);
+		keybindsFile.save(this);
 	}
 	
 	public String getCommands(String key)
@@ -126,8 +150,9 @@ public final class KeybindList
 		addKB(set, "k", "multiaura");
 		addKB(set, "n", "nuker");
 		addKB(set, "r", "killaura");
-		addKB(set, "right.shift", "navigator");
-		addKB(set, "right.control", "clickgui");
+		// ClickGUI is the primary interface, so it gets the primary key.
+		addKB(set, "right.shift", "clickgui");
+		addKB(set, "right.control", "navigator");
 		addKB(set, "u", "freecam");
 		addKB(set, "x", "x-ray");
 		addKB(set, "y", "sneak");

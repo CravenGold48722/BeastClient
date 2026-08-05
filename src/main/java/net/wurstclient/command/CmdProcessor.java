@@ -14,6 +14,7 @@ import net.minecraft.CrashReportCategory;
 import net.minecraft.ReportedException;
 import net.wurstclient.WurstClient;
 import net.wurstclient.events.ChatOutputListener;
+import net.wurstclient.hack.Hack;
 import net.wurstclient.hacks.TooManyHaxHack;
 import net.wurstclient.util.ChatUtils;
 
@@ -54,6 +55,10 @@ public final class CmdProcessor implements ChatOutputListener
 				return;
 			}
 			
+			// A command is always something the user ran, so any hack it
+			// toggles gets announced. Covers .t, .blink, .follow, .protect
+			// and friends in one place.
+			Hack.markUserInitiatedToggle();
 			runCmd(cmd, input);
 			
 		}catch(CmdNotFoundException e)

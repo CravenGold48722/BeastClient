@@ -16,6 +16,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import com.llamalad7.mixinextras.injector.ModifyReturnValue;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.mojang.authlib.GameProfile;
@@ -33,6 +34,7 @@ import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.MoverType;
 import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec2;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.InputFaker;
 import net.wurstclient.InputFaker.TempRealInput;
@@ -147,6 +149,23 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 			return false;
 		
 		return original.call(instance);
+	}
+	
+	/**
+	 * Lets AutoTotem take over the tick in which it re-equips a totem after a
+	 * pop. Zeroing the movement vector means that whatever the player is
+	 * holding down loses to the totem swap for that single tick.
+	 */
+	@ModifyReturnValue(
+		method = "modifyInput(Lnet/minecraft/world/phys/Vec2;)Lnet/minecraft/world/phys/Vec2;",
+		at = @At("RETURN"))
+	private Vec2 onModifyInput(Vec2 original)
+	{
+		HackList hax = WurstClient.INSTANCE.getHax();
+		if(hax != null && hax.autoTotemHack.isOverridingInput())
+			return Vec2.ZERO;
+		
+		return original;
 	}
 	
 	@Inject(method = "sendPosition()V", at = @At("HEAD"))

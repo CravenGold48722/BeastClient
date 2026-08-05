@@ -81,17 +81,15 @@ public final class ColorComponent extends Component
 		// box
 		context.fill(x1, y3, x2, y2,
 			setting.getColorI(hovering ? 1F : opacity));
-		int outlineColor = RenderUtils.toIntColor(GUI.getAcColor(), 0.5F);
-		RenderUtils.drawBorder2D(context, x1, y3, x2, y2, outlineColor);
+		ClickGui.drawAccentBorder(context, x1, y3, x2, y2);
 		
 		// text
 		String name = setting.getName();
 		String value = ColorUtils.toHex(setting.getColor());
 		int valueWidth = TR.width(value);
-		int txtColor = GUI.getTxtColor();
 		context.guiRenderState.up();
-		context.text(TR, name, x1, y1 + 2, txtColor, false);
-		context.text(TR, value, x2 - valueWidth, y1 + 2, txtColor, false);
+		ClickGui.drawAccentText(context, TR, name, x1, y1 + 2);
+		ClickGui.drawAccentText(context, TR, value, x2 - valueWidth, y1 + 2);
 	}
 	
 	private String getColorTooltip()

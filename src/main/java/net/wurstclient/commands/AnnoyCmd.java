@@ -96,7 +96,7 @@ public final class AnnoyCmd extends Command implements ChatInputListener
 	public void onReceivedMessage(ChatInputEvent event)
 	{
 		String message = event.getComponent().getString();
-		if(message.startsWith(ChatUtils.WURST_PREFIX))
+		if(message.startsWith(ChatUtils.PLAIN_PREFIX))
 			return;
 		
 		String prefix1 = target + ">";

@@ -73,8 +73,7 @@ public final class CheckboxComponent extends Component
 		
 		// box
 		context.fill(x1, y1, x3, y2, getFillColor(hovering));
-		int outlineColor = RenderUtils.toIntColor(GUI.getAcColor(), 0.5F);
-		RenderUtils.drawBorder2D(context, x1, y1, x3, y2, outlineColor);
+		ClickGui.drawAccentBorder(context, x1, y1, x3, y2);
 		
 		context.guiRenderState.up();
 		
@@ -85,7 +84,7 @@ public final class CheckboxComponent extends Component
 		
 		// text
 		String name = setting.getName();
-		context.text(TR, name, x3 + 2, y1 + 2, GUI.getTxtColor(), false);
+		ClickGui.drawAccentText(context, TR, name, x3 + 2, y1 + 2);
 	}
 	
 	private int getFillColor(boolean hovering)

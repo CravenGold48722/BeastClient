@@ -113,6 +113,47 @@ public final class EventManager
 		}
 	}
 	
+	/**
+	 * Adds a listener that will be fired <i>before</i> every listener already
+	 * registered for the same event type.
+	 *
+	 * <p>
+	 * Used by features that must win against everything else reacting to the
+	 * same tick - currently only AutoTotem, which has to get a totem back into
+	 * the offhand before anything else is allowed to touch the inventory.
+	 */
+	public <L extends Listener> void addFirst(Class<L> type, L listener)
+	{
+		try
+		{
+			@SuppressWarnings("unchecked")
+			ArrayList<L> listeners = (ArrayList<L>)listenerMap.get(type);
+			
+			if(listeners == null)
+			{
+				listeners = new ArrayList<>(Arrays.asList(listener));
+				listenerMap.put(type, listeners);
+				return;
+			}
+			
+			listeners.add(0, listener);
+			
+		}catch(Throwable e)
+		{
+			e.printStackTrace();
+			
+			CrashReport report =
+				CrashReport.forThrowable(e, "Adding Wurst event listener");
+			CrashReportCategory section =
+				report.addCategory("Affected listener");
+			section.setDetail("Listener type", () -> type.getName());
+			section.setDetail("Listener class",
+				() -> listener.getClass().getName());
+			
+			throw new ReportedException(report);
+		}
+	}
+	
 	public <L extends Listener> void remove(Class<L> type, L listener)
 	{
 		try

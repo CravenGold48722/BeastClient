@@ -140,8 +140,7 @@ public final class SliderComponent extends Component
 		// rail
 		RenderUtils.fill2D(context, xl1, y4, xl2, y5,
 			RenderUtils.toIntColor(GUI.getBgColor(), railOpacity));
-		RenderUtils.drawBorder2D(context, x3, y4, x4, y5,
-			RenderUtils.toIntColor(GUI.getAcColor(), 0.5F));
+		ClickGui.drawAccentBorder(context, x3, y4, x4, y5);
 		
 		context.guiRenderState.up();
 		
@@ -159,9 +158,8 @@ public final class SliderComponent extends Component
 		String name = setting.getName();
 		String value = setting.getValueString();
 		int valueWidth = TR.width(value);
-		int txtColor = GUI.getTxtColor();
-		context.text(TR, name, x1, y1 + 2, txtColor, false);
-		context.text(TR, value, x2 - valueWidth, y1 + 2, txtColor, false);
+		ClickGui.drawAccentText(context, TR, name, x1, y1 + 2);
+		ClickGui.drawAccentText(context, TR, value, x2 - valueWidth, y1 + 2);
 	}
 	
 	private String getTextTooltip()

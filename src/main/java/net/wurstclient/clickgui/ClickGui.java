@@ -591,14 +591,13 @@ public final class ClickGui
 			RenderUtils.toIntColor(bgColor, ttOpacity));
 		
 		// outline
-		RenderUtils.drawBorder2D(context, xt1, yt1, xt2, yt2,
-			RenderUtils.toIntColor(acColor, 0.5F));
+		drawAccentBorder(context, xt1, yt1, xt2, yt2);
 		
 		// text
 		context.guiRenderState.up();
 		for(int i = 0; i < lines.length; i++)
-			context.text(tr, lines[i], xt1 + 2, yt1 + 2 + i * tr.lineHeight,
-				txtColor, false);
+			drawAccentText(context, tr, lines[i], xt1 + 2,
+				yt1 + 2 + i * tr.lineHeight);
 	}
 	
 	public void renderPinnedWindows(GuiGraphicsExtractor context,
@@ -642,7 +641,6 @@ public final class ClickGui
 		int y3 = y1 + 13;
 		
 		int windowBgColor = RenderUtils.toIntColor(bgColor, opacity);
-		int outlineColor = RenderUtils.toIntColor(acColor, 0.5F);
 		
 		Matrix3x2fStack matrixStack = context.pose();
 		
@@ -686,14 +684,10 @@ public final class ClickGui
 				boolean hovering = mouseX >= xs1 && mouseY >= ys3
 					&& mouseX < xs2 && mouseY < ys4;
 				
-				// scrollbar
-				int scrollbarColor = RenderUtils.toIntColor(acColor,
-					hovering ? opacity * 1.5F : opacity);
-				context.fill(xs1, ys3, xs2, ys4, scrollbarColor);
-				
-				// outline
-				RenderUtils.drawBorder2D(context, xs1, ys3, xs2, ys4,
-					outlineColor);
+				// scrollbar - painted with the accent gradient so it reads as
+				// part of the same moving wave as the borders
+				RenderUtils.fillGradient2D(context, xs1, ys3, xs2, ys4,
+					hovering ? 1F : 0.75F);
 			}
 			
 			int x3 = x1 + 2;
@@ -748,11 +742,11 @@ public final class ClickGui
 		}
 		
 		// window outline
-		RenderUtils.drawBorder2D(context, x1, y1, x2, y2, outlineColor);
+		drawAccentBorder(context, x1, y1, x2, y2);
 		
 		// title bar separator line
 		if(!window.isMinimized())
-			RenderUtils.drawLine2D(context, x1, y3, x2, y3, outlineColor);
+			RenderUtils.drawGradientHLine2D(context, x1, x2, y3, 1F);
 		
 		// title bar buttons
 		int x3 = x2;
@@ -802,9 +796,9 @@ public final class ClickGui
 		Font tr = MC.font;
 		String title = tr.substrByWidth(
 			net.minecraft.network.chat.Component.literal(window.getTitle()),
-			x3 - x1).getString();
+			x3 - x1 - 4).getString();
 		context.guiRenderState.up();
-		context.text(tr, title, x1 + 2, y1 + 3, txtColor, false);
+		drawAccentText(context, tr, title, x1 + 3, y1 + 3);
 	}
 	
 	private void renderTitleBarButton(GuiGraphicsExtractor context, int x1,
@@ -822,8 +816,7 @@ public final class ClickGui
 		context.fill(x2, y1, x3, y2, windowBgColor);
 		
 		// button outline
-		int outlineColor = RenderUtils.toIntColor(acColor, 0.5F);
-		RenderUtils.drawBorder2D(context, x1, y1, x2, y2, outlineColor);
+		drawAccentBorder(context, x1, y1, x2, y2);
 	}
 	
 	public float[] getBgColor()
@@ -839,6 +832,27 @@ public final class ClickGui
 	public int getTxtColor()
 	{
 		return txtColor;
+	}
+	
+	/**
+	 * Draws a one-pixel accent-gradient border. Every border in the ClickGUI
+	 * goes through here so the whole interface animates as one wave.
+	 */
+	public static void drawAccentBorder(GuiGraphicsExtractor context, float x1,
+		float y1, float x2, float y2)
+	{
+		RenderUtils.drawGradientBorder2D(context, x1, y1, x2, y2, 1F);
+	}
+	
+	/**
+	 * Draws a label in the accent gradient. Every accent label in the ClickGUI
+	 * goes through here.
+	 */
+	public static int drawAccentText(GuiGraphicsExtractor context, Font font,
+		String text, int x, int y)
+	{
+		return RenderUtils.drawGradientText(context, font, text, x, y, 1F,
+			false);
 	}
 	
 	public float getOpacity()

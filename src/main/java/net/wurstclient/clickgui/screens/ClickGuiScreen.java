@@ -12,6 +12,7 @@ import net.minecraft.client.gui.components.Renderable;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
+import net.wurstclient.WurstClient;
 import net.wurstclient.clickgui.ClickGui;
 
 public final class ClickGuiScreen extends Screen
@@ -68,5 +69,17 @@ public final class ClickGuiScreen extends Screen
 		int mouseY, float deltaTicks)
 	{
 		// Don't blur
+	}
+	
+	/**
+	 * Closing the screen - with Esc, or by anything else that replaces it -
+	 * switches the hack back off, so the toggle announcement matches what the
+	 * player actually sees.
+	 */
+	@Override
+	public void removed()
+	{
+		WurstClient.INSTANCE.getHax().clickGuiHack.onScreenClosed();
+		super.removed();
 	}
 }

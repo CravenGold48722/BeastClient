@@ -23,6 +23,7 @@ import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.events.KeyPressListener;
 import net.wurstclient.hacks.TooManyHaxHack;
 import net.wurstclient.other_features.TabGuiOtf;
+import net.wurstclient.util.BeastColors;
 import net.wurstclient.util.ChatUtils;
 import net.wurstclient.util.RenderUtils;
 
@@ -131,7 +132,6 @@ public final class TabGui implements KeyPressListener
 		context.enableScissor(0, 0, width, height);
 		
 		int textY = 1;
-		int txtColor = WURST.getGui().getTxtColor();
 		Font tr = MC.font;
 		context.guiRenderState.up();
 		for(int i = 0; i < tabs.size(); i++)
@@ -140,7 +140,8 @@ public final class TabGui implements KeyPressListener
 			if(i == selected)
 				tabName = (tabOpened ? "<" : ">") + tabName;
 			
-			context.text(tr, tabName, 2, textY, txtColor, false);
+			RenderUtils.drawGradientText(context, tr, tabName, 2, textY, 1F,
+				false);
 			textY += 10;
 		}
 		
@@ -163,13 +164,18 @@ public final class TabGui implements KeyPressListener
 				Feature feature = tab.features.get(i);
 				String fName = feature.getName();
 				
-				if(feature.isEnabled())
-					fName = "\u00a7a" + fName + "\u00a7r";
-				
 				if(i == tab.selected)
 					fName = ">" + fName;
+					
+				// An enabled feature is flat light red so it stands out
+				// against the moving gradient used for everything else.
+				if(feature.isEnabled())
+					context.text(tr, fName, 2, tabTextY,
+						BeastColors.SELECTED_RED, false);
+				else
+					RenderUtils.drawGradientText(context, tr, fName, 2,
+						tabTextY, 1F, false);
 				
-				context.text(tr, fName, 2, tabTextY, txtColor, false);
 				tabTextY += 10;
 			}
 			

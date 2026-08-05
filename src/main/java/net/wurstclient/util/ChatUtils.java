@@ -26,8 +26,28 @@ public enum ChatUtils
 	
 	private static final Minecraft MC = WurstClient.MC;
 	
+	/**
+	 * The client tag exactly as it reads once rendered.
+	 *
+	 * <p>
+	 * Features that need to recognise the client's own messages compare
+	 * against this. They can't use a formatted version: the tag is styled with
+	 * real RGB colors rather than legacy codes, so nothing shows up in the
+	 * message text.
+	 */
+	public static final String PLAIN_PREFIX = "[Beast] ";
+	
+	/**
+	 * The client tag using legacy formatting codes, for the few screens that
+	 * build their title by string concatenation.
+	 *
+	 * <p>
+	 * \u00a7c is the nearest legacy red to {@link BeastColors#BRAND_RED} but
+	 * not an
+	 * exact match, so prefer {@link #prefix()} anywhere a Component will do.
+	 */
 	public static final String WURST_PREFIX =
-		"\u00a7c[\u00a76Wurst\u00a7c]\u00a7r ";
+		"\u00a77[\u00a7cBeast\u00a77]\u00a7r ";
 	private static final String WARNING_PREFIX =
 		"\u00a7c[\u00a76\u00a7lWARNING\u00a7c]\u00a7r ";
 	private static final String ERROR_PREFIX =
@@ -42,14 +62,31 @@ public enum ChatUtils
 		ChatUtils.enabled = enabled;
 	}
 	
+	/**
+	 * The "[Beast] " tag, in the same shades of red and gray as the hack
+	 * toggle announcements.
+	 */
+	public static MutableComponent prefix()
+	{
+		MutableComponent prefix = Component.literal("[")
+			.withStyle(style -> style.withColor(BeastColors.BRACKET_GRAY));
+		
+		prefix.append(Component.literal("Beast")
+			.withStyle(style -> style.withColor(BeastColors.BRAND_RED)));
+		
+		prefix.append(Component.literal("] ")
+			.withStyle(style -> style.withColor(BeastColors.BRACKET_GRAY)));
+		
+		return prefix;
+	}
+	
 	public static void component(Component component)
 	{
 		if(!enabled)
 			return;
 		
 		ChatComponent chatHud = MC.gui.getChat();
-		MutableComponent prefix = Component.literal(WURST_PREFIX);
-		chatHud.addClientSystemMessage(prefix.append(component));
+		chatHud.addClientSystemMessage(prefix().append(component));
 	}
 	
 	public static void message(String message)

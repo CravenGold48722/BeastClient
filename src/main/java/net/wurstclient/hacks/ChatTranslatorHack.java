@@ -90,7 +90,7 @@ public final class ChatTranslatorHack extends Hack
 			? Language.AUTO_DETECT : otherLanguage.getSelected();
 		Language toLang = playerLanguage.getSelected();
 		
-		if(message.startsWith(ChatUtils.WURST_PREFIX)
+		if(message.startsWith(ChatUtils.PLAIN_PREFIX)
 			|| message.startsWith(toLang.getPrefix()))
 			return;
 		

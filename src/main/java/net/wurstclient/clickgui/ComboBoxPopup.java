@@ -74,8 +74,7 @@ public final class ComboBoxPopup<T extends Enum<T>> extends Popup
 		if(hovering)
 			GUI.setTooltip("");
 		
-		RenderUtils.drawBorder2D(context, x1, y1, x2, y2,
-			RenderUtils.toIntColor(GUI.getAcColor(), 0.5F));
+		ClickGui.drawAccentBorder(context, x1, y1, x2, y2);
 		
 		int yi1 = y1 - 11;
 		for(T value : setting.getValues())
@@ -91,8 +90,8 @@ public final class ComboBoxPopup<T extends Enum<T>> extends Popup
 				GUI.getBgColor(), GUI.getOpacity() * (hValue ? 1.5F : 1)));
 			
 			context.guiRenderState.up();
-			context.text(TR, value.toString(), x1 + 2, yi1 + 2,
-				GUI.getTxtColor(), false);
+			ClickGui.drawAccentText(context, TR, value.toString(), x1 + 2,
+				yi1 + 2);
 		}
 	}
 	

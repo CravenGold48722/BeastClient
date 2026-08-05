@@ -940,6 +940,177 @@ public enum RenderUtils
 			shadowColor2, shadowColor2, scissor));
 	}
 	
+	// ── Beast Client accent gradient
+	// ────────────────────────────────────────────
+	
+	/**
+	 * Fills an axis-aligned rectangle with the horizontal accent gradient.
+	 *
+	 * <p>
+	 * The gradient colors are sampled from the absolute screen position of the
+	 * rectangle's left and right edges, so neighbouring elements line up into
+	 * one continuous wave.
+	 */
+	public static void fillGradient2D(GuiGraphicsExtractor context, float x1,
+		float y1, float x2, float y2, float opacity)
+	{
+		if(x2 <= x1 || y2 <= y1)
+			return;
+		
+		int leftColor = BeastColors
+			.gradientAt(BeastColors.toScreenX(context, x1, y1), opacity);
+		int rightColor = BeastColors
+			.gradientAt(BeastColors.toScreenX(context, x2, y1), opacity);
+		
+		fillHorizontalGradient2D(context, x1, y1, x2, y2, leftColor,
+			rightColor);
+	}
+	
+	/**
+	 * Fills an axis-aligned rectangle with a horizontal gradient between two
+	 * explicit colors.
+	 */
+	public static void fillHorizontalGradient2D(GuiGraphicsExtractor context,
+		float x1, float y1, float x2, float y2, int leftColor, int rightColor)
+	{
+		if(x2 <= x1 || y2 <= y1)
+			return;
+		
+		Matrix3x2f pose = new Matrix3x2f(context.pose());
+		ScreenRectangle scissor = context.scissorStack.peek();
+		
+		context.guiRenderState.addGuiElement(
+			new CustomQuadRenderState(pose, x1, y1, x2, y1, x2, y2, x1, y2,
+				leftColor, rightColor, rightColor, leftColor, scissor));
+	}
+	
+	/**
+	 * Draws a one-pixel border around the given rectangle using the accent
+	 * gradient. This is the gradient counterpart of
+	 * {@link #drawBorder2D(GuiGraphicsExtractor, float, float, float, float, int)}.
+	 *
+	 * <p>
+	 * Like that method, this scales the matrix up by the GUI scale and draws
+	 * one-unit-thick quads in that space, rather than sub-unit quads in GUI
+	 * space. {@link CustomQuadRenderState} truncates its bounding box to whole
+	 * integers, so a quad thinner than one unit would end up with a
+	 * zero-height bounding box.
+	 */
+	public static void drawGradientBorder2D(GuiGraphicsExtractor context,
+		float x1, float y1, float x2, float y2, float opacity)
+	{
+		int scale = WurstClient.MC.getWindow().getGuiScale();
+		
+		// Sample the gradient in screen space before the pose is changed.
+		int left = BeastColors
+			.gradientAt(BeastColors.toScreenX(context, x1, y1), opacity);
+		int right = BeastColors
+			.gradientAt(BeastColors.toScreenX(context, x2, y1), opacity);
+		
+		int xs1 = (int)(x1 * scale);
+		int ys1 = (int)(y1 * scale);
+		int xs2 = (int)(x2 * scale);
+		int ys2 = (int)(y2 * scale);
+		
+		if(xs2 <= xs1 || ys2 <= ys1)
+			return;
+		
+		context.pose().pushMatrix();
+		context.pose().scale(1F / scale);
+		
+		// top & bottom
+		fillHorizontalGradient2D(context, xs1, ys1, xs2, ys1 + 1, left, right);
+		fillHorizontalGradient2D(context, xs1, ys2 - 1, xs2, ys2, left, right);
+		
+		// left & right, drawn between the horizontal edges so the corners
+		// aren't painted twice (which would show through at low opacity)
+		fillHorizontalGradient2D(context, xs1, ys1 + 1, xs1 + 1, ys2 - 1, left,
+			left);
+		fillHorizontalGradient2D(context, xs2 - 1, ys1 + 1, xs2, ys2 - 1, right,
+			right);
+		
+		context.pose().popMatrix();
+	}
+	
+	/**
+	 * Draws a one-pixel horizontal line using the accent gradient.
+	 */
+	public static void drawGradientHLine2D(GuiGraphicsExtractor context,
+		float x1, float x2, float y, float opacity)
+	{
+		int scale = WurstClient.MC.getWindow().getGuiScale();
+		
+		int left = BeastColors.gradientAt(BeastColors.toScreenX(context, x1, y),
+			opacity);
+		int right = BeastColors
+			.gradientAt(BeastColors.toScreenX(context, x2, y), opacity);
+		
+		int xs1 = (int)(x1 * scale);
+		int xs2 = (int)(x2 * scale);
+		int ys = (int)(y * scale);
+		
+		if(xs2 <= xs1)
+			return;
+		
+		context.pose().pushMatrix();
+		context.pose().scale(1F / scale);
+		fillHorizontalGradient2D(context, xs1, ys, xs2, ys + 1, left, right);
+		context.pose().popMatrix();
+	}
+	
+	/**
+	 * Draws a one-pixel vertical line using the accent gradient.
+	 */
+	public static void drawGradientVLine2D(GuiGraphicsExtractor context,
+		float x, float y1, float y2, float opacity)
+	{
+		int scale = WurstClient.MC.getWindow().getGuiScale();
+		
+		int color = BeastColors
+			.gradientAt(BeastColors.toScreenX(context, x, y1), opacity);
+		
+		int xs = (int)(x * scale);
+		int ys1 = (int)(y1 * scale);
+		int ys2 = (int)(y2 * scale);
+		
+		if(ys2 <= ys1)
+			return;
+		
+		context.pose().pushMatrix();
+		context.pose().scale(1F / scale);
+		fillHorizontalGradient2D(context, xs, ys1, xs + 1, ys2, color, color);
+		context.pose().popMatrix();
+	}
+	
+	/**
+	 * Draws text where each character is tinted with the accent gradient at its
+	 * own screen position, producing the same left-to-right moving sheen as the
+	 * borders.
+	 *
+	 * @return the X coordinate just past the end of the drawn text
+	 */
+	public static int drawGradientText(GuiGraphicsExtractor context, Font font,
+		String text, int x, int y, float opacity, boolean shadow)
+	{
+		int cursor = x;
+		
+		for(int i = 0; i < text.length(); i++)
+		{
+			// Iterate by code point so surrogate pairs stay intact.
+			int codePoint = text.codePointAt(i);
+			String glyph = new String(Character.toChars(codePoint));
+			if(Character.charCount(codePoint) > 1)
+				i += Character.charCount(codePoint) - 1;
+			
+			int color = BeastColors
+				.gradientAt(BeastColors.toScreenX(context, cursor, y), opacity);
+			context.text(font, glyph, cursor, y, color, shadow);
+			cursor += font.width(glyph);
+		}
+		
+		return cursor;
+	}
+	
 	public record ColoredPoint(Vec3 point, int color)
 	{}
 	

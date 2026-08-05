@@ -115,9 +115,8 @@ public final class ComboBoxComponent<T extends Enum<T>> extends Component
 		context.guiRenderState.up();
 		
 		// outlines
-		int outlineColor = RenderUtils.toIntColor(GUI.getAcColor(), 0.5F);
-		RenderUtils.drawBorder2D(context, x4, y1, x2, y2, outlineColor);
-		RenderUtils.drawLine2D(context, x3, y1, x3, y2, outlineColor);
+		ClickGui.drawAccentBorder(context, x4, y1, x2, y2);
+		RenderUtils.drawGradientVLine2D(context, x3, y1, y2, 1F);
 		
 		// arrow
 		ClickGuiIcons.drawMinimizeArrow(context, x3, y1 + 0.5F, x2, y2 - 0.5F,
@@ -126,9 +125,8 @@ public final class ComboBoxComponent<T extends Enum<T>> extends Component
 		// text
 		String name = setting.getName();
 		String value = "" + setting.getSelected();
-		int txtColor = GUI.getTxtColor();
-		context.text(TR, name, x1, y1 + 2, txtColor, false);
-		context.text(TR, value, x4 + 2, y1 + 2, txtColor, false);
+		ClickGui.drawAccentText(context, TR, name, x1, y1 + 2);
+		ClickGui.drawAccentText(context, TR, value, x4 + 2, y1 + 2);
 	}
 	
 	private int getFillColor(boolean hovering)

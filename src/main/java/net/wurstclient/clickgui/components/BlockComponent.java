@@ -86,7 +86,7 @@ public final class BlockComponent extends Component
 		
 		// text
 		String name = setting.getName() + ":";
-		context.text(TR, name, x1, y1 + 2, GUI.getTxtColor(), false);
+		ClickGui.drawAccentText(context, TR, name, x1, y1 + 2);
 		
 		// block
 		ItemStack stack = new ItemStack(setting.getBlock());

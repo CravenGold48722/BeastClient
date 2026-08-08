@@ -104,11 +104,20 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 	
 	/**
 	 * This mixin makes AutoSprint's "Omnidirectional Sprint" setting work.
+	 *
+	 * <p>
+	 * All three targets have to be covered. aiStep() only snapshots the forward
+	 * impulse for the double-tap sprint trigger; canStartSprinting() is what
+	 * actually lets a sprint begin, and shouldStopRunSprinting() is what ends
+	 * it. Without that last one, vanilla calls setSprinting(false) later in the
+	 * same tick that AutoSprint called setSprinting(true), so strafing
+	 * sideways would never sprint no matter what the setting said.
 	 */
-	@WrapOperation(method = "aiStep()V",
+	@WrapOperation(
+		method = {"aiStep()V", "canStartSprinting()Z",
+			"shouldStopRunSprinting()Z"},
 		at = @At(value = "INVOKE",
-			target = "Lnet/minecraft/client/player/ClientInput;hasForwardImpulse()Z",
-			ordinal = 0))
+			target = "Lnet/minecraft/client/player/ClientInput;hasForwardImpulse()Z"))
 	private boolean wrapHasForwardMovement(ClientInput input,
 		Operation<Boolean> original)
 	{

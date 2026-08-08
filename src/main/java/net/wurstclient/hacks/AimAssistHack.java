@@ -13,6 +13,7 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.Random;
 import java.util.stream.Stream;
 
 import javax.sound.sampled.AudioFormat;
@@ -24,24 +25,19 @@ import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 import javax.sound.sampled.UnsupportedAudioFileException;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
-import net.wurstclient.hacks.aimassist.AiStrategy;
-import net.wurstclient.hacks.aimassist.AiStrategy.Dodge;
-import net.wurstclient.hacks.aimassist.GeminiCombatAdvisor;
 import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.settings.AimAtSetting;
 import net.wurstclient.settings.CheckboxSetting;
@@ -55,7 +51,6 @@ import net.wurstclient.settings.TextFieldSetting;
 import net.wurstclient.settings.filterlists.EntityFilterList;
 import net.wurstclient.settings.filters.*;
 import net.wurstclient.util.BlockUtils;
-import net.wurstclient.util.ChatUtils;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
@@ -182,53 +177,28 @@ public final class AimAssistHack extends Hack
 			+ " target is locked.",
 		PlayWhen.values(), PlayWhen.WHILE_ENABLED);
 	
-	// ── AI settings
-	// ───────────────────────────────────────────────────────────
+	// ── Dodging
+	// ─────────────────────────────────────────────────────────────────
 	
-	private final CheckboxSetting aiEnabled = new CheckboxSetting("AI assist",
-		"Lets a Gemini model analyze the fight and steer AimAssist.\n\n"
-			+ "The model does §lnot§r press keys directly - a Gemini round"
-			+ " trip takes far longer than a tick. Instead it continuously"
-			+ " sets the plan (which way to juke, how aggressive to be, who"
-			+ " to fight) and a reflex layer running every tick presses"
-			+ " §lA§r and §lD§r at the right moment to act on it.\n\n"
-			+ "Requires a Gemini API key below.",
-		false);
-	
-	private final TextFieldSetting geminiApiKey =
-		new TextFieldSetting("Gemini API key",
-			"Your Google AI Studio API key.\n\n"
-				+ "§cStored in plain text§r in your Wurst settings file. If"
-				+ " you leave this blank, the §lBEAST_GEMINI_KEY§r"
-				+ " environment variable is used instead.",
-			"");
-	
-	private final TextFieldSetting geminiModel =
-		new TextFieldSetting("Gemini model",
-			"Which Gemini model to ask. Use a fast one - the flash models"
-				+ " respond quickly enough to keep up with a fight.",
-			"gemini-2.0-flash");
-	
-	private final SliderSetting aiInterval = new SliderSetting("AI interval",
-		"How often to ask the model for an updated plan.\n\n"
-			+ "Lower reacts faster but burns API quota much faster. Gemini's"
-			+ " free tier allows roughly §l15 requests per minute§r, which is"
-			+ " one every §l4000 ms§r - go below that on a free key and you"
-			+ " will start getting rate-limited within seconds.\n\n"
-			+ "Dodging does §lnot§r stop when a request is skipped: the reflex"
-			+ " layer keeps reacting every tick using the last plan it got.",
-		4000, 500, 15000, 250, ValueDisplay.INTEGER.withSuffix(" ms"));
-	
-	private final CheckboxSetting aiDodging = new CheckboxSetting("AI dodging",
-		"Lets the AI-driven reflex layer strafe with §lA§r and §lD§r to"
-			+ " dodge incoming attacks.",
+	private final CheckboxSetting dodging = new CheckboxSetting("Dodging",
+		"Strafes with §lA§r or §lD§r when an opponent looks about to hit"
+			+ " you.\n\n"
+			+ "The side is picked at random each time so the movement can't be"
+			+ " read, and the distance is a random amount between the two"
+			+ " sliders below.\n\n"
+			+ "If there isn't room to strafe that far on the chosen side, the"
+			+ " dodge goes the other way instead.",
 		true);
 	
-	private final CheckboxSetting aiTargeting =
-		new CheckboxSetting("AI targeting",
-			"Lets the AI switch targets - for example away from someone"
-				+ " running off and onto whoever is actually attacking you.",
-			true);
+	private final SliderSetting minDodgeDistance = new SliderSetting(
+		"Min dodge distance", "The shortest a random dodge can be.", 1, 0.25, 8,
+		0.25, ValueDisplay.DECIMAL.withSuffix(" blocks"));
+	
+	private final SliderSetting maxDodgeDistance =
+		new SliderSetting("Max dodge distance",
+			"The longest a random dodge can be.\n\n"
+				+ "If this ends up below the minimum, the minimum wins.",
+			5, 0.5, 8, 0.5, ValueDisplay.DECIMAL.withSuffix(" blocks"));
 	
 	private Entity target;
 	private boolean switchKeyDownLastTick;
@@ -251,22 +221,43 @@ public final class AimAssistHack extends Hack
 	 */
 	private boolean attackedThisTick;
 	
-	// ── AI state
-	// ──────────────────────────────────────────────────────────────
+	// ── Dodge state
+	// ────────────────────────────────────────────────────────────
 	
-	private final GeminiCombatAdvisor advisor = new GeminiCombatAdvisor();
+	private enum Dodge
+	{
+		NONE,
+		LEFT,
+		RIGHT;
+		
+		private Dodge opposite()
+		{
+			return this == LEFT ? RIGHT : this == RIGHT ? LEFT : NONE;
+		}
+	}
 	
-	private int dodgeTicksLeft;
+	private final Random random = new Random();
+	
 	private Dodge dodgeDirection = Dodge.NONE;
 	private boolean leftKeyForced;
 	private boolean rightKeyForced;
 	private int dodgeCooldown;
-	private Dodge lastDodgeDirection = Dodge.NONE;
-	private String lastReportedAiError;
-	private long lastAiErrorReportNanos;
 	
-	/** Minimum gap between two AI error messages in chat. */
-	private static final int AI_ERROR_REPORT_INTERVAL_SECONDS = 10;
+	/** How far the dodge in progress is trying to travel, in blocks. */
+	private double dodgeDistance;
+	
+	/** Where the dodge in progress started, for measuring how far it got. */
+	private Vec3 dodgeStartPos;
+	
+	/**
+	 * Ticks before the dodge in progress gives up.
+	 *
+	 * <p>
+	 * Distance is measured rather than timed, so this only exists to stop a
+	 * dodge that can't make progress - shoved against a wall that appeared
+	 * mid-strafe, held in place by knockback - from holding the key forever.
+	 */
+	private int dodgeTicksLeft;
 	
 	// Music state — musicRunning and musicLine are volatile because the music
 	// thread reads/writes them while the game thread writes/reads them.
@@ -293,12 +284,9 @@ public final class AimAssistHack extends Hack
 		addSetting(autoCombo);
 		addSetting(auraFarming);
 		
-		addSetting(aiEnabled);
-		addSetting(geminiApiKey);
-		addSetting(geminiModel);
-		addSetting(aiInterval);
-		addSetting(aiDodging);
-		addSetting(aiTargeting);
+		addSetting(dodging);
+		addSetting(minDodgeDistance);
+		addSetting(maxDodgeDistance);
 		
 		entityFilters.forEach(this::addSetting);
 		
@@ -337,10 +325,6 @@ public final class AimAssistHack extends Hack
 		airborneHitDone = false;
 		attackedThisTick = false;
 		resetDodge();
-		lastDodgeDirection = Dodge.NONE;
-		lastReportedAiError = null;
-		lastAiErrorReportNanos = 0L;
-		advisor.reset();
 		EVENTS.add(UpdateListener.class, this);
 		EVENTS.add(RenderListener.class, this);
 		
@@ -355,7 +339,6 @@ public final class AimAssistHack extends Hack
 		target = null;
 		resetCombo();
 		resetDodge();
-		advisor.reset();
 		stopMusic();
 	}
 	
@@ -399,11 +382,6 @@ public final class AimAssistHack extends Hack
 		
 		if(switchRequested || !isValidTarget(target))
 			target = pickTarget(switchRequested ? target : null);
-			
-		// A manual switch always wins over the AI for that tick, so pressing
-		// the switch key still feels responsive.
-		if(!switchRequested)
-			target = applyAiTargeting(target);
 		
 		if(target == null)
 		{
@@ -413,9 +391,6 @@ public final class AimAssistHack extends Hack
 		}
 		WURST.getHax().autoSwordHack.setSlot(target);
 		
-		// Hand the fight to the AI and run the tick-rate reflex layer that
-		// acts on whatever plan it last came back with.
-		updateAi();
 		updateDodge();
 		
 		// Apply the aim. Server-side keeps the camera still and only rewrites
@@ -648,164 +623,269 @@ public final class AimAssistHack extends Hack
 		releaseBackward();
 	}
 	
-	// ── AI assist
-	// ─────────────────────────────────────────────────────────────
+	// ── Dodging
+	// ─────────────────────────────────────────────────────────────────
 	//
-	// Split in two on purpose:
+	// When an opponent looks about to land a hit, pick a side at random and
+	// strafe that far out of the way. Randomising the side is the point: a
+	// dodge that always breaks the same way is one an opponent learns to read
+	// in a couple of exchanges.
 	//
-	// updateAi() ships a snapshot of the fight off to Gemini on a background
-	// thread and reads back whatever plan last arrived. That round trip takes
-	// hundreds of milliseconds, so it can never be the thing that presses a
-	// key.
-	//
-	// updateDodge() runs every tick and does the actual reacting. It decides
-	// when a hit is coming and strafes out of the way immediately, using the
-	// AI's plan to pick which way to go and how twitchy to be.
-	
-	/**
-	 * Advice older than this describes a fight that has already moved on.
-	 *
-	 * <p>
-	 * Comfortably longer than the slowest allowed AI interval, so a plan stays
-	 * usable right up until the next one lands. If this were as short as the
-	 * interval, the strategy would keep lapsing back to defaults between
-	 * requests and the AI would feel like it was doing nothing.
-	 */
-	private static final long AI_STALE_NANOS = 20_000_000_000L;
+	// The distance is measured as it is travelled rather than converted into a
+	// tick count up front, because how fast you actually strafe depends on
+	// sprinting, sneaking, ice, soul sand, potion effects and knockback.
 	
 	/** How long to wait after a dodge before another one may trigger. */
 	private static final int DODGE_COOLDOWN_TICKS = 3;
 	
-	/** How many opponents to describe to the model. */
-	private static final int MAX_OPPONENTS_REPORTED = 6;
+	/**
+	 * How close to the requested distance counts as having arrived. Strafing
+	 * covers roughly a tenth of a block per tick, so without a little slack the
+	 * dodge would routinely overshoot by most of a tick's worth.
+	 */
+	private static final double DODGE_ARRIVAL_SLACK = 0.05;
 	
-	private boolean isAiActive()
-	{
-		return aiEnabled.isChecked() && !resolveApiKey().isEmpty();
-	}
+	/** Sample spacing when measuring how much room there is to strafe into. */
+	private static final double CLEARANCE_STEP = 0.25;
+	
+	/** A dodge shorter than this isn't worth doing. */
+	private static final double MIN_USEFUL_CLEARANCE = 1.0;
+	
+	/** How far ahead a dodge in progress checks for a wall each tick. */
+	private static final double WALL_CHECK_AHEAD = 0.5;
 	
 	/**
-	 * The API key from the setting, falling back to an environment variable so
-	 * the key doesn't have to sit in the settings file.
+	 * The most ticks a dodge may last. Generous - a slow 8 block strafe runs to
+	 * around 80 ticks - because it only exists to catch a dodge that has
+	 * stopped making progress entirely.
 	 */
-	private String resolveApiKey()
-	{
-		String key = geminiApiKey.getValue();
-		if(key != null && !key.isBlank())
-			return key.trim();
-		
-		String env = System.getenv("BEAST_GEMINI_KEY");
-		return env == null ? "" : env.trim();
-	}
+	private static final int MAX_DODGE_TICKS = 120;
 	
-	private void updateAi()
-	{
-		if(!isAiActive())
-			return;
-		
-		reportAiErrors();
-		
-		long intervalMs = (long)aiInterval.getValue();
-		
-		// Building the snapshot walks the entity list, so skip it entirely on
-		// the ticks where nothing would be sent anyway.
-		if(!advisor.isDueForRequest(intervalMs))
-			return;
-		
-		String model = geminiModel.getValue().trim();
-		if(model.isEmpty())
-			model = "gemini-3.5-flash-lite";
-		
-		advisor.request(resolveApiKey(), model, intervalMs, buildSnapshot());
-	}
+	/** How close an opponent has to be before a dodge is considered. */
+	private static final double THREAT_RANGE_SQ = 3.85 * 3.85;
+	
+	/** How squarely an opponent must be looking at us to count as a threat. */
+	private static final double THREAT_FACING_THRESHOLD = 0.7;
 	
 	/**
-	 * Surfaces API problems without flooding chat: never the same message
-	 * twice in a row, and at most one message every
-	 * {@value #AI_ERROR_REPORT_INTERVAL_SECONDS} seconds. A flaky connection
-	 * produces a steady trickle of timeouts, and nagging about each one is
-	 * worse than useless mid-fight.
+	 * Runs every tick. Sees an in-progress dodge through to its distance, and
+	 * otherwise decides whether a new one should start.
 	 */
-	private void reportAiErrors()
+	private void updateDodge()
 	{
-		String error = advisor.getLastError();
-		if(error == null)
+		if(!dodging.isChecked())
 		{
-			lastReportedAiError = null;
+			resetDodge();
 			return;
 		}
 		
-		long now = System.nanoTime();
-		if(error.equals(lastReportedAiError)
-			|| now - lastAiErrorReportNanos < AI_ERROR_REPORT_INTERVAL_SECONDS
-				* 1_000_000_000L)
+		if(dodgeCooldown > 0)
+			dodgeCooldown--;
+		
+		if(dodgeDirection != Dodge.NONE)
+		{
+			continueDodge();
+			return;
+		}
+		
+		releaseDodgeKeys();
+		
+		if(dodgeCooldown > 0)
 			return;
 		
-		lastReportedAiError = error;
-		lastAiErrorReportNanos = now;
-		ChatUtils.error("AimAssist AI: " + error);
+		if(findMostImmediateThreat() != null)
+			startDodge();
 	}
 	
 	/**
-	 * Describes the current fight for the model. Built on the game thread so
-	 * nothing off-thread ever touches the world.
+	 * Keeps the strafe key held until the dodge has covered its distance or run
+	 * out of ticks.
 	 */
-	private JsonObject buildSnapshot()
+	private void continueDodge()
 	{
-		JsonObject root = new JsonObject();
+		if(dodgeStartPos == null)
+		{
+			endDodge();
+			return;
+		}
 		
-		JsonObject self = new JsonObject();
-		self.addProperty("health", round(MC.player.getHealth()));
-		self.addProperty("max_health", round(MC.player.getMaxHealth()));
-		self.addProperty("absorption", round(MC.player.getAbsorptionAmount()));
-		self.addProperty("on_ground", MC.player.onGround());
-		self.addProperty("sprinting", MC.player.isSprinting());
-		self.addProperty("attack_cooldown",
-			round(MC.player.getAttackStrengthScale(0)));
-		self.addProperty("held_item",
-			MC.player.getMainHandItem().getItem().toString());
-		self.addProperty("offhand_item",
-			MC.player.getOffhandItem().getItem().toString());
-		self.addProperty("current_target_id",
-			target == null ? -1 : target.getId());
-		self.addProperty("last_dodge", lastDodgeDirection.name().toLowerCase());
-		root.add("self", self);
+		double travelled =
+			horizontalDistance(MC.player.position(), dodgeStartPos);
 		
-		JsonArray opponents = new JsonArray();
+		if(--dodgeTicksLeft <= 0
+			|| travelled >= dodgeDistance - DODGE_ARRIVAL_SLACK)
+		{
+			endDodge();
+			return;
+		}
+		
+		// A and D are relative to where the player is facing, and AimAssist
+		// keeps turning us to track the target, so the direction the dodge is
+		// actually travelling drifts away from the one that was measured for
+		// room at the start. Re-check the ground just ahead each tick rather
+		// than trusting that first measurement for the whole strafe.
+		if(clearance(dodgeDirection, WALL_CHECK_AHEAD) < WALL_CHECK_AHEAD)
+		{
+			endDodge();
+			return;
+		}
+		
+		holdDodge(dodgeDirection);
+	}
+	
+	/**
+	 * Picks a side and a distance at random, then checks there is actually room
+	 * for it. If the chosen side is walled off short of that distance the dodge
+	 * goes the other way instead, and if neither side has room it takes
+	 * whichever has more and settles for that.
+	 */
+	private void startDodge()
+	{
+		double distance = randomDodgeDistance();
+		Dodge chosen = random.nextBoolean() ? Dodge.LEFT : Dodge.RIGHT;
+		
+		double chosenRoom = clearance(chosen, distance);
+		if(chosenRoom >= distance)
+		{
+			beginDodge(chosen, distance);
+			return;
+		}
+		
+		Dodge other = chosen.opposite();
+		double otherRoom = clearance(other, distance);
+		if(otherRoom >= distance)
+		{
+			beginDodge(other, distance);
+			return;
+		}
+		
+		// Boxed in on both sides. Take the roomier one and go as far as it
+		// allows, unless that is so short it wouldn't move us out of the way.
+		Dodge roomier = otherRoom > chosenRoom ? other : chosen;
+		double room = Math.max(otherRoom, chosenRoom);
+		
+		if(room >= MIN_USEFUL_CLEARANCE)
+			beginDodge(roomier, room);
+	}
+	
+	private void beginDodge(Dodge direction, double distance)
+	{
+		dodgeDirection = direction;
+		dodgeDistance = distance;
+		dodgeStartPos = MC.player.position();
+		dodgeTicksLeft = MAX_DODGE_TICKS;
+		holdDodge(direction);
+	}
+	
+	private void endDodge()
+	{
+		releaseDodgeKeys();
+		dodgeDirection = Dodge.NONE;
+		dodgeStartPos = null;
+		dodgeDistance = 0;
+		dodgeTicksLeft = 0;
+		dodgeCooldown = DODGE_COOLDOWN_TICKS;
+	}
+	
+	/** A random distance between the two sliders, in blocks. */
+	private double randomDodgeDistance()
+	{
+		double min = minDodgeDistance.getValue();
+		double max = Math.max(min, maxDodgeDistance.getValue());
+		
+		return min + random.nextDouble() * (max - min);
+	}
+	
+	/**
+	 * How far the player could strafe in the given direction before hitting
+	 * something, capped at the distance being asked for.
+	 *
+	 * <p>
+	 * The player's whole hitbox is swept along in steps rather than a single
+	 * ray being cast, so a knee-high ledge or a low overhang counts as a wall
+	 * the same way it would when you walked into it.
+	 */
+	private double clearance(Dodge direction, double distance)
+	{
+		if(MC.level == null)
+			return distance;
+		
+		Vec3 step = strafeVector(direction);
+		AABB box = MC.player.getBoundingBox();
+		double clear = 0;
+		
+		// The endpoint is tested exactly rather than being left to fall off the
+		// end of the sampling grid, so a wall sitting in the last part-step
+		// still counts.
+		for(double d = CLEARANCE_STEP;; d += CLEARANCE_STEP)
+		{
+			double at = Math.min(d, distance);
+			
+			AABB moved = box.move(step.x * at, 0, step.z * at);
+			if(!MC.level.noCollision(MC.player, moved))
+				return clear;
+			
+			clear = at;
+			if(at >= distance)
+				return distance;
+		}
+	}
+	
+	/**
+	 * A unit vector pointing left or right of where the player is facing.
+	 *
+	 * <p>
+	 * Minecraft's look vector is {@code (-sin(yaw), _, cos(yaw))}, which makes
+	 * the player's left {@code (cos(yaw), _, sin(yaw))}. Sanity check: at yaw 0
+	 * the player faces south and this gives east, which is correct.
+	 */
+	private Vec3 strafeVector(Dodge direction)
+	{
+		double yaw = Math.toRadians(MC.player.getYRot());
+		Vec3 left = new Vec3(Math.cos(yaw), 0, Math.sin(yaw));
+		
+		return direction == Dodge.LEFT ? left : left.scale(-1);
+	}
+	
+	private static double horizontalDistance(Vec3 a, Vec3 b)
+	{
+		double dx = a.x - b.x;
+		double dz = a.z - b.z;
+		
+		return Math.sqrt(dx * dx + dz * dz);
+	}
+	
+	/**
+	 * Finds the opponent most likely to hit us in the next moment: close,
+	 * looking at us, and either already in melee range or closing fast.
+	 */
+	private Entity findMostImmediateThreat()
+	{
 		Vec3 selfPos = MC.player.position();
+		Entity best = null;
+		double bestDistSq = Double.MAX_VALUE;
 		
-		entityFilters.applyTo(EntityUtils.getAttackableEntities())
-			.filter(e -> e.distanceToSqr(selfPos) <= 256)
-			.sorted(Comparator.comparingDouble(e -> e.distanceToSqr(selfPos)))
-			.limit(MAX_OPPONENTS_REPORTED)
-			.forEach(e -> opponents.add(describeOpponent(e, selfPos)));
-		
-		root.add("opponents", opponents);
-		return root;
-	}
-	
-	private JsonObject describeOpponent(Entity e, Vec3 selfPos)
-	{
-		JsonObject o = new JsonObject();
-		o.addProperty("id", e.getId());
-		o.addProperty("name", e.getName().getString());
-		o.addProperty("distance", round(
-			(float)Math.sqrt(Math.max(0, EntityUtils.distanceToHitboxSq(e)))));
-		o.addProperty("is_current_target", e == target);
-		
-		if(e instanceof LivingEntity living)
+		// Same filters the hack uses to pick targets, so we don't start juking
+		// around passive mobs the user has filtered out.
+		for(Entity e : entityFilters
+			.applyTo(EntityUtils.getAttackableEntities()).toList())
 		{
-			o.addProperty("health", round(living.getHealth()));
-			o.addProperty("max_health", round(living.getMaxHealth()));
-			o.addProperty("held_item",
-				living.getMainHandItem().getItem().toString());
-			o.addProperty("blocking", living.isBlocking());
+			double distSq = EntityUtils.distanceToHitboxSq(e);
+			if(distSq > THREAT_RANGE_SQ || distSq >= bestDistSq)
+				continue;
+			
+			if(facingUs(e, selfPos) < THREAT_FACING_THRESHOLD)
+				continue;
+			
+			// Either already within swinging distance, or running us down.
+			if(distSq > 9.0 && closingSpeed(e, selfPos) <= 0.05)
+				continue;
+			
+			best = e;
+			bestDistSq = distSq;
 		}
 		
-		o.addProperty("facing_us", round((float)facingUs(e, selfPos)));
-		o.addProperty("closing_speed", round((float)closingSpeed(e, selfPos)));
-		o.addProperty("on_our_left", isOnOurLeft(e));
-		return o;
+		return best;
 	}
 	
 	/** 1 when the entity is looking straight at us, 0 when looking away. */
@@ -826,205 +906,6 @@ public final class AimAssistHack extends Hack
 			return 0;
 		
 		return e.getDeltaMovement().dot(toUs.normalize());
-	}
-	
-	/**
-	 * How far to our left the entity is, from -1 (dead right) through 0
-	 * (straight ahead) to 1 (dead left).
-	 *
-	 * <p>
-	 * Minecraft's look vector is {@code (-sin(yaw), _, cos(yaw))}, which makes
-	 * the player's left-hand direction {@code (look.z, -look.x)} on the
-	 * horizontal plane. Sanity check: facing south (look = 0,0,1) gives a left
-	 * of (1,0), i.e. east - which is correct.
-	 */
-	private double leftness(Entity e)
-	{
-		Vec3 look = MC.player.getLookAngle();
-		Vec3 toThem = e.position().subtract(MC.player.position());
-		
-		double horizontal =
-			Math.sqrt(toThem.x * toThem.x + toThem.z * toThem.z);
-		if(horizontal < 1.0E-6)
-			return 0;
-		
-		return (toThem.x * look.z - toThem.z * look.x) / horizontal;
-	}
-	
-	/** Whether the entity sits to the left of where we are looking. */
-	private boolean isOnOurLeft(Entity e)
-	{
-		return leftness(e) > 0;
-	}
-	
-	private static float round(float value)
-	{
-		return Math.round(value * 100F) / 100F;
-	}
-	
-	/**
-	 * Lets the AI move us onto a different opponent - typically off someone
-	 * who is running away and onto whoever has started attacking us.
-	 */
-	private Entity applyAiTargeting(Entity current)
-	{
-		if(!isAiActive() || !aiTargeting.isChecked() || MC.level == null)
-			return current;
-		
-		AiStrategy strategy = advisor.getStrategy();
-		if(!strategy.isFresh(AI_STALE_NANOS))
-			return current;
-		
-		int wantedId = strategy.targetId();
-		if(wantedId < 0)
-			return current;
-		
-		Entity wanted = MC.level.getEntity(wantedId);
-		if(wanted == null || wanted == current || wanted == MC.player)
-			return current;
-			
-		// The model only gets to suggest - the usual range, filter and
-		// line-of-sight rules still decide what is actually attackable.
-		return isValidTarget(wanted) ? wanted : current;
-	}
-	
-	/**
-	 * The reflex layer. Runs every tick and presses A or D the moment an
-	 * attack looks like it is about to land, following the plan the AI last
-	 * handed back.
-	 */
-	private void updateDodge()
-	{
-		if(!isAiActive() || !aiDodging.isChecked())
-		{
-			resetDodge();
-			return;
-		}
-		
-		if(dodgeCooldown > 0)
-			dodgeCooldown--;
-		
-		// See an in-progress dodge through to the end.
-		if(dodgeTicksLeft > 0)
-		{
-			dodgeTicksLeft--;
-			holdDodge(dodgeDirection);
-			
-			if(dodgeTicksLeft <= 0)
-			{
-				releaseDodgeKeys();
-				dodgeDirection = Dodge.NONE;
-				dodgeCooldown = DODGE_COOLDOWN_TICKS;
-			}
-			return;
-		}
-		
-		releaseDodgeKeys();
-		
-		if(dodgeCooldown > 0)
-			return;
-		
-		AiStrategy strategy = advisor.getStrategy();
-		Entity threat = findMostImmediateThreat(strategy);
-		if(threat == null)
-			return;
-		
-		Dodge direction = chooseDodgeDirection(strategy, threat);
-		if(direction == Dodge.NONE)
-			return;
-		
-		dodgeDirection = direction;
-		lastDodgeDirection = direction;
-		dodgeTicksLeft =
-			strategy.isFresh(AI_STALE_NANOS) ? strategy.dodgeTicks() : 4;
-		holdDodge(direction);
-	}
-	
-	/**
-	 * Finds the opponent most likely to hit us in the next moment: close,
-	 * looking at us, and either already in melee range or closing fast.
-	 *
-	 * <p>
-	 * The AI's aggression setting decides how early this fires - low
-	 * aggression starts dodging from further out, high aggression waits until
-	 * a hit is genuinely imminent so we stay on the offensive longer.
-	 */
-	private Entity findMostImmediateThreat(AiStrategy strategy)
-	{
-		float aggression = effectiveAggression(strategy);
-		
-		// 4.6 blocks when playing safe, down to 3.1 when playing aggressive
-		double threatRange = 4.6 - aggression * 1.5;
-		double threatRangeSq = threatRange * threatRange;
-		double facingThreshold = 0.55 + aggression * 0.3;
-		
-		Vec3 selfPos = MC.player.position();
-		Entity best = null;
-		double bestDistSq = Double.MAX_VALUE;
-		
-		// Same filters the hack uses to pick targets, so we don't start juking
-		// around passive mobs the user has filtered out.
-		for(Entity e : entityFilters
-			.applyTo(EntityUtils.getAttackableEntities()).toList())
-		{
-			double distSq = EntityUtils.distanceToHitboxSq(e);
-			if(distSq > threatRangeSq || distSq >= bestDistSq)
-				continue;
-			
-			if(facingUs(e, selfPos) < facingThreshold)
-				continue;
-			
-			// Either already within swinging distance, or running us down.
-			if(distSq > 9.0 && closingSpeed(e, selfPos) <= 0.05)
-				continue;
-			
-			best = e;
-			bestDistSq = distSq;
-		}
-		
-		return best;
-	}
-	
-	/**
-	 * The aggression the reflex layer should actually use.
-	 *
-	 * <p>
-	 * When the model calls for a disengage we don't take over the movement
-	 * keys - the AI is only ever allowed to drive A and D - so a disengage is
-	 * expressed as maximum caution instead: start dodging as early as the
-	 * reflex layer allows.
-	 */
-	private float effectiveAggression(AiStrategy strategy)
-	{
-		if(!strategy.isFresh(AI_STALE_NANOS))
-			return 0.5F;
-		
-		return strategy.disengage() ? 0F : strategy.aggression();
-	}
-	
-	/**
-	 * Picks which way to strafe. The AI's bias wins when it is fresh and
-	 * decisive; otherwise we alternate so we don't juke the same way twice in
-	 * a row and become trivially readable.
-	 */
-	private Dodge chooseDodgeDirection(AiStrategy strategy, Entity threat)
-	{
-		if(strategy.isFresh(AI_STALE_NANOS)
-			&& strategy.dodgeBias() != Dodge.NONE)
-			return strategy.dodgeBias();
-			
-		// No usable advice, so fall back to strafing away from whichever side
-		// they are coming from.
-		double leftness = leftness(threat);
-		if(leftness > 0.25)
-			return Dodge.RIGHT;
-		if(leftness < -0.25)
-			return Dodge.LEFT;
-			
-		// They are more or less straight ahead, which is the normal case
-		// because AimAssist keeps us pointed at them. Alternate so we don't
-		// juke the same way every time and become trivially readable.
-		return lastDodgeDirection == Dodge.LEFT ? Dodge.RIGHT : Dodge.LEFT;
 	}
 	
 	private void holdDodge(Dodge direction)
@@ -1070,9 +951,11 @@ public final class AimAssistHack extends Hack
 	private void resetDodge()
 	{
 		releaseDodgeKeys();
+		dodgeDirection = Dodge.NONE;
+		dodgeStartPos = null;
+		dodgeDistance = 0;
 		dodgeTicksLeft = 0;
 		dodgeCooldown = 0;
-		dodgeDirection = Dodge.NONE;
 	}
 	
 	private void adjustSpacing(double distSq, boolean inComboRange)

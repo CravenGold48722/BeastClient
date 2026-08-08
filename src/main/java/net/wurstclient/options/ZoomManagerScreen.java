@@ -36,12 +36,13 @@ public class ZoomManagerScreen extends Screen implements PressAKeyCallback
 		WurstClient wurst = WurstClient.INSTANCE;
 		ZoomOtf zoom = wurst.getOtfs().zoomOtf;
 		SliderSetting level = zoom.getLevelSetting();
+		SliderSetting scrollSpeed = zoom.getScrollSpeedSetting();
 		CheckboxSetting scroll = zoom.getScrollSetting();
 		
 		addRenderableWidget(Button
 			.builder(Component.literal("Back"),
 				b -> minecraft.setScreen(prevScreen))
-			.bounds(width / 2 - 100, height / 4 + 144 - 16, 200, 20).build());
+			.bounds(width / 2 - 100, height / 4 + 184 - 16, 200, 20).build());
 		
 		addRenderableWidget(Button
 			.builder(
@@ -50,26 +51,36 @@ public class ZoomManagerScreen extends Screen implements PressAKeyCallback
 				b -> minecraft.setScreen(new PressAKeyScreen(this)))
 			.bounds(width / 2 - 79, height / 4 + 24 - 16, 158, 20).build());
 		
-		addRenderableWidget(Button
-			.builder(Component.literal("More"), b -> level.increaseValue())
-			.bounds(width / 2 - 79, height / 4 + 72 - 16, 50, 20).build());
+		addSliderButtons(level, height / 4 + 72 - 16);
+		addSliderButtons(scrollSpeed, height / 4 + 128 - 16);
 		
-		addRenderableWidget(Button
-			.builder(Component.literal("Less"), b -> level.decreaseValue())
-			.bounds(width / 2 - 25, height / 4 + 72 - 16, 50, 20).build());
-		
-		addRenderableWidget(Button
-			.builder(Component.literal("Default"),
-				b -> level.setValue(level.getDefaultValue()))
-			.bounds(width / 2 + 29, height / 4 + 72 - 16, 50, 20).build());
-		
-		addRenderableWidget(scrollButton =
-			Button
+		addRenderableWidget(
+			scrollButton = Button
 				.builder(
 					Component.literal(
 						"Use Mouse Wheel: " + onOrOff(scroll.isChecked())),
 					b -> toggleScroll())
-				.bounds(width / 2 - 79, height / 4 + 96 - 16, 158, 20).build());
+				.bounds(width / 2 - 79, height / 4 + 152 - 16, 158, 20)
+				.build());
+	}
+	
+	/**
+	 * The shared More / Less / Default row that sits under a slider's label.
+	 */
+	private void addSliderButtons(SliderSetting setting, int y)
+	{
+		addRenderableWidget(Button
+			.builder(Component.literal("More"), b -> setting.increaseValue())
+			.bounds(width / 2 - 79, y, 50, 20).build());
+		
+		addRenderableWidget(Button
+			.builder(Component.literal("Less"), b -> setting.decreaseValue())
+			.bounds(width / 2 - 25, y, 50, 20).build());
+		
+		addRenderableWidget(Button
+			.builder(Component.literal("Default"),
+				b -> setting.setValue(setting.getDefaultValue()))
+			.bounds(width / 2 + 29, y, 50, 20).build());
 	}
 	
 	private void toggleScroll()
@@ -99,11 +110,14 @@ public class ZoomManagerScreen extends Screen implements PressAKeyCallback
 	{
 		ZoomOtf zoom = WurstClient.INSTANCE.getOtfs().zoomOtf;
 		SliderSetting level = zoom.getLevelSetting();
+		SliderSetting scrollSpeed = zoom.getScrollSpeedSetting();
 		
 		context.centeredText(font, "Zoom Manager", width / 2, 40,
 			CommonColors.WHITE);
 		context.text(font, "Zoom Level: " + level.getValueString(),
 			width / 2 - 75, height / 4 + 44, WurstColors.VERY_LIGHT_GRAY);
+		context.text(font, "Scroll Speed: " + scrollSpeed.getValueString(),
+			width / 2 - 75, height / 4 + 100, WurstColors.VERY_LIGHT_GRAY);
 		
 		for(Renderable drawable : renderables)
 			drawable.extractRenderState(context, mouseX, mouseY, partialTicks);

@@ -25,6 +25,10 @@ import net.wurstclient.hacks.CameraDistanceHack;
 @Mixin(Camera.class)
 public abstract class CameraMixin
 {
+	/**
+	 * getMaxZoom is only reached in third person, so this is also where Zoom
+	 * gets to pull the camera back in step with the zoom level.
+	 */
 	@ModifyVariable(method = "getMaxZoom(F)F",
 		at = @At("HEAD"),
 		argsOnly = true)
@@ -33,9 +37,10 @@ public abstract class CameraMixin
 		CameraDistanceHack cameraDistance =
 			WurstClient.INSTANCE.getHax().cameraDistanceHack;
 		if(cameraDistance.isEnabled())
-			return cameraDistance.getDistance();
+			desiredCameraDistance = cameraDistance.getDistance();
 		
-		return desiredCameraDistance;
+		return WurstClient.INSTANCE.getOtfs().zoomOtf
+			.changeCameraDistanceBasedOnZoom(desiredCameraDistance);
 	}
 	
 	@Inject(method = "getMaxZoom(F)F", at = @At("HEAD"), cancellable = true)

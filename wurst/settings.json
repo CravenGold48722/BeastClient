@@ -1070,7 +1070,7 @@
     "Location": "Game Menu"
   },
   "Zoom": {
-    "Zoom level": 3.0,
+    "Zoom level": 0,
     "Use mouse wheel": true,
     "Zoom in screens": false,
     "Keybind": "key.keyboard.v"

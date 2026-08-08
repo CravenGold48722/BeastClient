@@ -198,7 +198,7 @@ public final class AimAssistHack extends Hack
 		new SliderSetting("Max dodge distance",
 			"The longest a random dodge can be.\n\n"
 				+ "If this ends up below the minimum, the minimum wins.",
-			5, 0.5, 8, 0.5, ValueDisplay.DECIMAL.withSuffix(" blocks"));
+			5, 0.25, 8, 0.25, ValueDisplay.DECIMAL.withSuffix(" blocks"));
 	
 	private Entity target;
 	private boolean switchKeyDownLastTick;

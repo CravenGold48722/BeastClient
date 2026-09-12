@@ -265,7 +265,7 @@ public final class AimAssistHack extends Hack
 	private volatile boolean musicRunning;
 	private volatile SourceDataLine musicLine;
 	
-	private static final double FAR_THRESHOLD_SQ = 3.05 * 3.05;
+	private static final double FAR_THRESHOLD_SQ = 3.01 * 3.01;
 	private static final double CLOSE_THRESHOLD_SQ = 0.8 * 0.8;
 	
 	public AimAssistHack()

@@ -21,43 +21,35 @@ import net.wurstclient.settings.TextFieldSetting;
 
 public final class ModelSettings
 {
-	public final EnumSetting<OpenAiModel> openAiModel = new EnumSetting<>(
-		"OpenAI model", "The model to use for OpenAI API calls.",
-		OpenAiModel.values(), OpenAiModel.GPT_4O_2024_08_06);
-	
-	public enum OpenAiModel
+	public final EnumSetting<OpenRouterModel> openRouterModel =
+		new EnumSetting<>("OpenRouter model",
+			"The model to use for OpenRouter API calls.",
+			OpenRouterModel.values(), OpenRouterModel.GPT_4O_MINI);
+
+	public enum OpenRouterModel
 	{
-		GPT_4O_2024_08_06("gpt-4o-2024-08-06", true),
-		GPT_4O_2024_05_13("gpt-4o-2024-05-13", true),
-		GPT_4O_MINI_2024_07_18("gpt-4o-mini-2024-07-18", true),
-		GPT_4_TURBO_2024_04_09("gpt-4-turbo-2024-04-09", true),
-		GPT_4_0125_PREVIEW("gpt-4-0125-preview", true),
-		GPT_4_1106_PREVIEW("gpt-4-1106-preview", true),
-		GPT_4_0613("gpt-4-0613", true),
-		GPT_3_5_TURBO_0125("gpt-3.5-turbo-0125", true),
-		GPT_3_5_TURBO_1106("gpt-3.5-turbo-1106", true),
-		GPT_3_5_TURBO_INSTRUCT("gpt-3.5-turbo-instruct", false),
-		DAVINCI_002("davinci-002", false),
-		BABBAGE_002("babbage-002", false);
-		
+		GPT_4O_MINI("openai/gpt-4o-mini"),
+		GPT_4O("openai/gpt-4o"),
+		CLAUDE_3_5_HAIKU("anthropic/claude-3.5-haiku"),
+		CLAUDE_3_5_SONNET("anthropic/claude-3.5-sonnet"),
+		GEMINI_FLASH("google/gemini-2.0-flash-001"),
+		LLAMA_3_3_70B("meta-llama/llama-3.3-70b-instruct"),
+		LLAMA_3_1_8B("meta-llama/llama-3.1-8b-instruct"),
+		MISTRAL_NEMO("mistralai/mistral-nemo"),
+		DEEPSEEK_CHAT("deepseek/deepseek-chat"),
+		QWEN_2_5_72B("qwen/qwen-2.5-72b-instruct");
+
 		private final String name;
-		private final boolean chat;
-		
-		private OpenAiModel(String name, boolean chat)
+
+		private OpenRouterModel(String name)
 		{
 			this.name = name;
-			this.chat = chat;
 		}
-		
+
 		@Override
 		public String toString()
 		{
 			return name;
-		}
-		
-		public boolean isChatModel()
-		{
-			return chat;
 		}
 	}
 	
@@ -141,7 +133,8 @@ public final class ModelSettings
 			+ " predictions.\n\n"
 			+ "Higher values improve the quality of predictions, but also"
 			+ " increase the time it takes to generate them, as well as cost"
-			+ " (for APIs like OpenAI) or RAM usage (for self-hosted models).",
+			+ " (for APIs like OpenRouter) or RAM usage (for self-hosted"
+			+ " models).",
 		10, 0, 100, 1, ValueDisplay.INTEGER);
 	
 	public final CheckboxSetting filterServerMessages =
@@ -156,10 +149,10 @@ public final class ModelSettings
 	public final TextFieldSetting customModel = new TextFieldSetting(
 		"Custom model",
 		"If set, this model will be used instead of the one specified in the"
-			+ " \"OpenAI model\" setting.\n\n"
-			+ "Use this if you have a fine-tuned OpenAI model or if you are"
-			+ " using a custom endpoint that is OpenAI-compatible but offers"
-			+ " different models.",
+			+ " \"OpenRouter model\" setting.\n\n"
+			+ "Use this for any other model slug that OpenRouter offers, or if"
+			+ " you are using a custom endpoint that is OpenAI-compatible but"
+			+ " offers different models.",
 		"");
 	
 	public final EnumSetting<CustomModelType> customModelType =
@@ -194,23 +187,47 @@ public final class ModelSettings
 		}
 	}
 	
-	public final TextFieldSetting openaiChatEndpoint = new TextFieldSetting(
-		"OpenAI chat endpoint", "Endpoint for OpenAI's chat completion API.",
-		"https://api.openai.com/v1/chat/completions");
-	
-	public final TextFieldSetting openaiLegacyEndpoint =
-		new TextFieldSetting("OpenAI legacy endpoint",
-			"Endpoint for OpenAI's legacy completion API.",
-			"https://api.openai.com/v1/completions");
-	
+	public final TextFieldSetting openRouterChatEndpoint =
+		new TextFieldSetting("OpenRouter chat endpoint",
+			"Endpoint for OpenRouter's chat completion API.",
+			"https://openrouter.ai/api/v1/chat/completions");
+
+	public final TextFieldSetting openRouterLegacyEndpoint =
+		new TextFieldSetting("OpenRouter legacy endpoint",
+			"Endpoint for OpenRouter's legacy completion API.",
+			"https://openrouter.ai/api/v1/completions");
+
 	private final List<Setting> settings =
-		Collections.unmodifiableList(Arrays.asList(openAiModel, maxTokens,
+		Collections.unmodifiableList(Arrays.asList(openRouterModel, maxTokens,
 			temperature, topP, presencePenalty, frequencyPenalty, stopSequence,
 			contextLength, filterServerMessages, customModel, customModelType,
-			openaiChatEndpoint, openaiLegacyEndpoint));
-	
+			openRouterChatEndpoint, openRouterLegacyEndpoint));
+
 	public void forEach(Consumer<Setting> action)
 	{
 		settings.forEach(action);
+	}
+
+	/**
+	 * @return the "Custom model" setting if it's set, otherwise the selected
+	 *         OpenRouter model.
+	 */
+	public String getModelName()
+	{
+		String custom = customModel.getValue();
+		return custom.isBlank() ? "" + openRouterModel.getSelected() : custom;
+	}
+
+	/**
+	 * @return true if the current model uses the chat endpoint. All of
+	 *         OpenRouter's built-in models do; a custom model can be set to
+	 *         "Legacy" instead.
+	 */
+	public boolean isChatModel()
+	{
+		if(customModel.getValue().isBlank())
+			return true;
+
+		return customModelType.getSelected().isChat();
 	}
 }

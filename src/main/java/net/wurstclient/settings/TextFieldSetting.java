@@ -29,9 +29,10 @@ public final class TextFieldSetting extends Setting
 	private String value = "";
 	private final String defaultValue;
 	private final Predicate<String> validator;
+	private final boolean masked;
 	
 	public TextFieldSetting(String name, WText description, String defaultValue,
-		Predicate<String> validator)
+		Predicate<String> validator, boolean masked)
 	{
 		super(name, description);
 		
@@ -44,6 +45,20 @@ public final class TextFieldSetting extends Setting
 		value = defaultValue;
 		this.defaultValue = defaultValue;
 		this.validator = validator;
+		this.masked = masked;
+	}
+	
+	public TextFieldSetting(String name, WText description, String defaultValue,
+		Predicate<String> validator)
+	{
+		this(name, description, defaultValue, validator, false);
+	}
+	
+	public TextFieldSetting(String name, String descriptionKey,
+		String defaultValue, boolean masked)
+	{
+		this(name, WText.translated(descriptionKey), defaultValue, s -> true,
+			masked);
 	}
 	
 	public TextFieldSetting(String name, String descriptionKey,
@@ -85,6 +100,15 @@ public final class TextFieldSetting extends Setting
 	public String getDefaultValue()
 	{
 		return defaultValue;
+	}
+	
+	/**
+	 * @return true if this setting holds a secret (like an API key) that
+	 *         shouldn't be shown in the ClickGUI.
+	 */
+	public boolean isMasked()
+	{
+		return masked;
 	}
 	
 	/**

@@ -76,7 +76,9 @@ public final class TextFieldEditButton extends Component
 		if(hText)
 			GUI.setTooltip(ChatUtils.wrapText(setting.getDescription(), 200));
 		else if(hBox)
-			GUI.setTooltip(ChatUtils.wrapText(setting.getValue(), 200));
+			GUI.setTooltip(ChatUtils.wrapText(
+				setting.isMasked() ? "Click to edit." : setting.getValue(),
+				200));
 		
 		// background
 		context.fill(x1, y1, x2, y3, RenderUtils.toIntColor(bgColor, opacity));
@@ -89,13 +91,25 @@ public final class TextFieldEditButton extends Component
 		// text
 		context.guiRenderState.up();
 		ClickGui.drawAccentText(context, TR, setting.getName(), x1, y1 + 2);
-		String value = setting.getValue();
+		String value = getDisplayValue();
 		int maxWidth = getWidth() - TR.width("...") - 2;
 		int maxLength =
 			TR.getSplitter().plainIndexAtWidth(value, maxWidth, Style.EMPTY);
 		if(maxLength < value.length())
 			value = value.substring(0, maxLength) + "...";
 		ClickGui.drawAccentText(context, TR, value, x1 + 2, y3 + 2);
+	}
+	
+	/**
+	 * @return the setting's value, or a row of asterisks if it's masked.
+	 */
+	private String getDisplayValue()
+	{
+		String value = setting.getValue();
+		if(!setting.isMasked() || value.isEmpty())
+			return value;
+		
+		return "*".repeat(Math.min(value.length(), 20));
 	}
 	
 	@Override

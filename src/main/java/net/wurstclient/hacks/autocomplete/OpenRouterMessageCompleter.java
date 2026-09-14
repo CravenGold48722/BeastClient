@@ -25,12 +25,12 @@ import net.wurstclient.util.json.WsonObject;
 public final class OpenRouterMessageCompleter extends MessageCompleter
 {
 	public static final String API_KEY_ENV_VAR = "WURST_OPENROUTER_KEY";
-
+	
 	public OpenRouterMessageCompleter(ModelSettings modelSettings)
 	{
 		super(modelSettings);
 	}
-
+	
 	@Override
 	protected JsonObject buildParams(String prompt, int maxSuggestions)
 	{
@@ -46,10 +46,10 @@ public final class OpenRouterMessageCompleter extends MessageCompleter
 		params.addProperty("frequency_penalty",
 			modelSettings.frequencyPenalty.getValue());
 		params.addProperty("n", maxSuggestions);
-
+		
 		// add the model name
 		params.addProperty("model", modelSettings.getModelName());
-
+		
 		// add the prompt, depending on model type
 		if(modelSettings.isChatModel())
 		{
@@ -65,13 +65,13 @@ public final class OpenRouterMessageCompleter extends MessageCompleter
 			promptMessage.addProperty("content", prompt);
 			messages.add(promptMessage);
 			params.add("messages", messages);
-
+			
 		}else
 			params.addProperty("prompt", prompt);
-
+		
 		return params;
 	}
-
+	
 	@Override
 	protected WsonObject requestCompletions(JsonObject parameters)
 		throws IOException, JsonException
@@ -80,20 +80,20 @@ public final class OpenRouterMessageCompleter extends MessageCompleter
 		URL url = URI.create(modelSettings.isChatModel()
 			? modelSettings.openRouterChatEndpoint.getValue()
 			: modelSettings.openRouterLegacyEndpoint.getValue()).toURL();
-
+		
 		// set up the API request
 		HttpURLConnection conn = (HttpURLConnection)url.openConnection();
 		conn.setRequestMethod("POST");
 		conn.setRequestProperty("Content-Type", "application/json");
 		conn.setRequestProperty("Authorization",
-			"Bearer " + System.getenv(API_KEY_ENV_VAR));
-
+			"Bearer " + modelSettings.getApiKey());
+		
 		// OpenRouter uses these to attribute requests on its leaderboards
 		conn.setRequestProperty("HTTP-Referer",
 			"https://github.com/CravenGold48722/BeastClient");
 		conn.setRequestProperty("X-Title",
 			"Beast Client " + WurstClient.VERSION);
-
+		
 		// set the request body
 		conn.setDoOutput(true);
 		try(OutputStream os = conn.getOutputStream())
@@ -101,21 +101,21 @@ public final class OpenRouterMessageCompleter extends MessageCompleter
 			os.write(JsonUtils.GSON.toJson(parameters).getBytes());
 			os.flush();
 		}
-
+		
 		// parse the response
 		return JsonUtils.parseConnectionToObject(conn);
 	}
-
+	
 	@Override
 	protected String[] extractCompletions(WsonObject response)
 		throws JsonException
 	{
 		ArrayList<String> completions = new ArrayList<>();
-
+		
 		// extract choices from response
 		ArrayList<WsonObject> choices =
 			response.getArray("choices").getAllObjects();
-
+		
 		// extract completions from choices
 		if(modelSettings.isChatModel())
 			for(WsonObject choice : choices)
@@ -127,11 +127,11 @@ public final class OpenRouterMessageCompleter extends MessageCompleter
 		else
 			for(WsonObject choice : choices)
 				completions.add(choice.getString("text"));
-
+			
 		// remove newlines
 		for(String completion : completions)
 			completion = completion.replace("\n", " ");
-
+		
 		return completions.toArray(new String[completions.size()]);
 	}
 }

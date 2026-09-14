@@ -21,11 +21,22 @@ import net.wurstclient.settings.TextFieldSetting;
 
 public final class ModelSettings
 {
+	public final TextFieldSetting apiKey = new TextFieldSetting("API key",
+		"Your OpenRouter API key. You can create one at"
+			+ " openrouter.ai/settings/keys.\n\n"
+			+ "Leave this blank to use the "
+			+ OpenRouterMessageCompleter.API_KEY_ENV_VAR
+			+ " environment variable instead.\n\n"
+			+ "§cWarning:§r A key entered here is saved in plain text"
+			+ " in your settings.json and is shared with anyone you send that"
+			+ " file to.",
+		"", true);
+	
 	public final EnumSetting<OpenRouterModel> openRouterModel =
 		new EnumSetting<>("OpenRouter model",
 			"The model to use for OpenRouter API calls.",
 			OpenRouterModel.values(), OpenRouterModel.GPT_4O_MINI);
-
+	
 	public enum OpenRouterModel
 	{
 		GPT_4O_MINI("openai/gpt-4o-mini"),
@@ -38,14 +49,14 @@ public final class ModelSettings
 		MISTRAL_NEMO("mistralai/mistral-nemo"),
 		DEEPSEEK_CHAT("deepseek/deepseek-chat"),
 		QWEN_2_5_72B("qwen/qwen-2.5-72b-instruct");
-
+		
 		private final String name;
-
+		
 		private OpenRouterModel(String name)
 		{
 			this.name = name;
 		}
-
+		
 		@Override
 		public String toString()
 		{
@@ -80,7 +91,7 @@ public final class ModelSettings
 				+ "Positive values encourage the model to use synonyms and"
 				+ " talk about different topics. Negative values encourage the"
 				+ " model to repeat the same word over and over again.",
-			0, -2, 2, 0.01, ValueDisplay.DECIMAL);
+			0, -2, 3, 0.01, ValueDisplay.DECIMAL);
 	
 	public final SliderSetting frequencyPenalty =
 		new SliderSetting("Frequency penalty",
@@ -89,7 +100,7 @@ public final class ModelSettings
 				+ "Positive values encourage the model to use synonyms and"
 				+ " talk about different topics. Negative values encourage the"
 				+ " model to repeat existing chat messages.",
-			0, -2, 2, 0.01, ValueDisplay.DECIMAL);
+			0, -2, 3, 0.01, ValueDisplay.DECIMAL);
 	
 	public final EnumSetting<StopSequence> stopSequence = new EnumSetting<>(
 		"Stop sequence",
@@ -191,23 +202,39 @@ public final class ModelSettings
 		new TextFieldSetting("OpenRouter chat endpoint",
 			"Endpoint for OpenRouter's chat completion API.",
 			"https://openrouter.ai/api/v1/chat/completions");
-
+	
 	public final TextFieldSetting openRouterLegacyEndpoint =
 		new TextFieldSetting("OpenRouter legacy endpoint",
 			"Endpoint for OpenRouter's legacy completion API.",
 			"https://openrouter.ai/api/v1/completions");
-
+	
 	private final List<Setting> settings =
-		Collections.unmodifiableList(Arrays.asList(openRouterModel, maxTokens,
-			temperature, topP, presencePenalty, frequencyPenalty, stopSequence,
-			contextLength, filterServerMessages, customModel, customModelType,
-			openRouterChatEndpoint, openRouterLegacyEndpoint));
-
+		Collections.unmodifiableList(Arrays.asList(apiKey, openRouterModel,
+			maxTokens, temperature, topP, presencePenalty, frequencyPenalty,
+			stopSequence, contextLength, filterServerMessages, customModel,
+			customModelType, openRouterChatEndpoint, openRouterLegacyEndpoint));
+	
 	public void forEach(Consumer<Setting> action)
 	{
 		settings.forEach(action);
 	}
-
+	
+	/**
+	 * @return the "API key" setting if it's set, otherwise the
+	 *         WURST_OPENROUTER_KEY environment variable, or an empty string if
+	 *         neither is set.
+	 */
+	public String getApiKey()
+	{
+		String key = apiKey.getValue().trim();
+		if(!key.isEmpty())
+			return key;
+		
+		String envKey =
+			System.getenv(OpenRouterMessageCompleter.API_KEY_ENV_VAR);
+		return envKey == null ? "" : envKey.trim();
+	}
+	
 	/**
 	 * @return the "Custom model" setting if it's set, otherwise the selected
 	 *         OpenRouter model.
@@ -217,7 +244,7 @@ public final class ModelSettings
 		String custom = customModel.getValue();
 		return custom.isBlank() ? "" + openRouterModel.getSelected() : custom;
 	}
-
+	
 	/**
 	 * @return true if the current model uses the chat endpoint. All of
 	 *         OpenRouter's built-in models do; a custom model can be set to
@@ -227,7 +254,7 @@ public final class ModelSettings
 	{
 		if(customModel.getValue().isBlank())
 			return true;
-
+		
 		return customModelType.getSelected().isChat();
 	}
 }

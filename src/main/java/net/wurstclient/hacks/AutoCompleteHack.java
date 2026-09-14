@@ -19,12 +19,13 @@ import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.hacks.autocomplete.MessageCompleter;
 import net.wurstclient.hacks.autocomplete.ModelSettings;
-import net.wurstclient.hacks.autocomplete.OpenAiMessageCompleter;
+import net.wurstclient.hacks.autocomplete.OpenRouterMessageCompleter;
 import net.wurstclient.hacks.autocomplete.SuggestionHandler;
 import net.wurstclient.util.ChatUtils;
 
 @SearchTags({"auto complete", "Copilot", "ChatGPT", "chat GPT", "GPT-3", "GPT3",
-	"GPT 3", "OpenAI", "open ai", "ChatAI", "chat AI", "ChatBot", "chat bot"})
+	"GPT 3", "OpenAI", "open ai", "OpenRouter", "open router", "ChatAI",
+	"chat AI", "ChatBot", "chat bot"})
 public final class AutoCompleteHack extends Hack
 	implements ChatOutputListener, UpdateListener
 {
@@ -51,13 +52,14 @@ public final class AutoCompleteHack extends Hack
 	@Override
 	protected void onEnable()
 	{
-		completer = new OpenAiMessageCompleter(modelSettings);
+		completer = new OpenRouterMessageCompleter(modelSettings);
 		
-		if(completer instanceof OpenAiMessageCompleter
-			&& System.getenv("WURST_OPENAI_KEY") == null)
+		if(modelSettings.getApiKey().isEmpty())
 		{
-			ChatUtils.error("API key not found. Please set the"
-				+ " WURST_OPENAI_KEY environment variable and reboot.");
+			ChatUtils.error("API key not found. Please enter your OpenRouter"
+				+ " key in AutoComplete's \"API key\" setting, or set the "
+				+ OpenRouterMessageCompleter.API_KEY_ENV_VAR
+				+ " environment variable and reboot.");
 			setEnabled(false);
 			return;
 		}

@@ -20,7 +20,9 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.PacketInputListener;
 import net.wurstclient.events.UpdateListener;
+import net.wurstclient.WurstClient;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.hack.HackList;
 import net.wurstclient.mixinterface.IMultiPlayerGameMode;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.SliderSetting;
@@ -49,10 +51,22 @@ public final class AutoTotemHack extends Hack
 	
 	private final CheckboxSetting overrideInput =
 		new CheckboxSetting("Override input",
-			"Freezes your movement input for the single tick in which a"
-				+ " replacement totem is being equipped, so nothing you are"
-				+ " holding down can interfere with the swap.",
+			"Freezes the game's input handling while a replacement totem is"
+				+ " going in, so nothing can interfere with the swap.\n\n"
+				+ "For the length of the freeze, movement, jumping, sneaking,"
+				+ " sprinting, every keybind, and all attacking and item use -"
+				+ " yours and other hacks' alike - are dropped on the floor."
+				+ " Getting the totem back into your offhand outranks all of"
+				+ " it.",
 			true);
+	
+	private final SliderSetting freezeTicks = new SliderSetting("Freeze ticks",
+		"How many ticks the input freeze lasts once a totem pops.\n\n"
+			+ "The swap itself takes two ticks when the offhand isn't empty -"
+			+ " one to put the totem in, one to put the displaced item back -"
+			+ " so 2 is the shortest value that covers a whole swap.\n\n"
+			+ "0 disables the freeze without turning off the setting above.",
+		2, 0, 10, 1, ValueDisplay.INTEGER);
 	
 	private int nextTickSlot;
 	private int totems;
@@ -82,10 +96,15 @@ public final class AutoTotemHack extends Hack
 	private static final int URGENT_WINDOW_TICKS = 60;
 	
 	/**
-	 * True while this tick is being spent re-equipping a totem after a pop.
-	 * Read by LocalPlayerMixin to zero out movement input for that tick.
+	 * How many more ticks the game's input is frozen for while a totem goes
+	 * back into the offhand.
+	 *
+	 * <p>
+	 * Volatile and armed straight from the network thread, so the freeze is
+	 * already in effect for whatever the client does next after the pop
+	 * arrives - it doesn't wait for our own tick to come around.
 	 */
-	private boolean overridingInput;
+	private volatile int freezeTicksLeft;
 	
 	public AutoTotemHack()
 	{
@@ -95,6 +114,7 @@ public final class AutoTotemHack extends Hack
 		addSetting(delay);
 		addSetting(health);
 		addSetting(overrideInput);
+		addSetting(freezeTicks);
 	}
 	
 	@Override
@@ -118,7 +138,7 @@ public final class AutoTotemHack extends Hack
 		wasTotemInOffhand = false;
 		totemPopped = false;
 		urgentTicksLeft = 0;
-		overridingInput = false;
+		freezeTicksLeft = 0;
 		
 		// Registered at the front of the listener list so that a totem is back
 		// in the offhand before any other hack gets a chance to run that tick.
@@ -131,7 +151,7 @@ public final class AutoTotemHack extends Hack
 	{
 		EVENTS.remove(UpdateListener.class, this);
 		EVENTS.remove(PacketInputListener.class, this);
-		overridingInput = false;
+		freezeTicksLeft = 0;
 		totemPopped = false;
 		urgentTicksLeft = 0;
 	}
@@ -160,7 +180,13 @@ public final class AutoTotemHack extends Hack
 			
 			Entity entity = packet.getEntity(level);
 			if(entity == MC.player)
+			{
 				totemPopped = true;
+				// Armed here rather than on our next tick so the freeze is
+				// already up for the rest of this one. If it turns out there
+				// is no totem to equip, the next tick drops it again.
+				freezeTicksLeft = freezeTicks.getValueI();
+			}
 			
 		}catch(Exception e)
 		{
@@ -170,20 +196,48 @@ public final class AutoTotemHack extends Hack
 	}
 	
 	/**
-	 * Whether movement input should be suppressed this tick because a totem is
-	 * being swapped in. Read from LocalPlayerMixin.
+	 * Whether the game's input should be thrown away right now because a totem
+	 * is being swapped in.
+	 *
+	 * <p>
+	 * Read from ClientInputMixin (movement, jumping, sneaking, sprinting),
+	 * MinecraftMixin (keybinds and held-down attacks) and
+	 * MultiPlayerGameModeMixin (attacks and item use, whether they come from
+	 * the player or from another hack).
 	 */
-	public boolean isOverridingInput()
+	public boolean isFreezingInput()
 	{
-		return isEnabled() && overridingInput && overrideInput.isChecked();
+		return isEnabled() && overrideInput.isChecked() && freezeTicksLeft > 0;
+	}
+	
+	/**
+	 * Null-safe version of {@link #isFreezingInput()} for mixins, which can
+	 * run before the hack list exists.
+	 */
+	public static boolean isInputFrozen()
+	{
+		HackList hax = WurstClient.INSTANCE.getHax();
+		return hax != null && hax.autoTotemHack.isFreezingInput();
 	}
 	
 	@Override
 	public void onUpdate()
 	{
-		// The override only ever lasts for the tick that does the swap.
-		overridingInput = false;
-		
+		try
+		{
+			updateTotem();
+			
+		}finally
+		{
+			// Exactly one tick of the freeze is spent per tick, whichever
+			// branch above returned early.
+			if(freezeTicksLeft > 0)
+				freezeTicksLeft--;
+		}
+	}
+	
+	private void updateTotem()
+	{
 		finishMovingTotem();
 		
 		int nextTotemSlot = searchForTotems();
@@ -203,6 +257,12 @@ public final class AutoTotemHack extends Hack
 			// A totem is in place, so there is nothing urgent left to do.
 			urgentTicksLeft = 0;
 			wasTotemInOffhand = true;
+			
+			// The freeze isn't cleared here. A pop and the packet that empties
+			// the offhand can land a couple of ticks apart, so a totem sitting
+			// there right now doesn't mean the swap is over - it may not have
+			// started yet. Letting the counter run out covers that gap.
+			
 			return;
 		}
 		
@@ -212,23 +272,31 @@ public final class AutoTotemHack extends Hack
 			wasTotemInOffhand = false;
 		}
 		
+		// Nothing to equip, so don't sit on a freeze that can't pay off.
 		if(nextTotemSlot == -1)
+		{
+			freezeTicksLeft = 0;
 			return;
+		}
 		
 		// don't move items while a container is open
 		if(MC.screen instanceof AbstractContainerScreen
 			&& !(MC.screen instanceof InventoryScreen
 				|| MC.screen instanceof CreativeModeInventoryScreen))
+		{
+			freezeTicksLeft = 0;
 			return;
-			
-		// A pop outranks everything: it skips the health gate, skips the
-		// delay, and freezes movement input for this tick so that nothing the
-		// player is holding down can get in the way.
+		}
+		
+		// A pop outranks everything: it skips the health gate, skips the delay,
+		// and re-arms the input freeze from this tick, so the swap and the
+		// follow-up click that puts the displaced item back are both covered.
 		if(urgentTicksLeft > 0)
 		{
 			urgentTicksLeft = 0;
 			timer = 0;
-			overridingInput = true;
+			if(overrideInput.isChecked())
+				freezeTicksLeft = freezeTicks.getValueI();
 			moveToOffhand(nextTotemSlot);
 			return;
 		}

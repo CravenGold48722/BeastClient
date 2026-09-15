@@ -39,6 +39,7 @@ import net.wurstclient.events.HandleBlockBreakingListener.HandleBlockBreakingEve
 import net.wurstclient.events.HandleInputListener.HandleInputEvent;
 import net.wurstclient.events.LeftClickListener.LeftClickEvent;
 import net.wurstclient.events.RightClickListener.RightClickEvent;
+import net.wurstclient.hacks.AutoTotemHack;
 import net.wurstclient.mixinterface.ILocalPlayer;
 import net.wurstclient.mixinterface.IMinecraftClient;
 import net.wurstclient.mixinterface.IMultiPlayerGameMode;
@@ -96,6 +97,19 @@ public abstract class MinecraftMixin
 		EventManager.fire(HandleInputEvent.INSTANCE);
 	}
 	
+	/**
+	 * Drops every keybind the game would have handled this tick while
+	 * AutoTotem is swapping a totem in. Attacking, using items, switching
+	 * hotbar slots, dropping, opening the inventory - none of it happens until
+	 * the totem is back.
+	 */
+	@Inject(method = "handleKeybinds()V", at = @At("HEAD"), cancellable = true)
+	private void onHandleKeybinds(CallbackInfo ci)
+	{
+		if(AutoTotemHack.isInputFrozen())
+			ci.cancel();
+	}
+	
 	@Inject(method = "startAttack()Z",
 		at = @At(value = "FIELD",
 			target = "Lnet/minecraft/client/Minecraft;hitResult:Lnet/minecraft/world/phys/HitResult;",
@@ -144,6 +158,14 @@ public abstract class MinecraftMixin
 	@Inject(method = "continueAttack(Z)V", at = @At("HEAD"), cancellable = true)
 	private void onHandleBlockBreaking(boolean breaking, CallbackInfo ci)
 	{
+		// A held-down attack button doesn't get to keep swinging while a totem
+		// is going in.
+		if(AutoTotemHack.isInputFrozen())
+		{
+			ci.cancel();
+			return;
+		}
+		
 		HandleBlockBreakingEvent event = new HandleBlockBreakingEvent();
 		EventManager.fire(event);
 		

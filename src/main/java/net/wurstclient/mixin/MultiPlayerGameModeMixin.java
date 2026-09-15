@@ -30,12 +30,14 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.item.component.PiercingWeapon;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.event.EventManager;
 import net.wurstclient.events.BlockBreakingProgressListener.BlockBreakingProgressEvent;
 import net.wurstclient.events.PlayerAttacksEntityListener.PlayerAttacksEntityEvent;
 import net.wurstclient.events.StopUsingItemListener.StopUsingItemEvent;
+import net.wurstclient.hacks.AutoTotemHack;
 import net.wurstclient.mixinterface.IMultiPlayerGameMode;
 
 @Mixin(MultiPlayerGameMode.class)
@@ -66,13 +68,59 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	
 	@Inject(
 		method = "attack(Lnet/minecraft/world/entity/player/Player;Lnet/minecraft/world/entity/Entity;)V",
-		at = @At("HEAD"))
+		at = @At("HEAD"),
+		cancellable = true)
 	private void onAttackEntity(Player player, Entity target, CallbackInfo ci)
 	{
 		if(player != minecraft.player)
 			return;
+			
+		// A totem going into the offhand outranks any attack, including the
+		// ones other hacks send.
+		if(AutoTotemHack.isInputFrozen())
+		{
+			ci.cancel();
+			return;
+		}
 		
 		EventManager.fire(new PlayerAttacksEntityEvent(target));
+	}
+	
+	/**
+	 * Holds back attacks and item use - the player's and other hacks' alike -
+	 * while AutoTotem is swapping a totem in. Inventory clicks are untouched,
+	 * so the swap itself still goes through.
+	 */
+	@Inject(
+		method = "piercingAttack(Lnet/minecraft/world/item/component/PiercingWeapon;)V",
+		at = @At("HEAD"),
+		cancellable = true)
+	private void onPiercingAttack(PiercingWeapon weapon, CallbackInfo ci)
+	{
+		if(AutoTotemHack.isInputFrozen())
+			ci.cancel();
+	}
+	
+	@Inject(
+		method = "useItem(Lnet/minecraft/world/entity/player/Player;Lnet/minecraft/world/InteractionHand;)Lnet/minecraft/world/InteractionResult;",
+		at = @At("HEAD"),
+		cancellable = true)
+	private void onUseItem(Player player, InteractionHand hand,
+		CallbackInfoReturnable<InteractionResult> cir)
+	{
+		if(AutoTotemHack.isInputFrozen())
+			cir.setReturnValue(InteractionResult.FAIL);
+	}
+	
+	@Inject(
+		method = "useItemOn(Lnet/minecraft/client/player/LocalPlayer;Lnet/minecraft/world/InteractionHand;Lnet/minecraft/world/phys/BlockHitResult;)Lnet/minecraft/world/InteractionResult;",
+		at = @At("HEAD"),
+		cancellable = true)
+	private void onUseItemOn(LocalPlayer player, InteractionHand hand,
+		BlockHitResult hitResult, CallbackInfoReturnable<InteractionResult> cir)
+	{
+		if(AutoTotemHack.isInputFrozen())
+			cir.setReturnValue(InteractionResult.FAIL);
 	}
 	
 	@Override

@@ -14,6 +14,7 @@
     "ChatScreenMixin",
     "ClientClockManagerMixin",
     "ClientCommonPacketListenerImplMixin",
+    "ClientInputMixin",
     "ClientLevelMixin",
     "ClientPacketListenerMixin",
     "ClientTelemetryManagerMixin",

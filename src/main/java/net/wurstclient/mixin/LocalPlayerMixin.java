@@ -171,7 +171,7 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 	private Vec2 onModifyInput(Vec2 original)
 	{
 		HackList hax = WurstClient.INSTANCE.getHax();
-		if(hax != null && hax.autoTotemHack.isOverridingInput())
+		if(hax != null && hax.autoTotemHack.isFreezingInput())
 			return Vec2.ZERO;
 		
 		return original;

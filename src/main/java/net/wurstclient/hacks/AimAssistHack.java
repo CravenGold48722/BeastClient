@@ -91,9 +91,10 @@ public final class AimAssistHack extends Hack
 			+ " target you just switched to or killed the last one of. Inside"
 			+ " that distance the aim snaps like before, so close-range"
 			+ " tracking stays exact.\n\n"
-			+ "The turn rate is fixed and enormous, so this reads as instant"
-			+ " either way - the rotation just moves through the angles in"
-			+ " between instead of teleporting.",
+			+ "The turn rate is fixed at 2000°/s - a 180 in about 90ms,"
+			+ " which is as fast as a human hand can flick. Quick enough to"
+			+ " feel instant, slow enough that the rotation is a turn rather"
+			+ " than a teleport.",
 		true);
 	
 	private final SliderSetting smoothAimDistance =
@@ -319,12 +320,18 @@ public final class AimAssistHack extends Hack
 	 * How fast the smooth aim turns, in degrees per second.
 	 *
 	 * <p>
-	 * Huge on purpose: the point of the smooth path isn't to be slow, it's to
-	 * walk the rotation through the angles in between instead of teleporting
-	 * it. 360000 deg/s is 18000 degrees in a tick, so a single step covers
-	 * anything the aim could need and it reads as instant.
+	 * Set to the fastest a person can actually flick: a 180 in roughly 90ms,
+	 * which is what the quickest players in aim trainers and tac shooters hit
+	 * at high sensitivity. That's 100 degrees per tick, so a full turnaround
+	 * takes about two ticks - fast enough to feel instant in a fight, slow
+	 * enough that the rotation is still a turn rather than a teleport.
+	 *
+	 * <p>
+	 * Deliberately not raised past this. Anything quicker is a speed no hand
+	 * could produce, which is exactly the thing the smooth path exists to
+	 * avoid.
 	 */
-	private static final float SMOOTH_AIM_SPEED = 360000F;
+	private static final float SMOOTH_AIM_SPEED = 2000F;
 	
 	private static final double FAR_THRESHOLD_SQ = 3.01 * 3.01;
 	private static final double CLOSE_THRESHOLD_SQ = 0.8 * 0.8;

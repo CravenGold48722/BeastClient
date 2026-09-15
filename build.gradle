@@ -11,7 +11,44 @@ plugins {
 
 def ENV = System.getenv()
 
-version = project.mod_version
+// ── Auto-incrementing jar version ────────────────────────────────────────
+// The jar is named after mod_version, and any build that actually produces a
+// jar bumps it first, so a fresh jar never lands in the mods folder under the
+// name of the one already sitting there. The patch digit rolls over at 9, so
+// v7.56.9 is followed by v7.57.0.
+//
+// mod_version is written back to gradle.properties, which is a configuration
+// input - that invalidates the configuration cache, so the next build
+// re-reads it and bumps again instead of reusing the old number.
+def bumpModVersion() {
+	def propsFile = file("gradle.properties")
+	def text = propsFile.text
+	def matcher = text =~ /mod_version=v(\d+)\.(\d+)\.(\d+)(-MC[^\r\n]*)/
+
+	// Leave anything that isn't a plain v<major>.<minor>.<patch> alone, e.g.
+	// the v7.5X.X placeholder upstream builds from.
+	if (!matcher.find())
+		return project.mod_version
+
+	def major = matcher.group(1) as int
+	def minor = matcher.group(2) as int
+	def patch = (matcher.group(3) as int) + 1
+	if (patch > 9) {
+		patch = 0
+		minor++
+	}
+
+	def bumped = "v${major}.${minor}.${patch}${matcher.group(4)}"
+	propsFile.text = text.replaceFirst(/mod_version=v[^\r\n]*/, "mod_version=${bumped}")
+	return bumped
+}
+
+def jarProducingTasks = ["assemble", "build", "jar", "remapJar", "github"]
+def buildsAJar = gradle.startParameter.taskNames.any {
+	jarProducingTasks.contains(it.substring(it.lastIndexOf(":") + 1))
+}
+
+version = buildsAJar ? bumpModVersion() : project.mod_version
 group = project.maven_group
 
 base {

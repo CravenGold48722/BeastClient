@@ -29,6 +29,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.AABB;
@@ -81,6 +82,25 @@ public final class AimAssistHack extends Hack
 				+ " while they move you, since you can't sprint toward a target"
 				+ " you aren't facing."),
 			FaceTarget.CLIENT);
+	
+	private final CheckboxSetting smoothAim = new CheckboxSetting("Smooth aim",
+		"Turns toward the target in continuous steps instead of snapping"
+			+ " straight to the needed angle.\n\n"
+			+ "Only used when the target is further away than"
+			+ " §lSmooth aim distance§r, and while catching up to a"
+			+ " target you just switched to or killed the last one of. Inside"
+			+ " that distance the aim snaps like before, so close-range"
+			+ " tracking stays exact.\n\n"
+			+ "The turn rate is fixed and enormous, so this reads as instant"
+			+ " either way - the rotation just moves through the angles in"
+			+ " between instead of teleporting.",
+		true);
+	
+	private final SliderSetting smoothAimDistance =
+		new SliderSetting("Smooth aim distance",
+			"Hitbox distance below which the aim snaps instead of smoothing."
+				+ " Measured the same way as §lRange§r.",
+			4, 0, 20, 0.25, ValueDisplay.DECIMAL.withSuffix(" blocks"));
 	
 	private final TextFieldSetting switchTargetKey =
 		new TextFieldSetting("Switch target key",
@@ -204,6 +224,36 @@ public final class AimAssistHack extends Hack
 	private boolean switchKeyDownLastTick;
 	private long lastFrameTime;
 	
+	// ── Aim state
+	// ─────────────────────────────────────────────────────────────
+	
+	/**
+	 * The rotation AimAssist last aimed with, snapped or smoothed.
+	 *
+	 * <p>
+	 * Server-side aiming never moves the player's own rotation, so the smooth
+	 * step can't read back where it left off from the player. Tracking it here
+	 * - and keeping it up to date on snapped ticks too - means smoothing always
+	 * continues from the last angle that actually went out.
+	 */
+	private float aimYaw;
+	private float aimPitch;
+	
+	/** False until {@link #aimYaw}/{@link #aimPitch} have been seeded. */
+	private boolean aimStateValid;
+	
+	private long lastAimTime;
+	
+	/**
+	 * Forces the smooth aim regardless of distance, so a target switch or a
+	 * fresh target after a kill is caught up to by turning rather than by
+	 * teleporting the angle. Cleared once the aim reaches the target.
+	 */
+	private boolean smoothCatchUp;
+	
+	/** Previous target, for spotting switches and kills. */
+	private Entity lastAimedTarget;
+	
 	private ComboPhase comboPhase = ComboPhase.IDLE;
 	private boolean attackKeyDownLastTick;
 	private boolean forwardKeyForced;
@@ -265,6 +315,17 @@ public final class AimAssistHack extends Hack
 	private volatile boolean musicRunning;
 	private volatile SourceDataLine musicLine;
 	
+	/**
+	 * How fast the smooth aim turns, in degrees per second.
+	 *
+	 * <p>
+	 * Huge on purpose: the point of the smooth path isn't to be slow, it's to
+	 * walk the rotation through the angles in between instead of teleporting
+	 * it. 360000 deg/s is 18000 degrees in a tick, so a single step covers
+	 * anything the aim could need and it reads as instant.
+	 */
+	private static final float SMOOTH_AIM_SPEED = 360000F;
+	
 	private static final double FAR_THRESHOLD_SQ = 3.01 * 3.01;
 	private static final double CLOSE_THRESHOLD_SQ = 0.8 * 0.8;
 	
@@ -277,6 +338,8 @@ public final class AimAssistHack extends Hack
 		addSetting(fov);
 		addSetting(aimAt);
 		addSetting(faceTarget);
+		addSetting(smoothAim);
+		addSetting(smoothAimDistance);
 		addSetting(switchTargetKey);
 		addSetting(checkLOS);
 		addSetting(aimWhileBlocking);
@@ -314,6 +377,7 @@ public final class AimAssistHack extends Hack
 		target = null;
 		switchKeyDownLastTick = false;
 		lastFrameTime = System.nanoTime();
+		resetAimState();
 		comboPhase = ComboPhase.IDLE;
 		attackKeyDownLastTick = false;
 		forwardKeyForced = false;
@@ -337,6 +401,7 @@ public final class AimAssistHack extends Hack
 		EVENTS.remove(UpdateListener.class, this);
 		EVENTS.remove(RenderListener.class, this);
 		target = null;
+		resetAimState();
 		resetCombo();
 		resetDodge();
 		stopMusic();
@@ -382,9 +447,20 @@ public final class AimAssistHack extends Hack
 		
 		if(switchRequested || !isValidTarget(target))
 			target = pickTarget(switchRequested ? target : null);
+			
+		// A different entity here means the target was switched or the old one
+		// died, both of which are caught up to by turning instead of snapping.
+		if(target != lastAimedTarget)
+		{
+			lastAimedTarget = target;
+			smoothCatchUp = target != null;
+		}
 		
 		if(target == null)
 		{
+			// Nothing to continue from next time we acquire a target; the
+			// player is free to look wherever until then.
+			aimStateValid = false;
 			resetCombo();
 			resetDodge();
 			return;
@@ -400,11 +476,11 @@ public final class AimAssistHack extends Hack
 		// sprint toward the target, so those steer client-side instead.
 		Vec3 aimPoint = aimAt.getAimPoint(target);
 		if(spinRemaining > 0F)
+		{
 			WURST.getRotationFaker().faceVectorPacket(aimPoint);
-		else if(autoAttack.isChecked() && autoCombo.isChecked())
-			WURST.getRotationFaker().faceVectorClient(aimPoint);
-		else
-			faceTarget.face(aimPoint);
+			aimStateValid = false;
+		}else
+			applyAim(aimPoint, autoAttack.isChecked() && autoCombo.isChecked());
 		
 		if(!autoAttack.isChecked())
 		{
@@ -448,6 +524,108 @@ public final class AimAssistHack extends Hack
 		else if(MC.player.getAttackStrengthScale(0) >= 1F
 			&& distToTargetSq <= 8.999991)
 			attackTarget();
+	}
+	
+	/**
+	 * Aims at the given point, either by snapping straight to it or by turning
+	 * toward it at {@link #SMOOTH_AIM_SPEED} degrees per second.
+	 *
+	 * <p>
+	 * Snapping is what tracks best in melee range, where the needed angle
+	 * swings wildly from tick to tick. Further out the angle barely moves, so
+	 * the snap buys nothing and a continuous turn is used instead - as it is
+	 * while catching up to a new target, no matter the distance.
+	 *
+	 * @param forceClient
+	 *            ignore §lFace target§r and steer the camera. The
+	 *            auto-combo needs a real camera angle to sprint toward the
+	 *            target with.
+	 */
+	private void applyAim(Vec3 aimPoint, boolean forceClient)
+	{
+		Rotation needed = RotationUtils.getNeededRotations(aimPoint);
+		long now = System.nanoTime();
+		
+		if(!aimStateValid)
+		{
+			aimYaw = MC.player.getYRot();
+			aimPitch = MC.player.getXRot();
+			aimStateValid = true;
+			// One tick back, so the first smooth step after acquiring a target
+			// actually turns instead of burning a tick on dt = 0.
+			lastAimTime = now - 50_000_000L;
+		}
+		
+		boolean smooth = smoothAim.isChecked() && (smoothCatchUp || EntityUtils
+			.distanceToHitboxSq(target) > smoothAimDistance.getValueSq());
+		
+		if(smooth)
+		{
+			// Real elapsed time rather than a flat tick, so the turn keeps the
+			// same degrees-per-second under a laggy or sped-up tick loop. The
+			// cap stops a long freeze from turning into one huge jump.
+			float dt = Math.min((now - lastAimTime) / 1_000_000_000F, 0.15F);
+			float maxChange = SMOOTH_AIM_SPEED * dt;
+			
+			float yawDiff = Mth.wrapDegrees(needed.yaw() - aimYaw);
+			float pitchDiff = Mth.wrapDegrees(needed.pitch() - aimPitch);
+			
+			aimYaw = Mth.wrapDegrees(
+				aimYaw + Mth.clamp(yawDiff, -maxChange, maxChange));
+			aimPitch = Mth.clamp(
+				aimPitch + Mth.clamp(pitchDiff, -maxChange, maxChange), -90F,
+				90F);
+			
+			// Caught up - back to snapping until the next switch or kill.
+			if(Math.abs(yawDiff) <= maxChange
+				&& Math.abs(pitchDiff) <= maxChange)
+				smoothCatchUp = false;
+			
+		}else
+		{
+			aimYaw = needed.yaw();
+			aimPitch = needed.pitch();
+			smoothCatchUp = false;
+		}
+		
+		lastAimTime = now;
+		applyAimRotation(forceClient);
+	}
+	
+	/** Sends {@link #aimYaw}/{@link #aimPitch} the way Face target asks for. */
+	private void applyAimRotation(boolean forceClient)
+	{
+		if(forceClient)
+		{
+			setClientRotation();
+			return;
+		}
+		
+		switch(faceTarget.getSelected())
+		{
+			case OFF ->
+				{
+				}
+			case SERVER -> WURST.getRotationFaker().faceRotationPacket(aimYaw,
+				aimPitch);
+			case CLIENT -> setClientRotation();
+			case SPAM -> new Rotation(aimYaw, aimPitch).sendPlayerLookPacket();
+		}
+	}
+	
+	private void setClientRotation()
+	{
+		MC.player.setYRot(
+			RotationUtils.limitAngleChange(MC.player.getYRot(), aimYaw));
+		MC.player.setXRot(aimPitch);
+	}
+	
+	private void resetAimState()
+	{
+		aimStateValid = false;
+		smoothCatchUp = false;
+		lastAimedTarget = null;
+		lastAimTime = System.nanoTime();
 	}
 	
 	/**

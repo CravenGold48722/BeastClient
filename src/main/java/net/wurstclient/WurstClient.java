@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.wurstclient.altmanager.AltManager;
 import net.wurstclient.altmanager.Encryption;
@@ -51,7 +52,14 @@ public enum WurstClient
 	public static Minecraft MC;
 	public static IMinecraftClient IMC;
 	
-	public static final String VERSION = "7.56.8";
+	/**
+	 * Read out of the mod's own metadata rather than hardcoded, so it always
+	 * matches the version in the jar's file name. build.gradle bumps
+	 * mod_version on every build and processResources stamps it into
+	 * fabric.mod.json, which is where this comes from.
+	 */
+	public static final String VERSION = loadVersion();
+	
 	public static final String MC_VERSION = "26.1.2";
 	
 	private PlausibleAnalytics plausible;
@@ -76,6 +84,26 @@ public enum WurstClient
 	private WurstUpdater updater;
 	private ProblematicResourcePackDetector problematicPackDetector;
 	private Path wurstFolder;
+	
+	/**
+	 * Digs the version out of fabric.mod.json, minus the {@code -MC...} suffix
+	 * the file name carries, so it reads as plain {@code 7.57.1}.
+	 *
+	 * <p>
+	 * Falls back to an unknown marker rather than throwing, since the mod
+	 * container is missing when the JUnit tests load this class outside of a
+	 * running game.
+	 */
+	private static String loadVersion()
+	{
+		return FabricLoader.getInstance().getModContainer("wurst")
+			.map(mod -> mod.getMetadata().getVersion().getFriendlyString())
+			.map(version -> {
+				int mcSuffix = version.indexOf("-MC");
+				return mcSuffix == -1 ? version
+					: version.substring(0, mcSuffix);
+			}).orElse("unknown");
+	}
 	
 	public void initialize()
 	{

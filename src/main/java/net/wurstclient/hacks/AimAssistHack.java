@@ -331,7 +331,7 @@ public final class AimAssistHack extends Hack
 	 * could produce, which is exactly the thing the smooth path exists to
 	 * avoid.
 	 */
-	private static final float SMOOTH_AIM_SPEED = 2000F;
+	private static final float SMOOTH_AIM_SPEED = 1800F;
 	
 	private static final double FAR_THRESHOLD_SQ = 3.01 * 3.01;
 	private static final double CLOSE_THRESHOLD_SQ = 0.8 * 0.8;

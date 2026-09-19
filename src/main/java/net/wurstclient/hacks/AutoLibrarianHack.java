@@ -114,6 +114,7 @@ public final class AutoLibrarianHack extends Hack
 	
 	private boolean placingJobSite;
 	private boolean breakingJobSite;
+	private boolean paused;
 	
 	public AutoLibrarianHack()
 	{
@@ -153,12 +154,25 @@ public final class AutoLibrarianHack extends Hack
 		jobSite = null;
 		placingJobSite = false;
 		breakingJobSite = false;
+		paused = false;
 		experiencedVillagers.clear();
 	}
 	
 	@Override
 	public void onUpdate()
 	{
+		// Do nothing while the ClickGUI, inventory, chat, escape menu, etc. are
+		// open. The trade screen is the only screen this hack works with.
+		if(MC.screen != null && !(MC.screen instanceof MerchantScreen))
+		{
+			if(!paused)
+				pause();
+			
+			return;
+		}
+		
+		paused = false;
+		
 		if(villager == null)
 		{
 			setTargetVillager();
@@ -256,6 +270,24 @@ public final class AutoLibrarianHack extends Hack
 		
 		ChatUtils.message("Done!");
 		setEnabled(false);
+	}
+	
+	/**
+	 * Stops whatever this hack was doing in the world, without forgetting which
+	 * villager and job site it was working on, so that it can pick up where it
+	 * left off once the screen is closed again.
+	 */
+	private void pause()
+	{
+		paused = true;
+		
+		if(breakingJobSite)
+			MC.gameMode.stopDestroyBlock();
+		
+		if(placingJobSite)
+			IKeyMapping.get(MC.options.keyShift).resetPressedState();
+		
+		overlay.resetProgress();
 	}
 	
 	private void breakJobSite()

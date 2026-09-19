@@ -74,9 +74,13 @@
       "Bash(javap -cp minecraft-clientonly-deobf-26.1.2.jar net.minecraft.client.multiplayer.chat.GuiMessage)",
       "Bash(javap -cp minecraft-clientonly-deobf-26.1.2.jar net.minecraft.client.gui.screens.Screen)",
       "Bash(grep -iA2 -B2 \"clickgui\\\\|accent\")",
-      "Bash(perl -0pi -e 's/hovering \\\\? BeastColors\\\\.SELECTED_RED_HOVER\\\\s*\\\\n?\\\\s*:\\\\s*BeastColors\\\\.SELECTED_RED/BeastColors.ICON_BLACK/gs' src/main/java/net/wurstclient/clickgui/ClickGuiIcons.java)"
+      "Bash(perl -0pi -e 's/hovering \\\\? BeastColors\\\\.SELECTED_RED_HOVER\\\\s*\\\\n?\\\\s*:\\\\s*BeastColors\\\\.SELECTED_RED/BeastColors.ICON_BLACK/gs' src/main/java/net/wurstclient/clickgui/ClickGuiIcons.java)",
+      "PowerShell(./gradlew build 2>&1 | Select-Object -Last 30)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ],
-    "defaultMode": "bypassPermissions"
+    "defaultMode": "auto"
   },
   "model": "claude-opus-5"
 }

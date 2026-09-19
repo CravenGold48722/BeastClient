@@ -25,6 +25,7 @@ import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.core.BlockPos;
+import net.minecraft.util.LightCoordsUtil;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
@@ -180,6 +181,71 @@ public enum RenderUtils
 				end.color());
 		
 		vcp.endBatch(layer);
+	}
+	
+	/**
+	 * Returns the point in the world where tracers start, which is 10 blocks
+	 * in front of the camera.
+	 */
+	public static Vec3 getTracerStart()
+	{
+		return getCameraPos().add(getCameraRotation().toLookVec().scale(10));
+	}
+	
+	/**
+	 * Draws the given text at the given position in the world, facing the
+	 * camera. The text is scaled with the distance to the camera, so that it
+	 * keeps the same size on screen no matter how far away it is.
+	 */
+	public static void drawTextInWorld(PoseStack matrices, String text,
+		Vec3 pos, int color, float scale, boolean seeThrough)
+	{
+		drawTextsInWorld(matrices, List.of(new ColoredText(text, pos, color)),
+			scale, seeThrough);
+	}
+	
+	/**
+	 * Same as
+	 * {@link #drawTextInWorld(PoseStack, String, Vec3, int, float, boolean)},
+	 * but draws multiple texts in a single batch.
+	 */
+	public static void drawTextsInWorld(PoseStack matrices,
+		List<ColoredText> texts, float scale, boolean seeThrough)
+	{
+		Font font = WurstClient.MC.font;
+		Camera camera = WurstClient.MC.gameRenderer.getMainCamera();
+		if(font == null || camera == null || texts.isEmpty())
+			return;
+		
+		Vec3 camPos = camera.position();
+		MultiBufferSource.BufferSource vcp = getVCP();
+		Font.DisplayMode mode =
+			seeThrough ? Font.DisplayMode.SEE_THROUGH : Font.DisplayMode.NORMAL;
+		
+		for(ColoredText text : texts)
+		{
+			Vec3 pos = text.pos();
+			
+			// 0.025 is the size that Minecraft uses for nametags, which looks
+			// right at a distance of 10 blocks. Scaling with the distance
+			// keeps the text that size no matter how far away it is.
+			float size = (float)(camPos.distanceTo(pos) * 0.0025 * scale);
+			
+			matrices.pushPose();
+			matrices.translate(pos.x - camPos.x, pos.y - camPos.y,
+				pos.z - camPos.z);
+			matrices.mulPose(camera.rotation());
+			matrices.scale(size, -size, size);
+			
+			font.drawInBatch(text.text(), -font.width(text.text()) / 2F,
+				-font.lineHeight / 2F, text.color(), false,
+				new Matrix4f(matrices.last().pose()), vcp, mode, 0,
+				LightCoordsUtil.FULL_BRIGHT);
+			
+			matrices.popPose();
+		}
+		
+		vcp.endBatch();
 	}
 	
 	public static void drawLine(PoseStack matrices, VertexConsumer buffer,
@@ -1115,5 +1181,8 @@ public enum RenderUtils
 	{}
 	
 	public record ColoredBox(AABB box, int color)
+	{}
+	
+	public record ColoredText(String text, Vec3 pos, int color)
 	{}
 }

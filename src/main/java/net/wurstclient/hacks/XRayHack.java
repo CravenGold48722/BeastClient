@@ -7,8 +7,8 @@
  */
 package net.wurstclient.hacks;
 
-import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -92,7 +92,17 @@ public final class XRayHack extends Hack
 		&& System.getProperty("fabric.client.gametest") == null ? "X-Wurst"
 			: getName();
 	
-	private ArrayList<String> oreNamesCache;
+	/**
+	 * The ore list, copied so that editing the setting can't change what
+	 * the chunk builder sees in the middle of a build.
+	 *
+	 * <p>
+	 * Volatile and immutable because Sodium's chunk build threads read this
+	 * while the render thread writes it in {@link #onEnable()}. It starts
+	 * out empty instead of null: a hack counts as enabled a moment before
+	 * onEnable() runs, and the build threads do get there first.
+	 */
+	private volatile List<String> oreNamesCache = List.of();
 	private final ThreadLocal<BlockPos.MutableBlockPos> mutablePosForExposedCheck =
 		ThreadLocal.withInitial(BlockPos.MutableBlockPos::new);
 	
@@ -116,7 +126,7 @@ public final class XRayHack extends Hack
 	protected void onEnable()
 	{
 		// cache block names in case the setting changes while X-Ray is enabled
-		oreNamesCache = new ArrayList<>(ores.getBlockNames());
+		oreNamesCache = List.copyOf(ores.getBlockNames());
 		
 		// add event listeners
 		EVENTS.add(UpdateListener.class, this);
@@ -187,8 +197,11 @@ public final class XRayHack extends Hack
 	
 	public boolean isVisible(Block block, BlockPos pos)
 	{
+		// read the field once; onEnable() can swap it at any time
+		List<String> oreNames = oreNamesCache;
+		
 		String name = BlockUtils.getName(block);
-		int index = Collections.binarySearch(oreNamesCache, name);
+		int index = Collections.binarySearch(oreNames, name);
 		boolean visible = index >= 0;
 		
 		if(visible && onlyExposed.isChecked() && pos != null)

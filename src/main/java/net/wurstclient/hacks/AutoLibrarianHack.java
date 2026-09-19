@@ -10,6 +10,7 @@ package net.wurstclient.hacks;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -108,6 +109,7 @@ public final class AutoLibrarianHack extends Hack
 	
 	private final OverlayRenderer overlay = new OverlayRenderer();
 	private final HashSet<Villager> experiencedVillagers = new HashSet<>();
+	private final Random random = new Random();
 	
 	private Villager villager;
 	private BlockPos jobSite;
@@ -115,6 +117,7 @@ public final class AutoLibrarianHack extends Hack
 	private boolean placingJobSite;
 	private boolean breakingJobSite;
 	private boolean paused;
+	private long waitUntilMs;
 	
 	public AutoLibrarianHack()
 	{
@@ -155,6 +158,7 @@ public final class AutoLibrarianHack extends Hack
 		placingJobSite = false;
 		breakingJobSite = false;
 		paused = false;
+		waitUntilMs = 0;
 		experiencedVillagers.clear();
 	}
 	
@@ -188,6 +192,11 @@ public final class AutoLibrarianHack extends Hack
 		if(placingJobSite && breakingJobSite)
 			throw new IllegalStateException(
 				"Trying to place and break job site at the same time. Something is wrong.");
+			
+		// Wait out the delay that the last step scheduled, instead of starting
+		// the next one on the very next tick.
+		if(System.currentTimeMillis() < waitUntilMs)
+			return;
 		
 		if(placingJobSite)
 		{
@@ -232,6 +241,7 @@ public final class AutoLibrarianHack extends Hack
 			ChatUtils.message("Villager is not selling an enchanted book.");
 			closeTradeScreen();
 			breakingJobSite = true;
+			startStepDelay();
 			System.out.println("Breaking job site...");
 			return;
 		}
@@ -244,6 +254,7 @@ public final class AutoLibrarianHack extends Hack
 		if(!wantedBooks.isWanted(bookOffer))
 		{
 			breakingJobSite = true;
+			startStepDelay();
 			System.out.println("Breaking job site...");
 			closeTradeScreen();
 			return;
@@ -303,6 +314,7 @@ public final class AutoLibrarianHack extends Hack
 			System.out.println("Job site has been broken. Replacing...");
 			breakingJobSite = false;
 			placingJobSite = true;
+			startStepDelay();
 			return;
 		}
 		
@@ -332,6 +344,7 @@ public final class AutoLibrarianHack extends Hack
 			{
 				System.out.println("Job site has been placed.");
 				placingJobSite = false;
+				startPostPlacementDelay();
 				
 			}else
 			{
@@ -339,6 +352,7 @@ public final class AutoLibrarianHack extends Hack
 					.println("Found wrong block at job site. Breaking...");
 				breakingJobSite = true;
 				placingJobSite = false;
+				startStepDelay();
 			}
 			
 			return;
@@ -348,6 +362,7 @@ public final class AutoLibrarianHack extends Hack
 		if(!MC.player.isHolding(Items.LECTERN))
 		{
 			InventoryUtils.selectItem(Items.LECTERN, 36);
+			startStepDelay();
 			return;
 		}
 		
@@ -383,6 +398,30 @@ public final class AutoLibrarianHack extends Hack
 		
 		// reset sneak
 		sneakKey.resetPressedState();
+	}
+	
+	/**
+	 * Makes this hack wait ~1.5 seconds, give or take 0.2-0.5 seconds, before
+	 * it talks to the villager again after placing its lectern.
+	 */
+	private void startPostPlacementDelay()
+	{
+		long jitter = 200 + random.nextInt(301);
+		if(random.nextBoolean())
+			jitter = -jitter;
+		
+		waitUntilMs = System.currentTimeMillis() + 1500 + jitter;
+	}
+	
+	/**
+	 * Waits 0.1-0.2 seconds, in steps of 0.01 seconds, between the steps of
+	 * breaking and placing the lectern. Doesn't slow down the actual mining,
+	 * which keeps running every tick once it has started.
+	 */
+	private void startStepDelay()
+	{
+		waitUntilMs =
+			System.currentTimeMillis() + 100 + random.nextInt(11) * 10;
 	}
 	
 	private void openTradeScreen()

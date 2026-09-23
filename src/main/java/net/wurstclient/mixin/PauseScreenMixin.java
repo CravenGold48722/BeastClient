@@ -52,7 +52,13 @@ public abstract class PauseScreenMixin extends Screen
 		float partialTicks, CallbackInfo ci)
 	{
 		WurstClient wurst = WurstClient.INSTANCE;
-		if(!wurst.isEnabled())
+		if(!wurst.isEnabled() || wurstOptionsButton == null)
+			return;
+		
+		// RecordingMode can kick in while the menu is already open
+		wurstOptionsButton.visible =
+			wurst.getOtfs().wurstOptionsOtf.isVisibleInGameMenu();
+		if(!wurstOptionsButton.visible)
 			return;
 		
 		wurst.getOtfs().wurstOptionsOtf.drawWurstLogoOnButton(context,

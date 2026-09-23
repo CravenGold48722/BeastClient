@@ -12,6 +12,7 @@ import net.wurstclient.WurstClient;
 import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.clickgui.screens.ClickGuiScreen;
 import net.wurstclient.events.GUIRenderListener;
+import net.wurstclient.other_features.RecordingModeOtf;
 
 public final class IngameHUD implements GUIRenderListener
 {
@@ -29,15 +30,23 @@ public final class IngameHUD implements GUIRenderListener
 			tabGui = new TabGui();
 		
 		ClickGui clickGui = WurstClient.INSTANCE.getGui();
+		RecordingModeOtf recordingMode =
+			WurstClient.INSTANCE.getOtfs().recordingModeOtf;
 		
 		clickGui.updateColors();
 		
-		wurstLogo.render(context);
-		hackList.render(context, partialTicks);
-		tabGui.render(context, partialTicks);
+		if(!recordingMode.shouldHideLogo())
+			wurstLogo.render(context);
+		
+		if(!recordingMode.shouldHideHackList())
+			hackList.render(context, partialTicks);
+		
+		if(!recordingMode.shouldHideTabGui())
+			tabGui.render(context, partialTicks);
 		
 		// pinned windows
-		if(!(WurstClient.MC.screen instanceof ClickGuiScreen))
+		if(!(WurstClient.MC.screen instanceof ClickGuiScreen)
+			&& !recordingMode.shouldHidePinnedWindows())
 			clickGui.renderPinnedWindows(context, partialTicks);
 	}
 	

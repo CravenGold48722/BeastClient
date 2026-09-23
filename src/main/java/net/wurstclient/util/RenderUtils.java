@@ -120,6 +120,16 @@ public enum RenderUtils
 			| (int)(Mth.clamp(rgb[2], 0, 1) * 255);
 	}
 	
+	/**
+	 * Returns true while RecordingMode is hiding everything that hacks draw
+	 * into the world. Checked in the methods that actually put vertices into
+	 * a buffer, so that no drawing method can slip past it.
+	 */
+	private static boolean isWorldRenderingHidden()
+	{
+		return WurstClient.INSTANCE.getOtfs().recordingModeOtf.shouldHideEsps();
+	}
+	
 	public static void drawLine(PoseStack matrices, Vec3 start, Vec3 end,
 		int color, boolean depthTest)
 	{
@@ -212,6 +222,9 @@ public enum RenderUtils
 	public static void drawTextsInWorld(PoseStack matrices,
 		List<ColoredText> texts, float scale, boolean seeThrough)
 	{
+		if(isWorldRenderingHidden())
+			return;
+		
 		Font font = WurstClient.MC.font;
 		Camera camera = WurstClient.MC.gameRenderer.getMainCamera();
 		if(font == null || camera == null || texts.isEmpty())
@@ -264,6 +277,9 @@ public enum RenderUtils
 	public static void drawLine(PoseStack.Pose entry, VertexConsumer buffer,
 		float x1, float y1, float z1, float x2, float y2, float z2, int color)
 	{
+		if(isWorldRenderingHidden())
+			return;
+		
 		Vector3f normal = new Vector3f(x2, y2, z2).sub(x1, y1, z1).normalize();
 		buffer.addVertex(entry, x1, y1, z1).setColor(color)
 			.setNormal(entry, normal).setLineWidth(2);
@@ -288,6 +304,9 @@ public enum RenderUtils
 	public static void drawLine(VertexConsumer buffer, float x1, float y1,
 		float z1, float x2, float y2, float z2, int color)
 	{
+		if(isWorldRenderingHidden())
+			return;
+		
 		Vector3f n = new Vector3f(x2, y2, z2).sub(x1, y1, z1).normalize();
 		buffer.addVertex(x1, y1, z1).setColor(color).setNormal(n.x, n.y, n.z)
 			.setLineWidth(2);
@@ -312,7 +331,7 @@ public enum RenderUtils
 	public static void drawCurvedLine(PoseStack matrices, VertexConsumer buffer,
 		List<Vec3> points, int color)
 	{
-		if(points.size() < 2)
+		if(points.size() < 2 || isWorldRenderingHidden())
 			return;
 		
 		PoseStack.Pose entry = matrices.last();
@@ -379,6 +398,9 @@ public enum RenderUtils
 	public static void drawSolidBox(PoseStack matrices, VertexConsumer buffer,
 		AABB box, int color)
 	{
+		if(isWorldRenderingHidden())
+			return;
+		
 		PoseStack.Pose entry = matrices.last();
 		float x1 = (float)box.minX;
 		float y1 = (float)box.minY;
@@ -469,6 +491,9 @@ public enum RenderUtils
 	public static void drawOutlinedBox(PoseStack matrices,
 		VertexConsumer buffer, AABB box, int color)
 	{
+		if(isWorldRenderingHidden())
+			return;
+		
 		PoseStack.Pose entry = matrices.last();
 		float x1 = (float)box.minX;
 		float y1 = (float)box.minY;
@@ -582,6 +607,9 @@ public enum RenderUtils
 	public static void drawCrossBox(PoseStack matrices, VertexConsumer buffer,
 		AABB box, int color)
 	{
+		if(isWorldRenderingHidden())
+			return;
+		
 		PoseStack.Pose entry = matrices.last();
 		float x1 = (float)box.minX;
 		float y1 = (float)box.minY;

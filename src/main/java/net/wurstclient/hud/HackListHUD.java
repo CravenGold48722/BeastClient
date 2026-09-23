@@ -40,8 +40,13 @@ public final class HackListHUD implements UpdateListener
 		if(otf.getMode() == Mode.HIDDEN)
 			return;
 		
-		if(otf.getPosition() == Position.LEFT
-			&& WurstClient.INSTANCE.getOtfs().wurstLogoOtf.isVisible())
+		// don't leave a gap where the logo would be if RecordingMode hid it
+		boolean logoShown =
+			WurstClient.INSTANCE.getOtfs().wurstLogoOtf.isVisible()
+				&& !WurstClient.INSTANCE.getOtfs().recordingModeOtf
+					.shouldHideLogo();
+		
+		if(otf.getPosition() == Position.LEFT && logoShown)
 			posY = 40;
 		else
 			posY = 2;

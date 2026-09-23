@@ -39,14 +39,18 @@ public final class WurstOptionsOtf extends OtherFeature
 	
 	public boolean isVisibleInGameMenu()
 	{
-		return WURST.isEnabled()
-			&& location.getSelected() == Location.GAME_MENU;
+		return isVisible() && location.getSelected() == Location.GAME_MENU;
 	}
 	
 	public boolean isVisibleInStatistics()
 	{
+		return isVisible() && location.getSelected() == Location.STATISTICS;
+	}
+	
+	private boolean isVisible()
+	{
 		return WURST.isEnabled()
-			&& location.getSelected() == Location.STATISTICS;
+			&& !WURST.getOtfs().recordingModeOtf.shouldHideWurstOptions();
 	}
 	
 	public Button.Builder buttonBuilder(OnPress onPress)

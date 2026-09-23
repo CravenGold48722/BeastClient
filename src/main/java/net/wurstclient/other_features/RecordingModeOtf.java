@@ -48,7 +48,8 @@ public final class RecordingModeOtf extends OtherFeature
 	
 	private final CheckboxSetting hideEsps = new CheckboxSetting("Hide ESPs",
 		"Hides everything that hacks draw into the world: ESP boxes, tracers,"
-			+ " lines, path nodes and in-world text.\n"
+			+ " lines, path nodes, in-world text and the health numbers that"
+			+ " HealthTags adds to nametags.\n"
 			+ "The hacks themselves keep running, they just stop drawing.",
 		true);
 	

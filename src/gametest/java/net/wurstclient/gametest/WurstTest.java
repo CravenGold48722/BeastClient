@@ -86,6 +86,12 @@ public class WurstTest implements FabricClientGameTest
 		// Disable chunk fade
 		context.runOnClient(mc -> mc.options.chunkSectionFadeInTime().set(0.0));
 		
+		// Make sure RecordingMode isn't hiding the HUD. Without this, every
+		// screenshot comparison would fail on a machine that happens to have
+		// OBS or a similar program running.
+		runWurstCommand(context, "setmode RecordingMode mode off");
+		context.runOnClient(mc -> mc.gui.getChat().clearMessages(true));
+		
 		runCommand(server, "time set noon");
 		runCommand(server, "tp 0 -57 0");
 		runCommand(server, "fill ~ ~-3 ~ ~ ~-1 ~ smooth_stone");
@@ -117,6 +123,7 @@ public class WurstTest implements FabricClientGameTest
 		runWurstCommand(context, "setcheckbox HackList animations off");
 		
 		new InGameMenuTest(context, spContext).run();
+		new RecordingModeTest(context, spContext).run();
 		
 		// TODO: Open ClickGUI and Navigator
 		

@@ -84,6 +84,10 @@ public abstract class EntityRendererMixin<T extends Entity, S extends EntityRend
 		if(!healthTags.isEnabled())
 			return;
 		
+		// health numbers are part of what RecordingMode hides
+		if(WurstClient.INSTANCE.getOtfs().recordingModeOtf.shouldHideEsps())
+			return;
+		
 		state.nameTag = healthTags.addHealth(le, state.nameTag.copy());
 	}
 }

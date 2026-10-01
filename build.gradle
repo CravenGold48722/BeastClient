@@ -100,12 +100,29 @@ fabricApi.configureTests {
 	username = "Wurst-Bot"
 }
 
+// ── Screenshot templates for the client gametests ───────────────────────
+// Upstream compares its screenshots against images on Imgur that show
+// Wurst's branding, which nothing in this fork matches. Beast keeps its own
+// templates in the repo instead, and re-records them on demand:
+//
+//   ./gradlew runClientGameTest -PupdateScreenshots
+//
+// That run never fails a comparison; it overwrites every template with what
+// the client actually drew, keeping the old alpha masks. Check `git diff` on
+// the templates afterwards, because it happily records a bug as the new
+// expectation.
+def screenshotTemplateDir = file("src/gametest/screenshot_templates")
+def updateScreenshots = project.hasProperty("updateScreenshots")
+
 loom {
 	accessWidenerPath = file("src/main/resources/wurst.accesswidener")
-	
+
 	runs {
 		clientGameTest {
 			vmArgs.add("-Dfabric.client.gametest.disableNetworkSynchronizer=true")
+			vmArgs.add("-Dwurst.test.templateDir=$screenshotTemplateDir")
+			if (updateScreenshots)
+				vmArgs.add("-Dwurst.test.updateTemplates=true")
 		}
 		
 		clientWithMods {
@@ -119,6 +136,9 @@ loom {
 			vmArgs.add("-Dfabric.client.gametest")
 			vmArgs.add("-Dfabric.client.gametest.disableNetworkSynchronizer=true")
 			vmArgs.add("-Dwurst.test.withMods=true")
+			vmArgs.add("-Dwurst.test.templateDir=$screenshotTemplateDir")
+			if (updateScreenshots)
+				vmArgs.add("-Dwurst.test.updateTemplates=true")
 			programArgs.add("--username=Wurst-Bot")
 		}
 	}

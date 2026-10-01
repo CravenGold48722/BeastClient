@@ -17,10 +17,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.awt.image.BufferedImage;
 import java.util.Base64;
+import java.util.Optional;
 import java.util.UUID;
 
-import org.joml.Vector2i;
+import javax.imageio.ImageIO;
+
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.system.MemoryUtil;
 
@@ -43,6 +46,29 @@ public enum WurstClientTestHelper
 	;
 	
 	/**
+	 * Folder holding Beast's own screenshot templates, set by build.gradle.
+	 * The Imgur templates that upstream Wurst uses show Wurst's branding and
+	 * color scheme, so nothing in this fork matches them. A template stored
+	 * here wins over the Imgur URL; the URL is only used for templates that
+	 * haven't been re-recorded yet.
+	 */
+	private static final Path TEMPLATE_DIR =
+		Optional.ofNullable(System.getProperty("wurst.test.templateDir"))
+			.map(Path::of).orElse(null);
+	
+	/**
+	 * Set by running the tests with {@code -PupdateScreenshots}. Instead of
+	 * failing, every comparison then writes what it actually saw back to
+	 * {@link #TEMPLATE_DIR}, keeping the old template's alpha mask so the
+	 * ignored regions stay ignored.
+	 */
+	private static final boolean UPDATE_TEMPLATES =
+		System.getProperty("wurst.test.updateTemplates") != null;
+	
+	/** Templates that only apply when the tests run with Sodium & co. */
+	private static final String MODS_SUBDIR = "with_mods";
+	
+	/**
 	 * Takes a screenshot, matches it against the template image, and throws if
 	 * it doesn't match. This method allows the template image to have
 	 * an alpha channel and ignores any pixels that are >50% transparent. This
@@ -54,7 +80,12 @@ public enum WurstClientTestHelper
 	{
 		ThreadingImpl.checkOnGametestThread("assertScreenshotEquals");
 		
-		NativeImage nativeTemplateImage = downloadImage(templateUrl);
+		Path localTemplate = findTemplate(fileName);
+		String templateName = localTemplate != null
+			? localTemplate.getFileName().toString() : templateUrl;
+		
+		NativeImage nativeTemplateImage = localTemplate != null
+			? loadImageFile(localTemplate) : downloadImage(templateUrl);
 		boolean[][] mask = alphaChannelToMask(nativeTemplateImage);
 		RawImage<int[]> rawTemplateImage =
 			RawImageImpl.fromColorNativeImage(nativeTemplateImage);
@@ -63,25 +94,47 @@ public enum WurstClientTestHelper
 		Path screenshotPath = context.takeScreenshot(fileName);
 		RawImage<int[]> rawScreenshotImage =
 			RawImageImpl.fromColorNativeImage(loadImageFile(screenshotPath));
-		RawImage<int[]> maskedScreenshotImage =
-			applyMask(rawScreenshotImage, mask);
 		
-		if(maskedScreenshotImage.width() != maskedTemplateImage.width()
-			|| maskedScreenshotImage.height() != maskedTemplateImage.height())
+		// The mask is the template's size, so a screenshot of a different size
+		// can't even be compared against it.
+		boolean sizeMatches =
+			rawScreenshotImage.width() == maskedTemplateImage.width()
+				&& rawScreenshotImage.height() == maskedTemplateImage.height();
+		
+		boolean matches = false;
+		if(sizeMatches)
+		{
+			RawImage<int[]> maskedScreenshotImage =
+				applyMask(rawScreenshotImage, mask);
+			
+			TestScreenshotComparisonAlgorithm algo =
+				TestScreenshotComparisonAlgorithm.meanSquaredDifference(3e-4F);
+			
+			matches = algo.findColor(maskedScreenshotImage,
+				maskedTemplateImage) != null;
+		}
+		
+		// Only rewrite templates that actually changed, so that re-recording
+		// doesn't churn every PNG in the repo.
+		if(UPDATE_TEMPLATES && (!matches || localTemplate == null))
+		{
+			saveTemplate(fileName, screenshotPath, sizeMatches ? mask : null);
+			return;
+		}
+		
+		if(matches)
+			return;
+		
+		if(!sizeMatches)
 			throw new AssertionError(
 				"Screenshot and template dimensions do not match");
 		
-		TestScreenshotComparisonAlgorithm algo =
-			TestScreenshotComparisonAlgorithm.meanSquaredDifference(3e-4F);
-		
-		Vector2i result =
-			algo.findColor(maskedScreenshotImage, maskedTemplateImage);
-		if(result != null)
-			return;
-		
 		ghSummary("### Screenshot " + fileName + " does not match template");
 		ghSummary("Expected:");
-		ghSummary("![" + fileName + "_template](" + templateUrl + ")");
+		if(localTemplate == null)
+			ghSummary("![" + fileName + "_template](" + templateUrl + ")");
+		else
+			ghSummary("`" + localTemplate + "`");
 		ghSummary("Actual:");
 		String url = tryUploadToImgur(screenshotPath);
 		if(url != null)
@@ -91,7 +144,75 @@ public enum WurstClientTestHelper
 				+ ".png to Imgur. Check the Test Screenshots.zip artifact.");
 		
 		throw new AssertionError("Screenshot '" + fileName
-			+ "' does not match template '" + templateUrl + "'");
+			+ "' does not match template '" + templateName
+			+ "'. If the UI changed on purpose, re-record the templates with"
+			+ " ./gradlew runClientGameTest -PupdateScreenshots");
+	}
+	
+	/**
+	 * Returns the local template for the given screenshot, or null if there
+	 * isn't one. Mod compatibility runs get their own folder, but fall back to
+	 * the normal templates for everything that Sodium & co. don't change.
+	 */
+	private static Path findTemplate(String fileName)
+	{
+		if(TEMPLATE_DIR == null)
+			return null;
+		
+		if(WurstTest.IS_MOD_COMPAT_TEST)
+		{
+			Path withMods =
+				TEMPLATE_DIR.resolve(MODS_SUBDIR).resolve(fileName + ".png");
+			if(Files.exists(withMods))
+				return withMods;
+		}
+		
+		Path template = TEMPLATE_DIR.resolve(fileName + ".png");
+		return Files.exists(template) ? template : null;
+	}
+	
+	/**
+	 * Writes the screenshot back out as the new template, with the old
+	 * template's mask baked into the alpha channel. A null mask records the
+	 * whole screenshot, with nothing ignored.
+	 */
+	private static void saveTemplate(String fileName, Path screenshotPath,
+		boolean[][] mask)
+	{
+		Path folder = WurstTest.IS_MOD_COMPAT_TEST
+			? TEMPLATE_DIR.resolve(MODS_SUBDIR) : TEMPLATE_DIR;
+		Path templatePath = folder.resolve(fileName + ".png");
+		
+		try
+		{
+			BufferedImage screenshot = ImageIO.read(screenshotPath.toFile());
+			int width = screenshot.getWidth();
+			int height = screenshot.getHeight();
+			
+			// A mask from a differently sized template can't be reused, so
+			// such a template is re-recorded without any ignored regions.
+			boolean maskFits = mask != null && mask.length == width
+				&& mask[0].length == height;
+			
+			BufferedImage template =
+				new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+			for(int y = 0; y < height; y++)
+				for(int x = 0; x < width; x++)
+				{
+					int alpha = !maskFits || mask[x][y] ? 0xFF000000 : 0;
+					template.setRGB(x, y,
+						screenshot.getRGB(x, y) & 0xFFFFFF | alpha);
+				}
+			
+			Files.createDirectories(folder);
+			ImageIO.write(template, "png", templatePath.toFile());
+			System.out.println("Updated screenshot template " + templatePath);
+			
+		}catch(IOException e)
+		{
+			throw new RuntimeException(
+				"Couldn't write screenshot template " + templatePath, e);
+		}
 	}
 	
 	private static boolean[][] alphaChannelToMask(NativeImage template)

@@ -18,22 +18,34 @@ import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
 import net.wurstclient.util.BlockUtils;
+import net.wurstclient.util.InteractionSimulator;
 import net.wurstclient.util.RotationUtils;
+import net.wurstclient.util.text.WText;
 
 @SearchTags({"scaffold walk", "BridgeWalk", "bridge walk", "AutoBridge",
 	"auto bridge", "tower"})
 public final class ScaffoldWalkHack extends Hack implements UpdateListener
 {
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withPacketSpam(
+			WText
+				.literal("How ScaffoldWalk faces the block it places against."),
+			FaceTarget.CLIENT);
+	
 	public ScaffoldWalkHack()
 	{
 		super("ScaffoldWalk");
 		setCategory(Category.BLOCKS);
+		addSetting(faceTarget);
 	}
 	
 	@Override
@@ -152,11 +164,11 @@ public final class ScaffoldWalkHack extends Hack implements UpdateListener
 			if(eyesPos.distanceToSqr(hitVec) > 18.0625)
 				continue;
 			
-			// place block
-			RotationUtils.getNeededRotations(hitVec).sendPlayerLookPacket();
-			IMC.getInteractionManager().rightClickBlock(neighbor, side2,
-				hitVec);
-			MC.player.swing(InteractionHand.MAIN_HAND);
+			// face and place block, swinging only if a real click would
+			faceTarget.face(hitVec);
+			InteractionSimulator.rightClickBlock(
+				new BlockHitResult(hitVec, side2, neighbor, false),
+				InteractionHand.MAIN_HAND);
 			MC.rightClickDelay = 4;
 			
 			return true;

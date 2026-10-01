@@ -16,15 +16,16 @@ import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
-import net.wurstclient.settings.SwingHandSetting.SwingHand;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.ChatUtils;
+import net.wurstclient.util.InteractionSimulator;
 import net.wurstclient.util.RotationUtils;
 
 @SearchTags({"instant bunker"})
@@ -182,12 +183,10 @@ public final class InstantBunkerHack extends Hack implements UpdateListener
 		// if(IMC.getItemUseCooldown() > 0)
 		// return;
 		
-		// place block
-		IMC.getInteractionManager().rightClickBlock(pos.relative(side),
-			side.getOpposite(), hitVec);
-		
-		// swing arm
-		SwingHand.SERVER.swing(InteractionHand.MAIN_HAND);
+		// place block, swinging only if a real click would
+		InteractionSimulator.rightClickBlock(new BlockHitResult(hitVec,
+			side.getOpposite(), pos.relative(side), false),
+			InteractionHand.MAIN_HAND);
 		
 		// reset timer
 		MC.rightClickDelay = 4;

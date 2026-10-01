@@ -62,10 +62,10 @@ public final class BuildRandomHack extends Hack
 			false);
 	
 	private final FaceTargetSetting faceTarget =
-		FaceTargetSetting.withoutPacketSpam(this, FaceTarget.SERVER);
+		FaceTargetSetting.withoutPacketSpam(this, FaceTarget.CLIENT);
 	
 	private final SwingHandSetting swingHand =
-		new SwingHandSetting(this, SwingHand.SERVER);
+		new SwingHandSetting(this, SwingHand.CLIENT);
 	
 	private final CheckboxSetting fastPlace =
 		new CheckboxSetting("Always FastPlace",

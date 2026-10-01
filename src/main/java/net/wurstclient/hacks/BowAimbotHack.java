@@ -62,9 +62,9 @@ public final class BowAimbotHack extends Hack
 		"Aims the bow on the server only, inside the outgoing movement packet"
 			+ " (the way LiquidBounce works), so your arrows fly at the target"
 			+ " without turning your camera.\n\n"
-			+ "Turn this off to rotate your view toward the target like the"
-			+ " old behavior.",
-		true);
+			+ "Off by default: BowAimbot then actually turns your view toward"
+			+ " the target, so the server sees the same aim you do.",
+		false);
 	
 	private final EntityFilterList entityFilters =
 		EntityFilterList.genericCombat();

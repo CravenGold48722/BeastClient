@@ -65,7 +65,7 @@ public final class CrystalAuraHack extends Hack implements UpdateListener
 		false);
 	
 	private final FaceTargetSetting faceTarget =
-		FaceTargetSetting.withPacketSpam(this, FaceTarget.OFF);
+		FaceTargetSetting.withPacketSpam(this, FaceTarget.CLIENT);
 	
 	private final SwingHandSetting swingHand =
 		new SwingHandSetting(this, SwingHand.CLIENT);
@@ -154,6 +154,11 @@ public final class CrystalAuraHack extends Hack implements UpdateListener
 					// TODO optional speed limit(?)
 					break;
 				}
+			
+			// only one rotation per tick unless it is spammed or off
+			if(!newCrystals.isEmpty()
+				&& !faceTarget.canFaceMultipleTargetsPerTick())
+				break;
 		}
 		
 		if(shouldSwing)
@@ -168,6 +173,10 @@ public final class CrystalAuraHack extends Hack implements UpdateListener
 		{
 			faceTarget.face(e.getBoundingBox().getCenter());
 			MC.gameMode.attack(MC.player, e);
+			
+			// only one rotation per tick unless it is spammed or off
+			if(!faceTarget.canFaceMultipleTargetsPerTick())
+				break;
 		}
 		
 		if(!crystals.isEmpty())

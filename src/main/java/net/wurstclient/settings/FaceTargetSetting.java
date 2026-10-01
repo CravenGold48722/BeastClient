@@ -12,6 +12,7 @@ import java.util.function.Consumer;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.WurstClient;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
 import net.wurstclient.util.text.WText;
 
@@ -70,6 +71,26 @@ public final class FaceTargetSetting
 		getSelected().face(v);
 	}
 	
+	/**
+	 * Faces an explicit rotation instead of a point, e.g. a bow's firing
+	 * solution or a fixed pitch.
+	 */
+	public void face(float yaw, float pitch)
+	{
+		getSelected().face(yaw, pitch);
+	}
+	
+	/**
+	 * Only one rotation reaches the server per tick. With Server-side or
+	 * Client-side, a hack that wants every action backed by a matching
+	 * rotation has to act on one target per tick.
+	 */
+	public boolean canFaceMultipleTargetsPerTick()
+	{
+		FaceTarget selected = getSelected();
+		return selected == FaceTarget.OFF || selected == FaceTarget.SPAM;
+	}
+	
 	private static WText buildDescriptionSuffix(boolean includePacketSpam)
 	{
 		WText text = WText.literal("\n\n");
@@ -86,16 +107,18 @@ public final class FaceTargetSetting
 	
 	public enum FaceTarget
 	{
-		OFF("Off", v -> {}),
+		OFF("Off", v -> {}, r -> {}),
 		
-		SERVER("Server-side",
-			v -> WURST.getRotationFaker().faceVectorPacket(v)),
+		SERVER("Server-side", v -> WURST.getRotationFaker().faceVectorPacket(v),
+			r -> WURST.getRotationFaker().faceRotationPacket(r.yaw(),
+				r.pitch())),
 		
-		CLIENT("Client-side",
-			v -> WURST.getRotationFaker().faceVectorClient(v)),
+		CLIENT("Client-side", v -> WURST.getRotationFaker().faceVectorClient(v),
+			Rotation::applyToClientPlayer),
 		
 		SPAM("Packet spam",
-			v -> RotationUtils.getNeededRotations(v).sendPlayerLookPacket());
+			v -> RotationUtils.getNeededRotations(v).sendPlayerLookPacket(),
+			Rotation::sendPlayerLookPacket);
 		
 		private static final String TRANSLATION_KEY_PREFIX =
 			"description.wurst.setting.generic.face_target.";
@@ -103,18 +126,26 @@ public final class FaceTargetSetting
 		private final String name;
 		private final WText description;
 		private final Consumer<Vec3> face;
+		private final Consumer<Rotation> faceRotation;
 		
-		private FaceTarget(String name, Consumer<Vec3> face)
+		private FaceTarget(String name, Consumer<Vec3> face,
+			Consumer<Rotation> faceRotation)
 		{
 			this.name = name;
 			description =
 				WText.translated(TRANSLATION_KEY_PREFIX + name().toLowerCase());
 			this.face = face;
+			this.faceRotation = faceRotation;
 		}
 		
 		public void face(Vec3 v)
 		{
 			face.accept(v);
+		}
+		
+		public void face(float yaw, float pitch)
+		{
+			faceRotation.accept(new Rotation(yaw, pitch));
 		}
 		
 		@Override

@@ -31,6 +31,8 @@ import net.wurstclient.events.HandleInputListener;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
@@ -38,6 +40,7 @@ import net.wurstclient.settings.filters.FilterBabiesSetting;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.RotationUtils;
+import net.wurstclient.util.text.WText;
 
 @SearchTags({"feed aura", "BreedAura", "breed aura", "AutoBreeder",
 	"auto breeder"})
@@ -64,6 +67,11 @@ public final class FeedAuraHack extends Hack
 			+ "which causes these animals to consume items indefinitely.",
 		false);
 	
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withoutPacketSpam(
+			WText.literal("How FeedAura faces the animal it feeds."),
+			FaceTarget.CLIENT);
+	
 	private final Random random = new Random();
 	private Animal target;
 	private Animal renderTarget;
@@ -76,6 +84,7 @@ public final class FeedAuraHack extends Hack
 		addSetting(filterBabies);
 		addSetting(filterUntamed);
 		addSetting(filterHorses);
+		addSetting(faceTarget);
 	}
 	
 	@Override
@@ -137,8 +146,7 @@ public final class FeedAuraHack extends Hack
 		if(target == null)
 			return;
 		
-		WURST.getRotationFaker()
-			.faceVectorPacket(target.getBoundingBox().getCenter());
+		faceTarget.face(target.getBoundingBox().getCenter());
 	}
 	
 	@Override

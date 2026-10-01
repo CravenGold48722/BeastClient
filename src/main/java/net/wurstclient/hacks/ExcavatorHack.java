@@ -51,7 +51,7 @@ public final class ExcavatorHack extends Hack
 		new SliderSetting("Range", 5, 2, 6, 0.05, ValueDisplay.DECIMAL);
 	
 	private final EnumSetting<Mode> mode =
-		new EnumSetting<>("Mode", Mode.values(), Mode.FAST);
+		new EnumSetting<>("Mode", Mode.values(), Mode.LEGIT);
 	
 	private final OverlayRenderer overlay = new OverlayRenderer();
 	

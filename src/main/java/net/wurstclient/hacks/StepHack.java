@@ -22,9 +22,11 @@ import net.wurstclient.util.BlockUtils;
 public final class StepHack extends Hack implements UpdateListener
 {
 	private final EnumSetting<Mode> mode = new EnumSetting<>("Mode",
-		"\u00a7lSimple\u00a7r mode can step up multiple blocks (enables Height slider).\n"
-			+ "\u00a7lLegit\u00a7r mode can bypass NoCheat+.",
-		Mode.values(), Mode.LEGIT);
+		"\u00a7lJump\u00a7r mode really jumps up the block, like auto-jump."
+			+ " Nothing is faked.\n"
+			+ "\u00a7lSimple\u00a7r mode can step up multiple blocks (enables Height slider).\n"
+			+ "\u00a7lLegit\u00a7r mode sends fake jump positions and can bypass NoCheat+.",
+		Mode.values(), Mode.JUMP);
 	
 	private final SliderSetting height =
 		new SliderSetting("Height", "Only works in \u00a7lSimple\u00a7r mode.",
@@ -82,6 +84,13 @@ public final class StepHack extends Hack implements UpdateListener
 		if(stepHeight < 0 || stepHeight > 1)
 			return;
 		
+		// a real jump: the server sees the same arc it would from a player
+		if(mode.getSelected() == Mode.JUMP)
+		{
+			player.jumpFromGround();
+			return;
+		}
+		
 		ClientPacketListener netHandler = player.connection;
 		
 		netHandler.send(new ServerboundMovePlayerPacket.Pos(player.getX(),
@@ -110,6 +119,7 @@ public final class StepHack extends Hack implements UpdateListener
 	
 	private enum Mode
 	{
+		JUMP("Jump"),
 		SIMPLE("Simple"),
 		LEGIT("Legit");
 		

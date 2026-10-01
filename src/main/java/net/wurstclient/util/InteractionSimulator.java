@@ -108,6 +108,18 @@ public enum InteractionSimulator
 	}
 	
 	/**
+	 * Right-clicks into the air with the item in the given hand, swinging and
+	 * resetting the equip animation only when the game would.
+	 *
+	 * @return {@code true} if the item was used
+	 */
+	public static boolean rightClickItem(InteractionHand hand)
+	{
+		ItemStack stack = MC.player.getItemInHand(hand);
+		return interactItemAndSwing(stack, SwingHand.CLIENT, hand);
+	}
+	
+	/**
 	 * Calls {@code interactBlock()} and swings the hand if the game would
 	 * normally do that.
 	 *

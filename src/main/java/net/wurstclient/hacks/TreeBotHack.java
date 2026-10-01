@@ -55,10 +55,10 @@ public final class TreeBotHack extends Hack
 		ValueDisplay.DECIMAL);
 	
 	private final FaceTargetSetting faceTarget =
-		FaceTargetSetting.withoutPacketSpam(this, FaceTarget.SERVER);
+		FaceTargetSetting.withoutPacketSpam(this, FaceTarget.CLIENT);
 	
 	private final SwingHandSetting swingHand =
-		new SwingHandSetting(this, SwingHand.SERVER);
+		new SwingHandSetting(this, SwingHand.CLIENT);
 	
 	private TreeFinder treeFinder;
 	private AngleFinder angleFinder;

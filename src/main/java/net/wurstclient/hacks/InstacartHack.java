@@ -17,6 +17,7 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.BowItem;
 import net.minecraft.world.item.CrossbowItem;
 import net.minecraft.world.item.ItemStack;
@@ -24,7 +25,6 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
 import net.minecraft.world.item.enchantment.Enchantments;
-import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -38,6 +38,7 @@ import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.util.BlockPlacer;
 import net.wurstclient.util.BlockPlacer.BlockPlacingParams;
+import net.wurstclient.util.InteractionSimulator;
 import net.wurstclient.util.InventoryUtils;
 
 /**
@@ -316,8 +317,9 @@ public final class InstacartHack extends Hack implements UpdateListener
 	 *
 	 * <p>
 	 * <b>Bow:</b> the player is already charging (vanilla handled the
-	 * start). We send {@code RELEASE_USE_ITEM} to the server and call
-	 * {@code releaseUsingItem()} client-side so the arrow fires with the
+	 * start). We release it through
+	 * {@code MultiPlayerGameMode.releaseUsingItem()}, just like letting go of
+	 * right-click, so the arrow fires with the
 	 * current charge level. {@code setDown(false)} prevents
 	 * {@code aiStep()} from immediately restarting the charge this tick.
 	 *
@@ -361,7 +363,7 @@ public final class InstacartHack extends Hack implements UpdateListener
 			IMC.getInteractionManager().rightClickItem();
 			shotBow = true;
 			phase = Phase.PLACING;
-			MC.player.jumpFromGround();
+			jump();
 		}else
 		{
 			// Bow: force a 0.125s (3-tick) charge, then release. The
@@ -381,7 +383,7 @@ public final class InstacartHack extends Hack implements UpdateListener
 	/**
 	 * Called from {@link #onUpdate()} once the CHARGING phase reaches its
 	 * threshold. Predicts arrow landing based on current aim, fires the bow
-	 * (server packet + client-side release), and transitions to PLACING so
+	 * (the same release vanilla does), and transitions to PLACING so
 	 * the rail/cart go down next tick.
 	 */
 	private void fireBowAndTransition()
@@ -392,20 +394,27 @@ public final class InstacartHack extends Hack implements UpdateListener
 			pos = MC.player.blockPosition();
 		pendingPos = pos;
 		
-		// Server packet — makes the server actually fire the arrow with the
-		// current charge level.
-		IMC.getInteractionManager().sendPlayerActionC2SPacket(
-			ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM,
-			MC.player.blockPosition(), MC.player.getDirection());
-		// Client-side — end using state / bow animation.
-		MC.player.releaseUsingItem();
+		// Release the bow exactly the way letting go of right-click does: the
+		// same RELEASE_USE_ITEM packet vanilla sends, plus the client-side
+		// release.
+		MC.gameMode.releaseUsingItem(MC.player);
 		// Prevent aiStep() from restarting the charge this tick.
 		MC.options.keyUse.setDown(false);
 		useKeyWasDown = false;
 		
 		shotBow = true;
 		phase = Phase.PLACING;
-		MC.player.jumpFromGround();
+		jump();
+	}
+	
+	/**
+	 * A real jump, only from the ground. Jumping in midair is not something
+	 * a player can do.
+	 */
+	private void jump()
+	{
+		if(MC.player.onGround())
+			MC.player.jumpFromGround();
 	}
 	
 	// ── Placement (next tick, while projectile is in the air)
@@ -429,15 +438,22 @@ public final class InstacartHack extends Hack implements UpdateListener
 		
 		if(params != null)
 		{
-			// Place rail.
+			// Place rail: actually look at the spot, then right-click it
+			// (with the swing a real right-click has).
 			MC.player.getInventory().setSelectedSlot(pendingRailHotbar);
-			IMC.getInteractionManager().rightClickBlock(params.neighbor(),
-				params.side(), params.hitVec());
+			WURST.getRotationFaker().faceVectorClient(params.hitVec());
+			InteractionSimulator.rightClickBlock(params.toHitResult(),
+				InteractionHand.MAIN_HAND);
 			
-			// Place first TNT Minecart on the rail.
+			// Place first TNT Minecart on the rail, looking at the rail's
+			// top surface (a flat rail is 2/16 of a block tall).
+			BlockHitResult railHit = new BlockHitResult(
+				Vec3.atBottomCenterOf(pendingPos).add(0, 0.125, 0),
+				Direction.UP, pendingPos, false);
 			MC.player.getInventory().setSelectedSlot(pendingCartHotbar);
-			IMC.getInteractionManager().rightClickBlock(pendingPos,
-				Direction.UP, Vec3.atCenterOf(pendingPos).add(0, 0.5, 0));
+			WURST.getRotationFaker().faceVectorClient(railHit.getLocation());
+			InteractionSimulator.rightClickBlock(railHit,
+				InteractionHand.MAIN_HAND);
 			
 			// cartOverloading: stack every remaining TNT Minecart onto the
 			// rail.
@@ -452,9 +468,13 @@ public final class InstacartHack extends Hack implements UpdateListener
 					if(extraHotbar == -1)
 						break;
 					MC.player.getInventory().setSelectedSlot(extraHotbar);
-					IMC.getInteractionManager().rightClickBlock(pendingPos,
-						Direction.UP,
-						Vec3.atCenterOf(pendingPos).add(0, 0.5, 0));
+					int before = MC.player.getMainHandItem().getCount();
+					InteractionSimulator.rightClickBlock(railHit,
+						InteractionHand.MAIN_HAND);
+					
+					// stop if the cart didn't go down, or this never ends
+					if(MC.player.getMainHandItem().getCount() >= before)
+						break;
 				}
 			}
 			

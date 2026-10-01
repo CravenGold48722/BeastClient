@@ -29,6 +29,9 @@ import net.wurstclient.events.LeftClickListener;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
+import net.wurstclient.util.text.WText;
 import net.wurstclient.hacks.nukers.NukerMultiIdListSetting;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.SliderSetting;
@@ -58,8 +61,13 @@ public final class VeinMinerHack extends Hack
 	private final NukerMultiIdListSetting multiIdList =
 		new NukerMultiIdListSetting("The types of blocks to mine as veins.");
 	
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withoutPacketSpam(
+			WText.literal("How VeinMiner faces the block it is breaking."),
+			FaceTarget.CLIENT);
+	
 	private final SwingHandSetting swingHand = new SwingHandSetting(
-		SwingHandSetting.genericMiningDescription(this), SwingHand.SERVER);
+		SwingHandSetting.genericMiningDescription(this), SwingHand.CLIENT);
 	
 	private final BlockBreakingCache cache = new BlockBreakingCache();
 	private final OverlayRenderer overlay = new OverlayRenderer();
@@ -82,6 +90,7 @@ public final class VeinMinerHack extends Hack
 		addSetting(range);
 		addSetting(flat);
 		addSetting(multiIdList);
+		addSetting(faceTarget);
 		addSetting(swingHand);
 		addSetting(maxVeinSize);
 		addSetting(checkLOS);
@@ -147,7 +156,10 @@ public final class VeinMinerHack extends Hack
 		stream = stream.sorted(BlockBreaker.comparingParams());
 		
 		// Break all blocks in creative mode
-		if(MC.player.getAbilities().instabuild)
+		// Packet-spam every block at once in creative only when Face target is
+		// off, since that mode doesn't look at anything anyway
+		if(MC.player.getAbilities().instabuild
+			&& faceTarget.getSelected() == FaceTarget.OFF)
 		{
 			MC.gameMode.stopDestroyBlock();
 			overlay.resetProgress();
@@ -187,7 +199,7 @@ public final class VeinMinerHack extends Hack
 	
 	private boolean breakOneBlock(BlockBreakingParams params)
 	{
-		WURST.getRotationFaker().faceVectorPacket(params.hitVec());
+		faceTarget.face(params.hitVec());
 		
 		if(!MC.gameMode.continueDestroyBlock(params.pos(), params.side()))
 			return false;

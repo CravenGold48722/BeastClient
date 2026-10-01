@@ -52,7 +52,7 @@ public final class BonemealAuraHack extends Hack implements HandleInputListener
 			"description.wurst.setting.bonemealaura.check_los", true);
 	
 	private final FaceTargetSetting faceTarget =
-		FaceTargetSetting.withPacketSpam(this, FaceTarget.SERVER);
+		FaceTargetSetting.withPacketSpam(this, FaceTarget.CLIENT);
 	
 	private final SwingHandSetting swingHand =
 		new SwingHandSetting(this, SwingHand.CLIENT);

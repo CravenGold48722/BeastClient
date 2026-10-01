@@ -28,6 +28,14 @@ public interface IMultiPlayerGameMode
 	
 	public void rightClickBlock(BlockPos pos, Direction side, Vec3 hitVec);
 	
+	/**
+	 * Tells the server about a changed hotbar selection right away, the same
+	 * way vanilla does before an attack or item use. Sends nothing if the
+	 * server already knows the slot, so it can't produce duplicate slot
+	 * packets.
+	 */
+	public void syncSelectedSlot();
+	
 	public void sendPlayerActionC2SPacket(
 		ServerboundPlayerActionPacket.Action action, BlockPos blockPos,
 		Direction direction);

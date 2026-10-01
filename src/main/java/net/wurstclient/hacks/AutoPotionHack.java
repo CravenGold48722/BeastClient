@@ -7,6 +7,7 @@
  */
 package net.wurstclient.hacks;
 
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -16,8 +17,8 @@ import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
+import net.wurstclient.util.InteractionSimulator;
 import net.wurstclient.util.ItemUtils;
-import net.wurstclient.util.Rotation;
 
 @SearchTags({"AutoPotion", "auto potion", "AutoSplashPotion",
 	"auto splash potion"})
@@ -28,6 +29,7 @@ public final class AutoPotionHack extends Hack implements UpdateListener
 		6, 0.5, 9.5, 0.5, ValueDisplay.DECIMAL.withSuffix(" hearts"));
 	
 	private int timer;
+	private float restorePitch = Float.NaN;
 	
 	public AutoPotionHack()
 	{
@@ -48,11 +50,25 @@ public final class AutoPotionHack extends Hack implements UpdateListener
 	{
 		EVENTS.remove(UpdateListener.class, this);
 		timer = 0;
+		
+		if(MC.player != null)
+			restorePitch();
+	}
+	
+	private void restorePitch()
+	{
+		if(Float.isNaN(restorePitch))
+			return;
+		
+		MC.player.setXRot(restorePitch);
+		restorePitch = Float.NaN;
 	}
 	
 	@Override
 	public void onUpdate()
 	{
+		restorePitch();
+		
 		// search potion in hotbar
 		int potionInHotbar = findPotion(0, 9);
 		
@@ -73,15 +89,18 @@ public final class AutoPotionHack extends Hack implements UpdateListener
 			// save old slot
 			int oldSlot = MC.player.getInventory().getSelectedSlot();
 			
+			// actually look down - the throw packet carries the camera's own
+			// rotation, so a faked look packet wouldn't aim the potion anyway
+			restorePitch = MC.player.getXRot();
+			MC.player.setXRot(90);
+			
 			// throw potion in hotbar
 			MC.player.getInventory().setSelectedSlot(potionInHotbar);
-			new Rotation(MC.player.getYRot(), 90).sendPlayerLookPacket();
-			IMC.getInteractionManager().rightClickItem();
+			InteractionSimulator.rightClickItem(InteractionHand.MAIN_HAND);
 			
-			// reset slot and rotation
+			// reset slot (the pitch goes back up next tick, so this tick's
+			// movement packet still shows you looking down)
 			MC.player.getInventory().setSelectedSlot(oldSlot);
-			new Rotation(MC.player.getYRot(), MC.player.getXRot())
-				.sendPlayerLookPacket();
 			
 			// reset timer
 			timer = 10;

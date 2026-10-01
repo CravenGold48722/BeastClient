@@ -162,8 +162,23 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	{
 		BlockHitResult hitResult = new BlockHitResult(hitVec, side, pos, false);
 		InteractionHand hand = InteractionHand.MAIN_HAND;
-		useItemOn(minecraft.player, hand, hitResult);
-		useItem(minecraft.player, hand);
+		
+		// Like vanilla's startUseItem(): only fall back to using the held
+		// item when the block click did nothing. Always sending both was an
+		// extra UseItem packet no real right-click produces.
+		InteractionResult result = useItemOn(minecraft.player, hand, hitResult);
+		if(result instanceof InteractionResult.Success
+			|| result instanceof InteractionResult.Fail)
+			return;
+		
+		if(!minecraft.player.getItemInHand(hand).isEmpty())
+			useItem(minecraft.player, hand);
+	}
+	
+	@Override
+	public void syncSelectedSlot()
+	{
+		ensureHasSentCarriedItem();
 	}
 	
 	@Override
@@ -186,6 +201,12 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	@Shadow
 	private void startPrediction(ClientLevel world,
 		PredictiveAction packetCreator)
+	{
+		
+	}
+	
+	@Shadow
+	private void ensureHasSentCarriedItem()
 	{
 		
 	}

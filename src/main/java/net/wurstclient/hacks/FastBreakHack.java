@@ -41,8 +41,10 @@ public final class FastBreakHack extends Hack
 			+ " the breaking process itself.\n\n"
 			+ "This is much slower, but great at bypassing anti-cheat plugins."
 			+ " Use this if regular FastBreak is not working and the Activation"
-			+ " chance slider doesn't help.",
-		false);
+			+ " chance slider doesn't help.\n\n"
+			+ "On by default, since regular FastBreak works by sending fake"
+			+ " \"finished breaking\" packets.",
+		true);
 	
 	private final Random random = new Random();
 	private BlockPos lastBlockPos;

@@ -44,15 +44,15 @@ public enum BlockBreaker
 	
 	public static boolean breakOneBlock(BlockBreakingParams params)
 	{
-		// face block
-		WURST.getRotationFaker().faceVectorPacket(params.hitVec);
+		// face block (turns the camera, no silent rotation)
+		WURST.getRotationFaker().faceVectorClient(params.hitVec);
 		
 		// damage block
 		if(!MC.gameMode.continueDestroyBlock(params.pos, params.side))
 			return false;
 		
 		// swing arm
-		SwingHand.SERVER.swing(InteractionHand.MAIN_HAND);
+		SwingHand.CLIENT.swing(InteractionHand.MAIN_HAND);
 		return true;
 	}
 	

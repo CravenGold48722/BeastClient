@@ -40,6 +40,7 @@ import net.wurstclient.mixinterface.IMinecraftClient;
 import net.wurstclient.navigator.Navigator;
 import net.wurstclient.other_feature.OtfList;
 import net.wurstclient.other_feature.OtherFeature;
+import net.wurstclient.settings.LegitDefaultsMigration;
 import net.wurstclient.settings.SettingsFile;
 import net.wurstclient.update.ProblematicResourcePackDetector;
 import net.wurstclient.update.WurstUpdater;
@@ -130,6 +131,7 @@ public enum WurstClient
 		settingsProfileFolder = wurstFolder.resolve("settings");
 		this.settingsFile = new SettingsFile(settingsFile, hax, cmds, otfs);
 		this.settingsFile.load();
+		LegitDefaultsMigration.run(wurstFolder, hax);
 		hax.tooManyHaxHack.loadBlockedHacksFile();
 		
 		Path keybindsFile = wurstFolder.resolve("keybinds.json");

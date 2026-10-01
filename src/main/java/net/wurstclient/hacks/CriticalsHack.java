@@ -25,7 +25,7 @@ public final class CriticalsHack extends Hack
 		"\u00a7lPacket\u00a7r mode sends packets to server without actually moving you at all.\n\n"
 			+ "\u00a7lMini Jump\u00a7r mode does a tiny jump that is just enough to get a critical hit.\n\n"
 			+ "\u00a7lFull Jump\u00a7r mode makes you jump normally.",
-		Mode.values(), Mode.PACKET);
+		Mode.values(), Mode.FULL_JUMP);
 	
 	public CriticalsHack()
 	{

@@ -20,6 +20,9 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
+import net.wurstclient.util.text.WText;
 import net.wurstclient.settings.AttackSpeedSliderSetting;
 import net.wurstclient.settings.EnumSetting;
 import net.wurstclient.settings.PauseAttackOnContainersSetting;
@@ -49,6 +52,11 @@ public final class TpAuraHack extends Hack implements UpdateListener
 			+ "\u00a7lHealth\u00a7r - Attacks the weakest entity.",
 		Priority.values(), Priority.ANGLE);
 	
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withPacketSpam(
+			WText.literal("How TP-Aura faces the entity it attacks."),
+			FaceTarget.CLIENT);
+	
 	private final SwingHandSetting swingHand = new SwingHandSetting(
 		SwingHandSetting.genericCombatDescription(this), SwingHand.CLIENT);
 	
@@ -66,6 +74,7 @@ public final class TpAuraHack extends Hack implements UpdateListener
 		addSetting(range);
 		addSetting(speed);
 		addSetting(priority);
+		addSetting(faceTarget);
 		addSetting(swingHand);
 		addSetting(pauseOnContainers);
 		
@@ -132,8 +141,7 @@ public final class TpAuraHack extends Hack implements UpdateListener
 			return;
 		
 		// attack entity
-		RotationUtils.getNeededRotations(entity.getBoundingBox().getCenter())
-			.sendPlayerLookPacket();
+		faceTarget.face(entity.getBoundingBox().getCenter());
 		
 		MC.gameMode.attack(player, entity);
 		swingHand.swing(InteractionHand.MAIN_HAND);

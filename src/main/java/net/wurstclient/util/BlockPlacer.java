@@ -11,13 +11,13 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Vec3i;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.wurstclient.WurstClient;
-import net.wurstclient.mixinterface.IMinecraftClient;
 import net.wurstclient.util.BlockBreaker.BlockBreakingParams;
 
 public enum BlockPlacer
@@ -26,7 +26,6 @@ public enum BlockPlacer
 	
 	private static final WurstClient WURST = WurstClient.INSTANCE;
 	private static final Minecraft MC = WurstClient.MC;
-	private static final IMinecraftClient IMC = WurstClient.IMC;
 	
 	public static boolean placeOneBlock(BlockPos pos)
 	{
@@ -34,12 +33,12 @@ public enum BlockPlacer
 		if(params == null || params.requiresSneaking())
 			return false;
 		
-		// face block
-		WURST.getRotationFaker().faceVectorPacket(params.hitVec);
+		// face block (turns the camera, no silent rotation)
+		WURST.getRotationFaker().faceVectorClient(params.hitVec);
 		
-		// place block
-		IMC.getInteractionManager().rightClickBlock(params.neighbor,
-			params.side, params.hitVec);
+		// place block and swing like a real right-click
+		InteractionSimulator.rightClickBlock(params.toHitResult(),
+			InteractionHand.MAIN_HAND);
 		
 		return true;
 	}

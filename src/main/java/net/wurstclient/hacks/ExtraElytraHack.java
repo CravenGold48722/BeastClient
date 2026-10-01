@@ -35,7 +35,12 @@ public final class ExtraElytraHack extends Hack implements UpdateListener
 			false);
 	
 	private final CheckboxSetting stopInWater =
-		new CheckboxSetting("Stop flying in water", true);
+		new CheckboxSetting("Stop flying in water",
+			"Stops gliding when you hit water.\n\n"
+				+ "Off by default: this works by sending a start-gliding packet"
+				+ " while you are already gliding, which a real client never"
+				+ " does.",
+			false);
 	
 	private int jumpTimer;
 	
@@ -137,14 +142,20 @@ public final class ExtraElytraHack extends Hack implements UpdateListener
 		if(!instantFly.isChecked())
 			return;
 		
-		if(jumpTimer <= 0)
+		if(jumpTimer <= 0 && MC.player.onGround())
 		{
 			jumpTimer = 20;
 			MC.player.setJumping(false);
 			MC.player.setSprinting(true);
 			MC.player.jumpFromGround();
+			return;
 		}
 		
-		sendStartStopPacket();
+		// Once airborne, start gliding exactly the way a second press of the
+		// jump key does: only when the game agrees you can, and only once.
+		// Sending the packet every tick while holding jump was something no
+		// real client does.
+		if(!MC.player.onClimbable() && MC.player.tryToStartFallFlying())
+			sendStartStopPacket();
 	}
 }

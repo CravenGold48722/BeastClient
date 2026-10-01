@@ -10,14 +10,21 @@ package net.wurstclient.hacks;
 import net.wurstclient.Category;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
-import net.wurstclient.util.Rotation;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
+import net.wurstclient.util.text.WText;
 
 public final class TiredHack extends Hack implements UpdateListener
 {
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withPacketSpam(
+			WText.literal("How Tired drops your head."), FaceTarget.CLIENT);
+	
 	public TiredHack()
 	{
 		super("Tired");
 		setCategory(Category.FUN);
+		addSetting(faceTarget);
 	}
 	
 	@Override
@@ -39,7 +46,6 @@ public final class TiredHack extends Hack implements UpdateListener
 	@Override
 	public void onUpdate()
 	{
-		new Rotation(MC.player.getYRot(), MC.player.tickCount % 100)
-			.sendPlayerLookPacket();
+		faceTarget.face(MC.player.getYRot(), MC.player.tickCount % 100);
 	}
 }

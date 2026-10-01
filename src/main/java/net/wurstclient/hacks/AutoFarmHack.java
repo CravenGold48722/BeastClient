@@ -52,10 +52,10 @@ public final class AutoFarmHack extends Hack
 			"description.wurst.setting.autofarm.check_line_of_sight", false);
 	
 	private final FaceTargetSetting faceTarget =
-		FaceTargetSetting.withoutPacketSpam(this, FaceTarget.SERVER);
+		FaceTargetSetting.withoutPacketSpam(this, FaceTarget.CLIENT);
 	
 	private final SwingHandSetting swingHand =
-		new SwingHandSetting(this, SwingHand.SERVER);
+		new SwingHandSetting(this, SwingHand.CLIENT);
 	
 	private final AutoFarmPlantTypeManager plantTypes =
 		new AutoFarmPlantTypeManager();

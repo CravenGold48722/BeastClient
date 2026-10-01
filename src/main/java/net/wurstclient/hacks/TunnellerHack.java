@@ -33,6 +33,7 @@ import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.TorchBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.wurstclient.Category;
@@ -795,8 +796,8 @@ public final class TunnellerHack extends Hack
 		
 		Vec3 hitVec = hitVecs[side.ordinal()];
 		
-		// face block
-		WURST.getRotationFaker().faceVectorPacket(hitVec);
+		// face block (actually turns the camera)
+		WURST.getRotationFaker().faceVectorClient(hitVec);
 		if(RotationUtils.getAngleToLastReportedLookVec(hitVec) > 1)
 			return;
 		
@@ -804,12 +805,10 @@ public final class TunnellerHack extends Hack
 		if(MC.rightClickDelay > 0)
 			return;
 		
-		// place block
-		IMC.getInteractionManager().rightClickBlock(pos.relative(side),
-			side.getOpposite(), hitVec);
-		
-		// swing arm
-		SwingHand.SERVER.swing(InteractionHand.MAIN_HAND);
+		// place block, swinging only if a real click would
+		InteractionSimulator.rightClickBlock(new BlockHitResult(hitVec,
+			side.getOpposite(), pos.relative(side), false),
+			InteractionHand.MAIN_HAND);
 		
 		// reset timer
 		MC.rightClickDelay = 4;
@@ -867,14 +866,14 @@ public final class TunnellerHack extends Hack
 		}
 		
 		// face block
-		WURST.getRotationFaker().faceVectorPacket(hitVecs[side.ordinal()]);
+		WURST.getRotationFaker().faceVectorClient(hitVecs[side.ordinal()]);
 		
 		// damage block
 		if(!MC.gameMode.continueDestroyBlock(pos, side))
 			return false;
 		
 		// swing arm
-		SwingHand.SERVER.swing(InteractionHand.MAIN_HAND);
+		SwingHand.CLIENT.swing(InteractionHand.MAIN_HAND);
 		
 		return true;
 	}

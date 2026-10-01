@@ -17,6 +17,9 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
+import net.wurstclient.util.text.WText;
 import net.wurstclient.settings.AttackSpeedSliderSetting;
 import net.wurstclient.settings.PauseAttackOnContainersSetting;
 import net.wurstclient.settings.SliderSetting;
@@ -39,6 +42,16 @@ public final class MultiAuraHack extends Hack implements UpdateListener
 	private final SliderSetting fov =
 		new SliderSetting("FOV", 360, 30, 360, 10, ValueDisplay.DEGREES);
 	
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withPacketSpam(
+			WText.literal("How MultiAura faces the entities it attacks.\n\n"
+				+ "Only Packet spam can face several entities in one tick, so"
+				+ " the other modes hit one entity per attack and cycle through"
+				+ " them."),
+			FaceTarget.CLIENT);
+	
+	private int nextTarget;
+	
 	private final SwingHandSetting swingHand = new SwingHandSetting(
 		SwingHandSetting.genericCombatDescription(this), SwingHand.CLIENT);
 	
@@ -56,6 +69,7 @@ public final class MultiAuraHack extends Hack implements UpdateListener
 		addSetting(range);
 		addSetting(speed);
 		addSetting(fov);
+		addSetting(faceTarget);
 		addSetting(swingHand);
 		addSetting(pauseOnContainers);
 		
@@ -115,13 +129,21 @@ public final class MultiAuraHack extends Hack implements UpdateListener
 		
 		WURST.getHax().autoSwordHack.setSlot(entities.get(0));
 		
+		// Only one rotation reaches the server per tick, so unless the
+		// rotations are spammed, hit one entity per attack and move on to the
+		// next one each time.
+		if(!faceTarget.canFaceMultipleTargetsPerTick())
+		{
+			nextTarget = (nextTarget + 1) % entities.size();
+			Entity entity = entities.get(nextTarget);
+			entities.clear();
+			entities.add(entity);
+		}
+		
 		// attack entities
 		for(Entity entity : entities)
 		{
-			RotationUtils
-				.getNeededRotations(entity.getBoundingBox().getCenter())
-				.sendPlayerLookPacket();
-			
+			faceTarget.face(entity.getBoundingBox().getCenter());
 			MC.gameMode.attack(MC.player, entity);
 		}
 		

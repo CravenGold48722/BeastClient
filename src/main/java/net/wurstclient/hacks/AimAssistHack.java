@@ -73,11 +73,12 @@ public final class AimAssistHack extends Hack
 	private final FaceTargetSetting faceTarget =
 		FaceTargetSetting.withoutPacketSpam(
 			WText.literal("How AimAssist rotates toward the target.\n\n"
-				+ "§lServer-side§r (default) keeps your camera still and"
-				+ " only aims inside the outgoing movement packet — silent"
-				+ " aim, the way LiquidBounce works. Auto-attack still lands.\n\n"
-				+ "§lClient-side§r turns your camera like the old"
-				+ " behavior.\n\n"
+				+ "§lClient-side§r (default) actually turns your camera, so"
+				+ " the server sees exactly what you see.\n\n"
+				+ "§lServer-side§r keeps your camera still and only aims"
+				+ " inside the outgoing movement packet — silent aim, the way"
+				+ " LiquidBounce works. Also lets Auto-attack keep hitting"
+				+ " during an Aura-Farming spin.\n\n"
 				+ "Note: Auto-combo and Aura-Farming always steer the camera"
 				+ " while they move you, since you can't sprint toward a target"
 				+ " you aren't facing."),
@@ -137,8 +138,11 @@ public final class AimAssistHack extends Hack
 	private final CheckboxSetting auraFarming =
 		new CheckboxSetting("Aura-Farming",
 			"Does a 360 spin while airborne on the way up, then snaps back to"
-				+ " facing the target. Cosmetic only - attacks and targeting"
-				+ " keep working through the spin.",
+				+ " facing the target.\n\n"
+				+ "With §lFace target§r on Client-side the server sees the"
+				+ " real spin, so Auto attack only hits when your crosshair"
+				+ " sweeps over the target. On Server-side the attacks keep"
+				+ " going through the spin.",
 			false);
 	
 	private final EntityFilterList entityFilters =
@@ -484,7 +488,10 @@ public final class AimAssistHack extends Hack
 		Vec3 aimPoint = aimAt.getAimPoint(target);
 		if(spinRemaining > 0F)
 		{
-			WURST.getRotationFaker().faceVectorPacket(aimPoint);
+			// Only fake the aim behind the spin when Face target asks for
+			// silent aim. Otherwise the server sees the real spin.
+			if(faceTarget.getSelected() == FaceTarget.SERVER)
+				WURST.getRotationFaker().faceVectorPacket(aimPoint);
 			aimStateValid = false;
 		}else
 			applyAim(aimPoint, autoAttack.isChecked() && autoCombo.isChecked());
@@ -496,12 +503,14 @@ public final class AimAssistHack extends Hack
 		}
 		
 		// Reset the hit timer when the player manually clicks or the
-		// crosshair leaves the target. During an aura-farming spin the
-		// crosshair is intentionally off-target, so skip that half of the
-		// check — attacks still land via the entity reference and the
-		// spin snaps back to the target when it finishes.
-		boolean spinning = spinRemaining > 0F;
-		if(attackClicked || (!spinning && !isCrosshairOnTarget()))
+		// crosshair leaves the target. During an aura-farming spin with
+		// server-side aim the crosshair is intentionally off-target while the
+		// server still sees you facing it, so skip that half of the check
+		// there. Without silent aim the server sees the spin too, so only
+		// hit when the crosshair actually sweeps over the target.
+		boolean silentSpin =
+			spinRemaining > 0F && faceTarget.getSelected() == FaceTarget.SERVER;
+		if(attackClicked || (!silentSpin && !isCrosshairOnTarget()))
 		{
 			MC.player.resetAttackStrengthTicker();
 			resetCombo();
@@ -1239,7 +1248,7 @@ public final class AimAssistHack extends Hack
 		
 		updateAuraFarming();
 		
-		// Normal aiming now happens in onUpdate (silently by default). The only
+		// Normal aiming happens in onUpdate (as Face target says). The only
 		// thing that still moves the camera here is the cosmetic Aura-Farming
 		// spin, which is meant to be seen.
 		if(spinRemaining <= 0F)

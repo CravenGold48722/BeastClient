@@ -20,6 +20,9 @@ import net.wurstclient.SearchTags;
 import net.wurstclient.events.LeftClickListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
+import net.wurstclient.util.text.WText;
 import net.wurstclient.settings.AttackSpeedSliderSetting;
 import net.wurstclient.settings.EnumSetting;
 import net.wurstclient.settings.SliderSetting;
@@ -48,6 +51,11 @@ public final class ClickAuraHack extends Hack
 	private final SliderSetting fov =
 		new SliderSetting("FOV", 360, 30, 360, 10, ValueDisplay.DEGREES);
 	
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withPacketSpam(
+			WText.literal("How ClickAura faces the entity it attacks."),
+			FaceTarget.CLIENT);
+	
 	private final EntityFilterList entityFilters =
 		EntityFilterList.genericCombat();
 	
@@ -61,6 +69,7 @@ public final class ClickAuraHack extends Hack
 		addSetting(priority);
 		addSetting(fov);
 		
+		addSetting(faceTarget);
 		entityFilters.forEach(this::addSetting);
 	}
 	
@@ -133,8 +142,7 @@ public final class ClickAuraHack extends Hack
 		WURST.getHax().autoSwordHack.setSlot(target);
 		
 		// face entity
-		RotationUtils.getNeededRotations(target.getBoundingBox().getCenter())
-			.sendPlayerLookPacket();
+		faceTarget.face(target.getBoundingBox().getCenter());
 		
 		// attack entity
 		MC.gameMode.attack(player, target);

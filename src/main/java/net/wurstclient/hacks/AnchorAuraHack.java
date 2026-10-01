@@ -64,7 +64,7 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 			"description.wurst.setting.anchoraura.check_line_of_sight", false);
 	
 	private final FaceTargetSetting faceTarget =
-		FaceTargetSetting.withPacketSpam(this, FaceTarget.OFF);
+		FaceTargetSetting.withPacketSpam(this, FaceTarget.CLIENT);
 	
 	private final SwingHandSetting swingHand =
 		new SwingHandSetting(this, SwingHand.CLIENT);
@@ -121,9 +121,13 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 		ArrayList<BlockPos> chargedAnchors = anchorsByCharge.get(true);
 		ArrayList<BlockPos> unchargedAnchors = anchorsByCharge.get(false);
 		
+		// With a real (or faked) rotation there is only one rotation per
+		// tick, so do one anchor and one step per tick, like a player would.
+		boolean oneAtATime = !faceTarget.canFaceMultipleTargetsPerTick();
+		
 		if(!chargedAnchors.isEmpty())
 		{
-			detonate(chargedAnchors);
+			detonate(oneAtATime ? firstOf(chargedAnchors) : chargedAnchors);
 			return;
 		}
 		
@@ -132,6 +136,13 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 		if(!unchargedAnchors.isEmpty()
 			&& InventoryUtils.indexOf(Items.GLOWSTONE, maxInvSlot) >= 0)
 		{
+			if(oneAtATime)
+			{
+				// detonated on a later tick
+				charge(firstOf(unchargedAnchors));
+				return;
+			}
+			
 			charge(unchargedAnchors);
 			// TODO: option to wait until next tick?
 			detonate(unchargedAnchors);
@@ -145,8 +156,9 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 		ArrayList<Entity> targets = getNearbyTargets();
 		ArrayList<BlockPos> newAnchors = placeAnchorsNear(targets);
 		
-		if(!newAnchors.isEmpty() && InventoryUtils.indexOf(Items.GLOWSTONE,
-			takeItemsFrom.getMaxInvSlot()) >= 0)
+		// in one-at-a-time mode, charging and detonating happen on later ticks
+		if(!oneAtATime && !newAnchors.isEmpty() && InventoryUtils
+			.indexOf(Items.GLOWSTONE, takeItemsFrom.getMaxInvSlot()) >= 0)
 		{
 			// TODO: option to wait until next tick?
 			charge(newAnchors);
@@ -172,12 +184,21 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 					// TODO optional speed limit(?)
 					break;
 				}
+			
+			if(!newAnchors.isEmpty()
+				&& !faceTarget.canFaceMultipleTargetsPerTick())
+				break;
 		}
 		
 		if(shouldSwing)
 			swingHand.swing(InteractionHand.MAIN_HAND);
 		
 		return newAnchors;
+	}
+	
+	private static <T> ArrayList<T> firstOf(ArrayList<T> list)
+	{
+		return new ArrayList<>(list.subList(0, 1));
 	}
 	
 	private void detonate(ArrayList<BlockPos> chargedAnchors)

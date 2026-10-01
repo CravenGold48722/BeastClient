@@ -12,15 +12,22 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
-import net.wurstclient.util.Rotation;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
+import net.wurstclient.util.text.WText;
 
 @SearchTags({"head roll", "nodding", "yes"})
 public final class HeadRollHack extends Hack implements UpdateListener
 {
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withPacketSpam(
+			WText.literal("How HeadRoll nods your head."), FaceTarget.CLIENT);
+	
 	public HeadRollHack()
 	{
 		super("HeadRoll");
 		setCategory(Category.FUN);
+		addSetting(faceTarget);
 	}
 	
 	@Override
@@ -45,6 +52,6 @@ public final class HeadRollHack extends Hack implements UpdateListener
 		float timer = MC.player.tickCount % 20 / 10F;
 		float pitch = Mth.sin(timer * (float)Math.PI) * 90F;
 		
-		new Rotation(MC.player.getYRot(), pitch).sendPlayerLookPacket();
+		faceTarget.face(MC.player.getYRot(), pitch);
 	}
 }

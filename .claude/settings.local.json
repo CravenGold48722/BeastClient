@@ -4,6 +4,7 @@
     "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5",
     "CLAUDE_CODE_SUBAGENT_EFFORT": "max"
   },
+  "effort": "high",
   "permissions": {
     "allow": [
       "Bash(git mv:*)",
@@ -82,5 +83,6 @@
     ],
     "defaultMode": "auto"
   },
-  "model": "claude-opus-5"
+  "model": "claude-opus-5-5"
+
 }

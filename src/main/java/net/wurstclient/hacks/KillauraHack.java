@@ -27,6 +27,8 @@ import net.wurstclient.hack.Hack;
 import net.wurstclient.settings.AttackSpeedSliderSetting;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.EnumSetting;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
 import net.wurstclient.settings.PauseAttackOnContainersSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
@@ -37,6 +39,7 @@ import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.RotationUtils;
+import net.wurstclient.util.text.WText;
 
 @SearchTags({"kill aura", "ForceField", "force field", "CrystalAura",
 	"crystal aura", "AutoCrystal", "auto crystal"})
@@ -69,6 +72,11 @@ public final class KillauraHack extends Hack
 	
 	private final SliderSetting fov =
 		new SliderSetting("FOV", 360, 30, 360, 10, ValueDisplay.DEGREES);
+	
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withoutPacketSpam(
+			WText.literal("How Killaura faces the entity it attacks."),
+			FaceTarget.CLIENT);
 	
 	private final SwingHandSetting swingHand = new SwingHandSetting(
 		SwingHandSetting.genericCombatDescription(this), SwingHand.CLIENT);
@@ -103,6 +111,7 @@ public final class KillauraHack extends Hack
 		addSetting(speedRandMS);
 		addSetting(priority);
 		addSetting(fov);
+		addSetting(faceTarget);
 		addSetting(swingHand);
 		addSetting(damageIndicator);
 		addSetting(pauseOnContainers);
@@ -177,7 +186,7 @@ public final class KillauraHack extends Hack
 			return;
 		}
 		
-		WURST.getRotationFaker().faceVectorPacket(hitVec);
+		faceTarget.face(hitVec);
 	}
 	
 	@Override

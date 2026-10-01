@@ -11,12 +11,12 @@ import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
-import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
@@ -844,7 +844,7 @@ public final class MaceAssistHack extends Hack
 		int returnSlot = MC.player.getInventory().getSelectedSlot();
 		
 		selectSlot(chestSlot);
-		MC.gameMode.useItem(MC.player, InteractionHand.MAIN_HAND);
+		useItemAndSwing(InteractionHand.MAIN_HAND);
 		
 		// straight back to the weapon, in the same call - the use packet is
 		// already on its way, so there is nothing to wait for
@@ -1204,8 +1204,7 @@ public final class MaceAssistHack extends Hack
 		InteractionHand hand = windSlot == -1 ? InteractionHand.OFF_HAND
 			: InteractionHand.MAIN_HAND;
 		
-		MC.gameMode.useItem(MC.player, hand);
-		MC.player.swing(hand);
+		useItemAndSwing(hand);
 		
 		MC.execute(() -> {
 			if(MC.player == null)
@@ -1224,8 +1223,7 @@ public final class MaceAssistHack extends Hack
 	{
 		if(MC.player.getOffhandItem().is(Items.WIND_CHARGE))
 		{
-			MC.gameMode.useItem(MC.player, InteractionHand.OFF_HAND);
-			MC.player.swing(InteractionHand.OFF_HAND);
+			useItemAndSwing(InteractionHand.OFF_HAND);
 			return;
 		}
 		
@@ -1235,8 +1233,7 @@ public final class MaceAssistHack extends Hack
 		
 		int returnSlot = MC.player.getInventory().getSelectedSlot();
 		selectSlot(slot);
-		MC.gameMode.useItem(MC.player, InteractionHand.MAIN_HAND);
-		MC.player.swing(InteractionHand.MAIN_HAND);
+		useItemAndSwing(InteractionHand.MAIN_HAND);
 		
 		MC.execute(() -> {
 			if(MC.player != null)
@@ -1245,6 +1242,18 @@ public final class MaceAssistHack extends Hack
 	}
 	
 	// ── Helpers ──────────────────────────────────────────────────────────
+	
+	/**
+	 * Uses the item and swings only if vanilla would, so a use that fails
+	 * (e.g. on cooldown) doesn't send a swing packet on its own.
+	 */
+	private void useItemAndSwing(InteractionHand hand)
+	{
+		if(MC.gameMode.useItem(MC.player,
+			hand) instanceof InteractionResult.Success success
+			&& success.swingSource() == InteractionResult.SwingSource.CLIENT)
+			MC.player.swing(hand);
+	}
 	
 	private int previousSlot()
 	{
@@ -1256,7 +1265,8 @@ public final class MaceAssistHack extends Hack
 	
 	/**
 	 * Selects a hotbar slot and tells the server about it right away, instead
-	 * of waiting for the client's own sync at the end of the tick.
+	 * of waiting for the client's own sync at the end of the tick. Uses the
+	 * game's own sync, which never sends the same slot twice.
 	 */
 	private void selectSlot(int slot)
 	{
@@ -1269,9 +1279,9 @@ public final class MaceAssistHack extends Hack
 		
 		inventory.setSelectedSlot(slot);
 		
-		if(MC.player.connection != null)
-			MC.player.connection
-				.send(new ServerboundSetCarriedItemPacket(slot));
+		// Vanilla's own sync, so the game doesn't send the same slot a second
+		// time on the next attack or tick.
+		IMC.getInteractionManager().syncSelectedSlot();
 	}
 	
 	private int findItem(TagKey<Item> tag)

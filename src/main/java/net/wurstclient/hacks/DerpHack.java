@@ -13,17 +13,24 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
-import net.wurstclient.util.Rotation;
+import net.wurstclient.settings.FaceTargetSetting;
+import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
+import net.wurstclient.util.text.WText;
 
 @SearchTags({"Retarded"})
 public final class DerpHack extends Hack implements UpdateListener
 {
+	private final FaceTargetSetting faceTarget =
+		FaceTargetSetting.withPacketSpam(
+			WText.literal("How Derp turns your head."), FaceTarget.CLIENT);
+	
 	private final Random random = new Random();
 	
 	public DerpHack()
 	{
 		super("Derp");
 		setCategory(Category.FUN);
+		addSetting(faceTarget);
 	}
 	
 	@Override
@@ -48,6 +55,6 @@ public final class DerpHack extends Hack implements UpdateListener
 		float yaw = MC.player.getYRot() + random.nextFloat() * 360F - 180F;
 		float pitch = random.nextFloat() * 180F - 90F;
 		
-		new Rotation(yaw, pitch).sendPlayerLookPacket();
+		faceTarget.face(yaw, pitch);
 	}
 }

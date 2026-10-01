@@ -96,10 +96,10 @@ public final class AutoLibrarianHack extends Hack
 		new SliderSetting("Range", 5, 1, 6, 0.05, ValueDisplay.DECIMAL);
 	
 	private final FaceTargetSetting faceTarget =
-		FaceTargetSetting.withoutPacketSpam(this, FaceTarget.SERVER);
+		FaceTargetSetting.withoutPacketSpam(this, FaceTarget.CLIENT);
 	
 	private final SwingHandSetting swingHand =
-		new SwingHandSetting(this, SwingHand.SERVER);
+		new SwingHandSetting(this, SwingHand.CLIENT);
 	
 	private final SliderSetting repairMode = new SliderSetting("Repair mode",
 		"Prevents AutoLibrarian from using your axe when its durability reaches"

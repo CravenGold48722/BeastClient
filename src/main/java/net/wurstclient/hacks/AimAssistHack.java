@@ -150,6 +150,7 @@ public final class AimAssistHack extends Hack
 		new EntityFilterList(FilterPlayersSetting.genericCombat(false),
 			FilterSleepingSetting.genericCombat(false),
 			FilterFlyingSetting.genericCombat(0),
+			FilterSpeedSetting.genericCombat(100),
 			FilterHostileSetting.genericCombat(false),
 			FilterNeutralSetting
 				.genericCombat(AttackDetectingEntityFilter.Mode.OFF),
@@ -355,7 +356,7 @@ public final class AimAssistHack extends Hack
 	private static final float SMOOTH_AIM_SPEED = 1080F;
 	
 	private static final double FAR_THRESHOLD_SQ = 3.01 * 3.01;
-	private static final double CLOSE_THRESHOLD_SQ = 0.8 * 0.8;
+	private static final double CLOSE_THRESHOLD_SQ = 0.75 * 0.75;
 	
 	public AimAssistHack()
 	{

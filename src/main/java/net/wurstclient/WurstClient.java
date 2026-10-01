@@ -78,6 +78,7 @@ public enum WurstClient
 	private IngameHUD hud;
 	private RotationFaker rotationFaker;
 	private InventoryOpener inventoryOpener;
+	private EntitySpeedTracker entitySpeedTracker;
 	private FriendsList friends;
 	private WurstTranslator translator;
 	
@@ -167,6 +168,9 @@ public enum WurstClient
 		
 		inventoryOpener = new InventoryOpener();
 		eventManager.add(UpdateListener.class, inventoryOpener);
+		
+		entitySpeedTracker = new EntitySpeedTracker();
+		eventManager.add(UpdateListener.class, entitySpeedTracker);
 		
 		// Not registered: it checks upstream Wurst's GitHub releases, which
 		// says nothing about Beast versions and only costs a web request every
@@ -315,6 +319,11 @@ public enum WurstClient
 	public InventoryOpener getInventoryOpener()
 	{
 		return inventoryOpener;
+	}
+	
+	public EntitySpeedTracker getEntitySpeedTracker()
+	{
+		return entitySpeedTracker;
 	}
 	
 	public FriendsList getFriends()

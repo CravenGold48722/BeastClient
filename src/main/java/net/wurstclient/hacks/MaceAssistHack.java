@@ -45,6 +45,7 @@ import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.EnumSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
+import net.wurstclient.settings.filters.FilterSpeedSetting;
 import net.wurstclient.util.BlockUtils;
 
 /**
@@ -228,6 +229,9 @@ public final class MaceAssistHack extends Hack
 		new CheckboxSetting("Target armor stands",
 			"Aim assist and trigger bot attack armor stands.", false);
 	
+	private final FilterSpeedSetting filterSpeed =
+		FilterSpeedSetting.genericCombat(100);
+	
 	// ── Mace trigger bot ─────────────────────────────────────────────────
 	
 	private final CheckboxSetting maceTriggerBot = new CheckboxSetting(
@@ -379,6 +383,7 @@ public final class MaceAssistHack extends Hack
 		addSetting(targetHostileMobs);
 		addSetting(targetPassiveMobs);
 		addSetting(targetArmorStands);
+		addSetting(filterSpeed);
 		
 		addSetting(maceTriggerBot);
 		addSetting(triggerFallingOnly);
@@ -622,6 +627,10 @@ public final class MaceAssistHack extends Hack
 			return false;
 		
 		if(WURST.getFriends().isFriend(e))
+			return false;
+		
+		// teleporting anti-cheat bots
+		if(filterSpeed.isFilterEnabled() && !filterSpeed.test(e))
 			return false;
 		
 		if(e instanceof Mannequin)

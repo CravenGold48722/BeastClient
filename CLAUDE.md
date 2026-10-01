@@ -217,6 +217,9 @@ Entity targeting uses `EntityFilterList` + the ~24 `settings/filters/Filter*Sett
 (`FilterPlayersSetting.genericCombat(false)`, `FilterInvisibleSetting`, `FilterArmorStandsSetting`,
 `AttackDetectingEntityFilter.Mode.OFF`, …). Killaura/AimAssist/FightBot all build one of these.
 MaceAssist deliberately does **not** — it uses its own plain checkboxes.
+`FilterSpeedSetting` ("Filter speed", blocks/s, default 100 in combat lists + MaceAssist) reads
+`WURST.getEntitySpeedTracker()`, which samples every entity's latest server position each tick
+(interpolation target, keyed by UUID) to skip teleporting anti-cheat bots.
 
 Setting names are keyed lowercase inside a feature; duplicates throw at construction
 (`"Duplicate setting: <hack> <name>"`).

@@ -58,6 +58,12 @@ public final class InventoryOpener implements UpdateListener
 		// vanilla redirects InventoryScreen to the creative one.
 		if(MC.player.hasInfiniteMaterials())
 			return;
+			
+		// Riding something with its own inventory (a horse, a chest boat...),
+		// E opens that inventory through the server instead. A plain player
+		// inventory screen there is something vanilla never shows.
+		if(MC.gameMode.isServerControlledInventory())
+			return;
 		
 		// Same thing vanilla does when E is pressed.
 		MC.getTutorial().onOpenInventory();
@@ -85,6 +91,15 @@ public final class InventoryOpener implements UpdateListener
 		// Same as pressing Esc: sends the close packet, then closes the screen.
 		MC.screen.onClose();
 		openedByUs = false;
+	}
+	
+	/**
+	 * Whether the inventory screen that's open right now was opened by this
+	 * class rather than by the player.
+	 */
+	public boolean isOpenedByUs()
+	{
+		return openedByUs && isInventoryScreen(MC.screen);
 	}
 	
 	private static boolean isInventoryScreen(Screen screen)

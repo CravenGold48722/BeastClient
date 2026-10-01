@@ -18,7 +18,6 @@ import net.minecraft.client.multiplayer.chat.GuiMessageTag.Icon;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
-import net.minecraft.network.chat.LocalChatSession;
 import net.minecraft.network.chat.MessageSignature;
 import net.minecraft.network.chat.SignedMessageChain;
 import net.minecraft.network.chat.contents.TranslatableContents;
@@ -70,11 +69,14 @@ public final class NoChatReportsOtf extends OtherFeature
 				SignedMessageChain.Encoder.UNSIGNED;
 			
 		}else if(netHandler.chatSession == null)
-			MC.getProfileKeyPairManager().prepareKeyPair()
-				.thenAcceptAsync(optional -> optional
-					.ifPresent(profileKeys -> netHandler.chatSession =
-						LocalChatSession.create(profileKeys)),
-					MC);
+			// Vanilla's own setup: creates the session AND tells the server
+			// about it (ServerboundChatSessionUpdatePacket), and does nothing
+			// if vanilla already set up a session with the same keys. Setting
+			// chatSession by hand skipped that packet, so the server never
+			// learned the session and rejected every signed message - and if
+			// it ran before vanilla's own setup, vanilla then skipped its
+			// packet too ("same keys already set").
+			netHandler.prepareKeyPair();
 		
 		EVENTS.remove(UpdateListener.class, this);
 	}

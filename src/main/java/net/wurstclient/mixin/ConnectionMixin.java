@@ -21,6 +21,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.Packet;
+import net.wurstclient.WurstClient;
 import net.wurstclient.event.EventManager;
 import net.wurstclient.events.ConnectionPacketOutputListener.ConnectionPacketOutputEvent;
 import net.wurstclient.events.PacketInputListener.PacketInputEvent;
@@ -59,6 +60,14 @@ public abstract class ConnectionMixin
 			new ConnectionPacketOutputEvent(packet);
 		events.add(event);
 		EventManager.fire(event);
+		
+		// Events don't fire while Wurst is disabled - but that's exactly when
+		// someone is trying to look like a normal client, so VanillaSpoof
+		// keeps rewriting/dropping packets regardless.
+		WurstClient wurst = WurstClient.INSTANCE;
+		if(!wurst.isEnabled() && wurst.getOtfs() != null)
+			wurst.getOtfs().vanillaSpoofOtf.onSentConnectionPacket(event);
+		
 		return event.getPacket();
 	}
 	

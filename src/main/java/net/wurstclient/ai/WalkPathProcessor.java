@@ -16,10 +16,9 @@ import net.minecraft.world.level.block.LadderBlock;
 import net.minecraft.world.level.block.VineBlock;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.WurstClient;
+import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.RotationUtils;
-
-import net.wurstclient.mixinterface.IKeyMapping;
 
 public class WalkPathProcessor extends PathProcessor
 {

@@ -14,9 +14,8 @@ import net.minecraft.core.Vec3i;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.wurstclient.util.RotationUtils;
-
 import net.wurstclient.mixinterface.IKeyMapping;
+import net.wurstclient.util.RotationUtils;
 
 public class FlyPathProcessor extends PathProcessor
 {

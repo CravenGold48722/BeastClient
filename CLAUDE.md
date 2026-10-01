@@ -295,6 +295,8 @@ does it. When writing or touching a hack:
   without the key pressed is visible to anti-cheats. `KeyPresser` holds the key for N reads of
   `KeyboardInput.tick()` (hooked by `KeyboardInputMixin`) and then restores the physical state;
   it uses `IKeyMapping.setDownIgnoringToggle()` so Toggle Sprint/Sneak keys don't flip.
+  Presses wait while any screen is open (vanilla takes no movement input then) unless InvWalk
+  is on, so `.jump` from chat fires right after the chat closes.
   Only movement cheats that can't be done with keys (Flight, Jetpack, Speed, NoClip…) keep velocity
   edits.
 - **Mouse-step rotations:** every Wurst-made rotation (client via `Rotation.applyToClientPlayer`,
@@ -318,7 +320,9 @@ does it. When writing or touching a hack:
   UseItem after a successful block click. Hold `keyUse` for eating instead of re-sending UseItem.
 - **Inventory:** `windowClick_*` automatically opens the real `InventoryScreen` first via
   `InventoryOpener` (only when no screen is open, not in creative) and closes it with `onClose()`
-  3 idle ticks later, which sends the container-close packet.
+  3 idle ticks later, which sends the container-close packet. While that auto-opened
+  screen is up, `KeyboardInputMixin` zeroes movement input (unless InvWalk). Skipped while riding
+  something with its own inventory.
 - **Hotbar slot:** after `setSelectedSlot`, sync with `IMC.getInteractionManager().syncSelectedSlot()`
   (vanilla's `ensureHasSentCarriedItem`), never a hand-built `ServerboundSetCarriedItemPacket`.
 - **Chat / server commands:** `ChatUtils.sendAsPlayer("/cmd …")` — same normalisation and chat

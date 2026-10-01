@@ -99,9 +99,7 @@ public enum ModTranslationKeys
 				try(Stream<Path> files = Files.list(lang))
 				{
 					for(Path file : files.toList())
-						// deprecated.json is vanilla's list of renamed keys,
-						// not
-						// a translation file
+						// skip deprecated.json (renamed keys, not translations)
 						if(file.toString().endsWith(".json") && !file
 							.getFileName().toString().equals("deprecated.json"))
 							readKeys(file, keys);

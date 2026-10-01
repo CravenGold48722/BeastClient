@@ -826,7 +826,10 @@ public final class AimAssistHack extends Hack
 			// the hit; this is the s-tap that follows that w-release.
 			WURST.getHax().autoSprintHack.setEnabled(false);
 			holdBackward();
-			KeyPresser.press(MC.options.keySprint);
+			// No sprint here: a real s-tap is just S. Holding sprint while
+			// walking backward is impossible in vanilla and only "works" with
+			// Omnidirectional Sprint, which makes it a giveaway.
+			KeyPresser.release(MC.options.keySprint);
 			WURST.getHax().autoSprintHack.setEnabled(true);
 			if(--stapTicksLeft <= 0)
 			{

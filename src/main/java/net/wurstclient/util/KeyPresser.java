@@ -54,18 +54,21 @@ public enum KeyPresser
 	
 	/**
 	 * Holds the key for the next {@code ticks} input reads.
+	 *
+	 * <p>
+	 * While a screen is open, the press waits: vanilla lets go of every key
+	 * when a screen opens and doesn't take movement input until it closes,
+	 * so jumping or sprinting with e.g. the inventory open would be something
+	 * no real client does. A press made from chat (like {@code .jump}) goes
+	 * through right after the chat closes.
 	 */
 	public static void press(KeyMapping key, int ticks)
 	{
-		Press press = PRESSES.get(key);
-		if(press == null)
-		{
-			press = new Press(key.isDown());
-			PRESSES.put(key, press);
-		}
-		
+		Press press = PRESSES.computeIfAbsent(key, k -> new Press());
 		press.readsLeft = Math.max(press.readsLeft, ticks);
-		IKeyMapping.get(key).setDownIgnoringToggle(true);
+		
+		if(canPressNow())
+			assertDown(key, press);
 	}
 	
 	/**
@@ -84,8 +87,11 @@ public enum KeyPresser
 	 */
 	public static void beforeInputRead()
 	{
-		for(KeyMapping key : PRESSES.keySet())
-			IKeyMapping.get(key).setDownIgnoringToggle(true);
+		if(!canPressNow())
+			return;
+		
+		for(Map.Entry<KeyMapping, Press> entry : PRESSES.entrySet())
+			assertDown(entry.getKey(), entry.getValue());
 	}
 	
 	/**
@@ -93,6 +99,10 @@ public enum KeyPresser
 	 */
 	public static void afterInputRead()
 	{
+		// waiting presses aren't used up while a screen is open
+		if(!canPressNow())
+			return;
+		
 		Iterator<Map.Entry<KeyMapping, Press>> itr =
 			PRESSES.entrySet().iterator();
 		
@@ -108,8 +118,36 @@ public enum KeyPresser
 		}
 	}
 	
+	/**
+	 * No screen open, or InvWalk is on (which lets you move with screens
+	 * open anyway).
+	 */
+	private static boolean canPressNow()
+	{
+		if(MC.screen == null)
+			return true;
+		
+		WurstClient wurst = WurstClient.INSTANCE;
+		return wurst.isEnabled() && wurst.getHax() != null
+			&& wurst.getHax().invWalkHack.isEnabled();
+	}
+	
+	private static void assertDown(KeyMapping key, Press press)
+	{
+		// remember what to go back to the first time the key is pressed, not
+		// while the press was still waiting behind a screen
+		if(press.wasDown == null)
+			press.wasDown = key.isDown();
+		
+		IKeyMapping.get(key).setDownIgnoringToggle(true);
+	}
+	
 	private static void restore(KeyMapping key, Press press)
 	{
+		// never actually pressed, so there's nothing to undo
+		if(press.wasDown == null)
+			return;
+			
 		// Toggle Sprint / Toggle Sneak: the key's state is the toggle, not
 		// the physical key, so put back whatever it was before.
 		boolean down = isInToggleMode(key) ? press.wasDown
@@ -129,12 +167,8 @@ public enum KeyPresser
 	
 	private static final class Press
 	{
-		private final boolean wasDown;
+		/** Key state before the press; null until it's actually pressed. */
+		private Boolean wasDown;
 		private int readsLeft;
-		
-		private Press(boolean wasDown)
-		{
-			this.wasDown = wasDown;
-		}
 	}
 }

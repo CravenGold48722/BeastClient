@@ -17,6 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.KeybindContents;
 import net.wurstclient.WurstClient;
+import net.wurstclient.other_feature.OtfList;
 
 /**
  * VanillaSpoof: while text is being turned into something that goes back to
@@ -37,8 +38,9 @@ public class KeybindContentsMixin
 		cancellable = true)
 	private void onGetNestedComponent(CallbackInfoReturnable<Component> cir)
 	{
-		if(WurstClient.INSTANCE.getOtfs().vanillaSpoofOtf
-			.shouldHideKeybind(name))
+		// can run before Wurst has finished starting up
+		OtfList otfs = WurstClient.INSTANCE.getOtfs();
+		if(otfs != null && otfs.vanillaSpoofOtf.shouldHideKeybind(name))
 			cir.setReturnValue(Component.translatable(name));
 	}
 }

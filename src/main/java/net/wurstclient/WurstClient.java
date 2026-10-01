@@ -133,7 +133,7 @@ public enum WurstClient
 		settingsProfileFolder = wurstFolder.resolve("settings");
 		this.settingsFile = new SettingsFile(settingsFile, hax, cmds, otfs);
 		this.settingsFile.load();
-		LegitDefaultsMigration.run(wurstFolder, hax);
+		LegitDefaultsMigration.run(wurstFolder, this::getFeatureByName);
 		hax.tooManyHaxHack.loadBlockedHacksFile();
 		
 		Path keybindsFile = wurstFolder.resolve("keybinds.json");

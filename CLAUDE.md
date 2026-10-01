@@ -302,6 +302,11 @@ does it. When writing or touching a hack:
   multiples of `Rotation.getMouseStep()` (vanilla's sensitivity math). Never call
   `setYRot/setXRot` with a computed angle directly — un-snapped deltas are what GCD/"aim modulo"
   checks look for, and float noise otherwise sends a rotation packet every tick.
+- **VanillaSpoof** (on by default): brand -> "vanilla"; drops every other `ServerboundCustomPayloadPacket`
+  (Fabric channel lists); login-query answers -> null; known data packs filtered to vanilla's
+  trusted list; sign/anvil text resolved via `withVanillaTranslations` (mod-only keys from
+  `ModTranslationKeys` hidden, mod keybinds raw); "Sign chat like vanilla" suspends NoChatReports.
+  Packet rewrites skip singleplayer. New fingerprint fixes go here.
 - **Background traffic:** Plausible analytics is off by default (config v3) and the upstream
   `WurstUpdater` is not registered — both only phoned upstream Wurst's servers.
 - **Rotations:** `FaceTargetSetting` defaults to `CLIENT` everywhere; hard-coded
@@ -318,7 +323,7 @@ does it. When writing or touching a hack:
 - **Chat / server commands:** `ChatUtils.sendAsPlayer("/cmd …")` — same normalisation and chat
   history as typing it; doesn't fire `ChatOutputEvent`, so it can't loop.
 - **Changing a default:** `settings.json` stores defaults too, so add an entry to
-  `settings/LegitDefaultsMigration` (bump the marker name for a new batch). It only moves settings
+  `settings/LegitDefaultsMigration` (add a new `Batch` with its own marker name). It only moves settings
   still on the old default.
 
 ## Beast-specific parts of the fork

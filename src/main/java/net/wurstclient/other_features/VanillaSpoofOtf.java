@@ -7,9 +7,18 @@
  */
 package net.wurstclient.other_features;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 
+import net.minecraft.SharedConstants;
 import net.minecraft.locale.Language;
+import net.minecraft.network.protocol.configuration.ServerboundSelectKnownPacks;
+import net.minecraft.server.packs.repository.KnownPack;
+import net.minecraft.server.packs.repository.Pack;
+import net.minecraft.server.packs.repository.PackRepository;
+import net.minecraft.server.packs.repository.ServerPacksSource;
 import net.minecraft.network.chat.FormattedText;
 import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
 import net.minecraft.network.protocol.common.custom.BrandPayload;
@@ -39,12 +48,43 @@ public final class VanillaSpoofOtf extends OtherFeature
 			+ "§lTranslation keys§r - signs and anvil names show mod"
 			+ " translation keys and mod keybinds raw, like vanilla, so a"
 			+ " server can't spot mods by what text you send back.\n\n"
+			+ "§lKnown data packs§r - when joining, only claims to have the"
+			+ " data packs vanilla ships with. Fabric otherwise claims every"
+			+ " mod's pack too, which a server can ask about.\n\n"
 			+ "Packets are only touched on real servers, not in singleplayer."
 			+ " Servers that require Fabric mods will treat you as vanilla.",
-		false);
+		true)
+	{
+		@Override
+		public void update()
+		{
+			refreshChatSigning();
+		}
+	};
+	
+	private final CheckboxSetting signChat = new CheckboxSetting(
+		"Sign chat like vanilla",
+		"While Spoof Vanilla is on, pauses NoChatReports' \"Disable"
+			+ " signatures\" so your chat is signed and your chat key is sent"
+			+ " when joining, exactly like vanilla.\n\n"
+			+ "A vanilla client with a Microsoft account always does that, so"
+			+ " unsigned chat is a giveaway for a modded client - but signed"
+			+ " messages can be reported to Mojang. Turn this off to keep"
+			+ " NoChatReports working.\n\n" + "Takes effect on the next join.",
+		true)
+	{
+		@Override
+		public void update()
+		{
+			refreshChatSigning();
+		}
+	};
 	
 	/** Depth of {@link #withVanillaTranslations(Supplier)} calls. */
 	private int vanillaScopeDepth;
+	
+	/** Data packs a vanilla client knows, as vanilla itself lists them. */
+	private Set<KnownPack> vanillaKnownPacks;
 	
 	public VanillaSpoofOtf()
 	{
@@ -52,8 +92,26 @@ public final class VanillaSpoofOtf extends OtherFeature
 			"Bypasses anti-Fabric plugins and mod detection by pretending to be"
 				+ " a vanilla client.");
 		addSetting(spoof);
+		addSetting(signChat);
 		
 		EVENTS.add(ConnectionPacketOutputListener.class, this);
+	}
+	
+	/**
+	 * Whether NoChatReports should stand down so chat is signed the way a
+	 * vanilla client signs it.
+	 */
+	public boolean shouldSignChat()
+	{
+		return spoof.isChecked() && signChat.isChecked();
+	}
+	
+	private void refreshChatSigning()
+	{
+		// NoChatReports is created after this OTF, so it may not exist yet
+		// while the settings are being loaded.
+		if(WURST.getOtfs() != null && WURST.getOtfs().noChatReportsOtf != null)
+			WURST.getOtfs().noChatReportsOtf.refresh();
 	}
 	
 	@Override
@@ -85,6 +143,20 @@ public final class VanillaSpoofOtf extends OtherFeature
 			return;
 		}
 		
+		// Fabric swaps the client's list of trusted data packs for one that
+		// includes every mod's pack (KnownPacksManagerMixin), so a server
+		// that offers e.g. a Fabric API pack gets told we have it. Claim
+		// only what vanilla's own trusted list contains.
+		if(event.getPacket() instanceof ServerboundSelectKnownPacks known)
+		{
+			List<KnownPack> vanillaOnly = known.knownPacks().stream()
+				.filter(this::isVanillaKnownPack).toList();
+			if(vanillaOnly.size() != known.knownPacks().size())
+				event.setPacket(new ServerboundSelectKnownPacks(vanillaOnly));
+			
+			return;
+		}
+		
 		// Vanilla answers every login query with "not understood" (no
 		// payload). Rewritten rather than cancelled, so whatever Fabric
 		// waits on after sending the answer still runs.
@@ -93,6 +165,47 @@ public final class VanillaSpoofOtf extends OtherFeature
 			&& answer.payload() != null)
 			event.setPacket(new ServerboundCustomQueryAnswerPacket(
 				answer.transactionId(), null));
+	}
+	
+	private boolean isVanillaKnownPack(KnownPack pack)
+	{
+		if(vanillaKnownPacks == null)
+			vanillaKnownPacks = loadVanillaKnownPacks();
+		
+		if(vanillaKnownPacks != null)
+			return vanillaKnownPacks.contains(pack);
+			
+		// Fallback if vanilla's list couldn't be built: Fabric files mod
+		// packs under the "minecraft" namespace too, but with the mod's
+		// version instead of the game's.
+		return pack.isVanilla()
+			&& pack.version().equals(SharedConstants.getCurrentVersion().id());
+	}
+	
+	/**
+	 * The same list vanilla's {@code KnownPacksManager} starts from, before
+	 * Fabric redirects it to the modded one.
+	 */
+	private static Set<KnownPack> loadVanillaKnownPacks()
+	{
+		try
+		{
+			PackRepository repo =
+				ServerPacksSource.createVanillaTrustedRepository();
+			repo.reload();
+			
+			Set<KnownPack> packs = new HashSet<>();
+			for(Pack pack : repo.getAvailablePacks())
+				pack.location().knownPackInfo().ifPresent(packs::add);
+			
+			return packs;
+			
+		}catch(RuntimeException e)
+		{
+			System.err.println("[VanillaSpoof] Couldn't list vanilla packs");
+			e.printStackTrace();
+			return null;
+		}
 	}
 	
 	/**

@@ -137,7 +137,21 @@ public final class NoChatReportsOtf extends OtherFeature
 	
 	public boolean isActive()
 	{
+		// VanillaSpoof's "Sign chat like vanilla" outranks this: a vanilla
+		// client never joins without a chat key or sends unsigned chat.
+		if(WURST.getOtfs().vanillaSpoofOtf.shouldSignChat())
+			return false;
+		
 		return isEnabled() && WURST.isEnabled() && !MC.isLocalServer();
+	}
+	
+	/**
+	 * Re-applies signing (or not) to the current connection, e.g. after
+	 * VanillaSpoof's settings changed.
+	 */
+	public void refresh()
+	{
+		EVENTS.add(UpdateListener.class, this);
 	}
 	
 	@Override

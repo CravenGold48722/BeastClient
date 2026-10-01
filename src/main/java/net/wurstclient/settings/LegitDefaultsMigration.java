@@ -10,79 +10,59 @@ package net.wurstclient.settings;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.function.Function;
 
-import net.wurstclient.hack.Hack;
-import net.wurstclient.hack.HackList;
+import net.wurstclient.Feature;
 
 /**
- * One-time move of existing installs onto the "actually do it" defaults.
+ * One-time moves of existing installs onto new defaults.
  *
  * <p>
  * settings.json stores every setting, defaults included, so changing a
- * default in code never reaches anyone who has run the client before. This
- * moves each listed setting to its new default, but only if it still holds
- * the old default - a value the user picked on purpose is left alone.
+ * default in code never reaches anyone who has run the client before. Each
+ * batch moves its listed settings to their new defaults once, but only if
+ * they still hold the old default - a value the user picked on purpose is
+ * left alone. A batch is marked as done with an empty file named after it.
  */
 public enum LegitDefaultsMigration
 {
 	;
 	
-	private static final String MARKER_FILE = "legit-defaults-v1";
+	/** Feature name, setting name, old default that gets replaced. */
+	private static final Batch[] BATCHES = {
+		// do things for real instead of faking packets
+		new Batch("legit-defaults-v1",
+			new String[][]{{"AnchorAura", "Face target", "Off"},
+				{"CrystalAura", "Face target", "Off"},
+				{"AutoBuild", "Face target", "Server-side"},
+				{"AutoBuild", "Swing hand", "Server-side"},
+				{"AutoLibrarian", "Face target", "Server-side"},
+				{"AutoLibrarian", "Swing hand", "Server-side"},
+				{"BuildRandom", "Face target", "Server-side"},
+				{"BuildRandom", "Swing hand", "Server-side"},
+				{"BonemealAura", "Face target", "Server-side"},
+				{"AutoFarm", "Face target", "Server-side"},
+				{"AutoFarm", "Swing hand", "Server-side"},
+				{"TreeBot", "Face target", "Server-side"},
+				{"TreeBot", "Swing hand", "Server-side"},
+				{"VeinMiner", "Swing hand", "Server-side"},
+				{"Nuker", "Swing hand", "Server-side"},
+				{"SpeedNuker", "Swing hand", "Off"},
+				{"Criticals", "Mode", "Packet"},
+				{"FastBreak", "Legit mode", "false"},
+				{"BowAimbot", "Silent aim", "true"},
+				{"ExtraElytra", "Stop flying in water", "true"},
+				{"Step", "Mode", "Legit"}, {"Excavator", "Mode", "Fast"}}),
+		
+		// Spoof Vanilla on by default
+		new Batch("legit-defaults-v2",
+			new String[][]{{"VanillaSpoof", "Spoof Vanilla", "false"}})};
 	
-	/** Hack name, setting name, old default that gets replaced. */
-	private static final String[][] OLD_DEFAULTS = {
-		{"AnchorAura", "Face target", "Off"},
-		{"CrystalAura", "Face target", "Off"},
-		{"AutoBuild", "Face target", "Server-side"},
-		{"AutoBuild", "Swing hand", "Server-side"},
-		{"AutoLibrarian", "Face target", "Server-side"},
-		{"AutoLibrarian", "Swing hand", "Server-side"},
-		{"BuildRandom", "Face target", "Server-side"},
-		{"BuildRandom", "Swing hand", "Server-side"},
-		{"BonemealAura", "Face target", "Server-side"},
-		{"AutoFarm", "Face target", "Server-side"},
-		{"AutoFarm", "Swing hand", "Server-side"},
-		{"TreeBot", "Face target", "Server-side"},
-		{"TreeBot", "Swing hand", "Server-side"},
-		{"VeinMiner", "Swing hand", "Server-side"},
-		{"Nuker", "Swing hand", "Server-side"},
-		{"SpeedNuker", "Swing hand", "Off"}, {"Criticals", "Mode", "Packet"},
-		{"FastBreak", "Legit mode", "false"},
-		{"BowAimbot", "Silent aim", "true"},
-		{"ExtraElytra", "Stop flying in water", "true"},
-		{"Step", "Mode", "Legit"}, {"Excavator", "Mode", "Fast"}};
-	
-	public static void run(Path wurstFolder, HackList hax)
+	public static void run(Path wurstFolder,
+		Function<String, Feature> featureByName)
 	{
-		Path marker = wurstFolder.resolve(MARKER_FILE);
-		if(Files.exists(marker))
-			return;
-		
-		for(String[] entry : OLD_DEFAULTS)
-		{
-			Hack hack = hax.getHackByName(entry[0]);
-			if(hack == null)
-				continue;
-			
-			Setting setting = hack.getSettings().get(entry[1].toLowerCase());
-			if(setting == null)
-				continue;
-			
-			if(!setting.toJson().getAsString().equalsIgnoreCase(entry[2]))
-				continue;
-			
-			resetToDefault(setting);
-		}
-		
-		try
-		{
-			Files.createFile(marker);
-			
-		}catch(IOException e)
-		{
-			System.out.println("Couldn't create " + marker);
-			e.printStackTrace();
-		}
+		for(Batch batch : BATCHES)
+			batch.run(wurstFolder, featureByName);
 	}
 	
 	private static void resetToDefault(Setting setting)
@@ -92,5 +72,43 @@ public enum LegitDefaultsMigration
 				.setSelected(enumSetting.getDefaultSelected().toString());
 		else if(setting instanceof CheckboxSetting checkbox)
 			checkbox.setChecked(checkbox.isCheckedByDefault());
+	}
+	
+	private record Batch(String markerFile, String[][] oldDefaults)
+	{
+		private void run(Path wurstFolder,
+			Function<String, Feature> featureByName)
+		{
+			Path marker = wurstFolder.resolve(markerFile);
+			if(Files.exists(marker))
+				return;
+			
+			for(String[] entry : oldDefaults)
+			{
+				Feature feature = featureByName.apply(entry[0]);
+				if(feature == null)
+					continue;
+				
+				Setting setting =
+					feature.getSettings().get(entry[1].toLowerCase());
+				if(setting == null)
+					continue;
+				
+				if(!setting.toJson().getAsString().equalsIgnoreCase(entry[2]))
+					continue;
+				
+				resetToDefault(setting);
+			}
+			
+			try
+			{
+				Files.createFile(marker);
+				
+			}catch(IOException e)
+			{
+				System.out.println("Couldn't create " + marker);
+				e.printStackTrace();
+			}
+		}
 	}
 }

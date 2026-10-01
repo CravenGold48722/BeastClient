@@ -199,8 +199,10 @@ public final class AutoEatHack extends Hack implements UpdateListener
 		}
 		
 		// eat food
+		// Hold right-click and let the game start eating, like a player
+		// holding the button. Also calling rightClickItem() every tick sent
+		// a use packet each tick while already eating.
 		MC.options.keyUse.setDown(true);
-		IMC.getInteractionManager().rightClickItem();
 	}
 	
 	private int findBestFoodSlot(int maxPoints)

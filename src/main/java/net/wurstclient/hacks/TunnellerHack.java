@@ -455,9 +455,13 @@ public final class TunnellerHack extends Hack
 		@Override
 		public void run()
 		{
+			// Stop the way a player would: let go of the movement keys and
+			// sneak, rather than zeroing the velocity.
 			MC.options.keyShift.setDown(true);
-			Vec3 velocity = MC.player.getDeltaMovement();
-			MC.player.setDeltaMovement(0, velocity.y, 0);
+			MC.options.keyUp.setDown(false);
+			MC.options.keyDown.setDown(false);
+			MC.options.keyLeft.setDown(false);
+			MC.options.keyRight.setDown(false);
 			
 			Vec3 eyes = RotationUtils.getEyesPos().add(-0.5, -0.5, -0.5);
 			Comparator<BlockPos> comparator =
@@ -615,14 +619,13 @@ public final class TunnellerHack extends Hack
 				WURST.getRotationFaker()
 					.faceVectorClientIgnorePitch(toVec3d(pos2));
 				forward.setDown(true);
-				MC.player.setSprinting(true);
+				KeyPresser.press(MC.options.keySprint);
 				return;
 			}
 			
 			BlockPos pos3 = start.relative(direction, length + 1);
 			WURST.getRotationFaker().faceVectorClientIgnorePitch(toVec3d(pos3));
 			forward.setDown(false);
-			MC.player.setSprinting(false);
 			
 			if(disableTimer > 0)
 			{

@@ -107,8 +107,10 @@ public final class AutoSoupHack extends Hack implements UpdateListener
 			MC.player.getInventory().setSelectedSlot(soupInHotbar);
 			
 			// eat soup
+			// Hold right-click and let the game start eating, like a player
+			// holding the button. Also calling rightClickItem() every tick sent
+			// a use packet each tick while already eating.
 			MC.options.keyUse.setDown(true);
-			IMC.getInteractionManager().rightClickItem();
 			
 			return;
 		}

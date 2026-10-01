@@ -28,6 +28,7 @@ import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.DontSaveState;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.KeyPresser;
 import net.wurstclient.settings.AttackSpeedSliderSetting;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.PauseAttackOnContainersSetting;
@@ -245,11 +246,11 @@ public final class ProtectHack extends Hack
 		{
 			// jump if necessary
 			if(MC.player.horizontalCollision && MC.player.onGround())
-				MC.player.jumpFromGround();
+				KeyPresser.press(MC.options.keyJump);
 			
 			// swim up if necessary
 			if(MC.player.isInWater() && MC.player.getY() < target.getY())
-				MC.player.push(0, 0.04, 0);
+				KeyPresser.press(MC.options.keyJump);
 			
 			// control height if flying
 			if(!MC.player.onGround()

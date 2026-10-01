@@ -39,6 +39,7 @@ import net.wurstclient.Category;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.KeyPresser;
 import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.settings.AimAtSetting;
 import net.wurstclient.settings.CheckboxSetting;
@@ -696,15 +697,15 @@ public final class AimAssistHack extends Hack
 			}
 			if(cooldown >= 1.0F && inComboRange)
 			{
-				MC.player.setSprinting(true);
+				KeyPresser.press(MC.options.keySprint);
 				holdForward();
-				MC.player.setSprinting(true);
+				KeyPresser.press(MC.options.keySprint);
 				if(auraFarming.isChecked())
 				{
 					if(MC.player.onGround() && !MC.player.isInWater()
 						&& !MC.player.isInLava() && !MC.player.isPassenger())
 					{
-						MC.player.jumpFromGround();
+						KeyPresser.press(MC.options.keyJump);
 						comboPhase = ComboPhase.JUMPED;
 					}
 				}else if(attackTarget())
@@ -729,9 +730,9 @@ public final class AimAssistHack extends Hack
 				break;
 			}
 			// Stay sprinting forward through the whole airborne phase.
-			MC.player.setSprinting(true);
+			KeyPresser.press(MC.options.keySprint);
 			holdForward();
-			MC.player.setSprinting(true);
+			KeyPresser.press(MC.options.keySprint);
 			if(cooldown >= 1.0F && !MC.player.onGround()
 				&& !MC.player.isInWater() && !MC.player.isInLava())
 			{
@@ -739,7 +740,7 @@ public final class AimAssistHack extends Hack
 				
 				if(readyToHit)
 				{
-					MC.player.setSprinting(true);
+					KeyPresser.press(MC.options.keySprint);
 					if(attackTarget())
 					{
 						comboHitCount++;
@@ -761,10 +762,9 @@ public final class AimAssistHack extends Hack
 			// Hold backward briefly to reset the sprint state. The forward
 			// key was already released in the JUMPED case at the moment of
 			// the hit; this is the s-tap that follows that w-release.
-			MC.player.setSprinting(false);
 			WURST.getHax().autoSprintHack.setEnabled(false);
 			holdBackward();
-			MC.player.setSprinting(true);
+			KeyPresser.press(MC.options.keySprint);
 			WURST.getHax().autoSprintHack.setEnabled(true);
 			if(--stapTicksLeft <= 0)
 			{
@@ -1159,19 +1159,18 @@ public final class AimAssistHack extends Hack
 			if(distSq > FAR_THRESHOLD_SQ)
 			{
 				releaseBackward();
-				MC.player.setSprinting(true);
+				KeyPresser.press(MC.options.keySprint);
 				holdForward();
-				MC.player.setSprinting(true);
+				KeyPresser.press(MC.options.keySprint);
 			}else if(distSq < CLOSE_THRESHOLD_SQ)
 			{
 				releaseForward();
-				MC.player.setSprinting(false);
 				holdBackward();
 			}else
 			{
 				releaseForward();
 				releaseBackward();
-				MC.player.setSprinting(true);
+				KeyPresser.press(MC.options.keySprint);
 				return;
 			}
 			return;

@@ -10,6 +10,8 @@ package net.wurstclient.util;
 import java.util.List;
 import java.util.StringJoiner;
 
+import org.apache.commons.lang3.StringUtils;
+
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.ChatComponent;
 import net.minecraft.client.multiplayer.chat.GuiMessage;
@@ -18,6 +20,7 @@ import net.minecraft.network.chat.FormattedText;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
 import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.util.StringUtil;
 import net.wurstclient.WurstClient;
 
 public enum ChatUtils
@@ -78,6 +81,31 @@ public enum ChatUtils
 			.withStyle(style -> style.withColor(BeastColors.BRACKET_GRAY)));
 		
 		return prefix;
+	}
+	
+	/**
+	 * Sends a chat message or a /command exactly the way typing it into the
+	 * chat box and pressing Enter does: same clean-up of the text, added to
+	 * the up-arrow history, then sent as a command or as a chat message.
+	 *
+	 * <p>
+	 * Doesn't fire Wurst's own ChatOutputEvent, so hacks that rewrite your
+	 * outgoing chat (e.g. ChatTranslator) can use it without looping.
+	 */
+	public static void sendAsPlayer(String message)
+	{
+		// ChatScreen.normalizeChatMessage()
+		message = StringUtil
+			.trimChatMessage(StringUtils.normalizeSpace(message.trim()));
+		if(message.isEmpty())
+			return;
+		
+		MC.gui.getChat().addRecentChat(message);
+		
+		if(message.startsWith("/"))
+			MC.player.connection.sendCommand(message.substring(1));
+		else
+			MC.player.connection.sendChat(message);
 	}
 	
 	public static void component(Component component)

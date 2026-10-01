@@ -120,6 +120,6 @@ public final class AnnoyCmd extends Command implements ChatInputListener
 		if(rcMode.isChecked() && repeated.startsWith("."))
 			WURST.getCmdProcessor().process(repeated.substring(1));
 		else
-			MC.getConnection().sendChat(repeated);
+			ChatUtils.sendAsPlayer(repeated);
 	}
 }

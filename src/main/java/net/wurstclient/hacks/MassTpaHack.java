@@ -132,7 +132,7 @@ public final class MassTpaHack extends Hack
 			return;
 		}
 		
-		MC.getConnection().sendCommand(command + " " + players.get(index));
+		ChatUtils.sendAsPlayer("/" + command + " " + players.get(index));
 		
 		index++;
 		timer = delay.getValueI() - 1;

@@ -11,6 +11,7 @@ import net.minecraft.world.phys.AABB;
 import net.wurstclient.Category;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.KeyPresser;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
@@ -74,6 +75,6 @@ public final class ParkourHack extends Hack implements UpdateListener
 		if(!MC.level.noCollision(MC.player, adjustedBox))
 			return;
 		
-		MC.player.jumpFromGround();
+		KeyPresser.press(MC.options.keyJump);
 	}
 }

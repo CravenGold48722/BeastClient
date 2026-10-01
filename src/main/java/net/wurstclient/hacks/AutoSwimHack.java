@@ -12,6 +12,7 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.KeyPresser;
 
 @SearchTags({"auto swim"})
 public final class AutoSwimHack extends Hack implements UpdateListener
@@ -46,6 +47,6 @@ public final class AutoSwimHack extends Hack implements UpdateListener
 			return;
 		
 		if(player.zza > 0)
-			player.setSprinting(true);
+			KeyPresser.press(MC.options.keySprint);
 	}
 }

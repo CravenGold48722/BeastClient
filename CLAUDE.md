@@ -278,7 +278,38 @@ Keybinds map a key name to a command string (`KeybindProcessor` → `CmdProcesso
   `ColorUtils`, `RegionPos`, `FakePlayerEntity`, `OverlayRenderer`, `util/json` (`JsonUtils`,
   `WsonObject`, `JsonException`), `util/text` (`WText`), `util/chunk`.
 - `ai/` — `PathFinder` + `WalkPathProcessor`/`FlyPathProcessor` power `.goto`, Tunneller, TreeBot,
-  FightBot, Follow.
+  FightBot, Follow. `PathProcessor.setCreativeFlying(bool)` toggles creative flight *with* the
+  abilities packet (never assign `abilities.flying` alone).
+
+## Do it for real, don't fake it (user requirement, 2026-09-30)
+
+The user wants every action that doesn't inherently need a fake packet done the way a player
+does it. When writing or touching a hack:
+
+- **Jump / sprint / swim up / sneak:** `KeyPresser.press(MC.options.keyJump)` (or `keySprint`,
+  `keyShift`), never `jumpFromGround()`, `setSprinting(true)`, `push(0, 0.04, 0)` or velocity
+  edits. Since 1.21.2 the client sends `ServerboundPlayerInputPacket` with the held keys, so a jump
+  without the key pressed is visible to anti-cheats. `KeyPresser` holds the key for N reads of
+  `KeyboardInput.tick()` (hooked by `KeyboardInputMixin`) and then restores the physical state;
+  it uses `IKeyMapping.setDownIgnoringToggle()` so Toggle Sprint/Sneak keys don't flip.
+  Only movement cheats that can't be done with keys (Flight, Jetpack, Speed, NoClip…) keep velocity
+  edits.
+- **Rotations:** `FaceTargetSetting` defaults to `CLIENT` everywhere; hard-coded
+  `faceVectorPacket`/`sendPlayerLookPacket` is only allowed behind a user-selected option. With
+  CLIENT/SERVER, act on one target per tick (`canFaceMultipleTargetsPerTick()`).
+- **Swings / clicks:** `SwingHand.CLIENT`; use `InteractionSimulator.rightClickBlock/rightClickItem`
+  (swings only when vanilla would). `IMultiPlayerGameMode.rightClickBlock` no longer sends a stray
+  UseItem after a successful block click. Hold `keyUse` for eating instead of re-sending UseItem.
+- **Inventory:** `windowClick_*` automatically opens the real `InventoryScreen` first via
+  `InventoryOpener` (only when no screen is open, not in creative) and closes it with `onClose()`
+  3 idle ticks later, which sends the container-close packet.
+- **Hotbar slot:** after `setSelectedSlot`, sync with `IMC.getInteractionManager().syncSelectedSlot()`
+  (vanilla's `ensureHasSentCarriedItem`), never a hand-built `ServerboundSetCarriedItemPacket`.
+- **Chat / server commands:** `ChatUtils.sendAsPlayer("/cmd …")` — same normalisation and chat
+  history as typing it; doesn't fire `ChatOutputEvent`, so it can't loop.
+- **Changing a default:** `settings.json` stores defaults too, so add an entry to
+  `settings/LegitDefaultsMigration` (bump the marker name for a new batch). It only moves settings
+  still on the old default.
 
 ## Beast-specific parts of the fork
 

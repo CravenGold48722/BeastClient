@@ -172,7 +172,7 @@ public final class ForceOpHack extends Hack implements ChatInputListener
 			return;
 		}
 		
-		MC.getConnection().sendCommand("login " + MC.getUser().getName());
+		ChatUtils.sendAsPlayer("/login " + MC.getUser().getName());
 		lastPW = 0;
 		sendIndexToDialog();
 		
@@ -202,7 +202,7 @@ public final class ForceOpHack extends Hack implements ChatInputListener
 			while(!sent)
 				try
 				{
-					MC.getConnection().sendCommand("login " + passwords[i]);
+					ChatUtils.sendAsPlayer("/login " + passwords[i]);
 					sent = true;
 					
 				}catch(Exception e)

@@ -11,6 +11,7 @@ import net.wurstclient.SearchTags;
 import net.wurstclient.command.CmdException;
 import net.wurstclient.command.CmdSyntaxError;
 import net.wurstclient.command.Command;
+import net.wurstclient.util.ChatUtils;
 
 @SearchTags({".legit", "dots in chat", "command bypass", "prefix"})
 public final class SayCmd extends Command
@@ -29,9 +30,6 @@ public final class SayCmd extends Command
 			throw new CmdSyntaxError();
 		
 		String message = String.join(" ", args);
-		if(message.startsWith("/"))
-			MC.getConnection().sendCommand(message.substring(1));
-		else
-			MC.getConnection().sendChat(message);
+		ChatUtils.sendAsPlayer(message);
 	}
 }

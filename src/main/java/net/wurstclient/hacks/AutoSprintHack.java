@@ -7,12 +7,12 @@
  */
 package net.wurstclient.hacks;
 
-import net.minecraft.client.player.LocalPlayer;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.settings.CheckboxSetting;
+import net.wurstclient.util.KeyPresser;
 
 @SearchTags({"auto sprint"})
 public final class AutoSprintHack extends Hack implements UpdateListener
@@ -48,21 +48,12 @@ public final class AutoSprintHack extends Hack implements UpdateListener
 	@Override
 	public void onUpdate()
 	{
-		LocalPlayer player = MC.player;
-		player.setSprinting(true);
-		if(player.horizontalCollision || player.isShiftKeyDown())
-			return;
-		
-		if(player.isInWater() || player.isUnderWater())
-			return;
-		
-		if(!allDirections.isChecked() && player.zza <= 0)
-			return;
-		
-		if(player.input.getMoveVector().length() <= 1e-5F)
-			return;
-		
-		player.setSprinting(true);
+		// Hold the real sprint key, like a player with Toggle Sprint on.
+		// Vanilla decides when a sprint can start or has to stop (and sends
+		// the matching input), instead of us forcing setSprinting(true).
+		// Omnidirectional and Hungry Sprint work by loosening those vanilla
+		// checks in LocalPlayerMixin, so they still apply.
+		KeyPresser.press(MC.options.keySprint);
 	}
 	
 	public boolean shouldOmniSprint()

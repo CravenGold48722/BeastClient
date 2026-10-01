@@ -16,6 +16,7 @@ import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.settings.CheckboxSetting;
+import net.wurstclient.util.KeyPresser;
 
 @SearchTags({"EasyElytra", "extra elytra", "easy elytra"})
 public final class ExtraElytraHack extends Hack implements UpdateListener
@@ -42,8 +43,6 @@ public final class ExtraElytraHack extends Hack implements UpdateListener
 				+ " does.",
 			false);
 	
-	private int jumpTimer;
-	
 	public ExtraElytraHack()
 	{
 		super("ExtraElytra");
@@ -58,7 +57,6 @@ public final class ExtraElytraHack extends Hack implements UpdateListener
 	protected void onEnable()
 	{
 		EVENTS.add(UpdateListener.class, this);
-		jumpTimer = 0;
 	}
 	
 	@Override
@@ -70,9 +68,6 @@ public final class ExtraElytraHack extends Hack implements UpdateListener
 	@Override
 	public void onUpdate()
 	{
-		if(jumpTimer > 0)
-			jumpTimer--;
-		
 		if(!MC.player.canGlide())
 			return;
 		
@@ -141,13 +136,12 @@ public final class ExtraElytraHack extends Hack implements UpdateListener
 	{
 		if(!instantFly.isChecked())
 			return;
-		
-		if(jumpTimer <= 0 && MC.player.onGround())
+			
+		// On the ground, the jump key you're holding already makes vanilla
+		// jump. Just add a real sprint press for the running start.
+		if(MC.player.onGround())
 		{
-			jumpTimer = 20;
-			MC.player.setJumping(false);
-			MC.player.setSprinting(true);
-			MC.player.jumpFromGround();
+			KeyPresser.press(MC.options.keySprint);
 			return;
 		}
 		

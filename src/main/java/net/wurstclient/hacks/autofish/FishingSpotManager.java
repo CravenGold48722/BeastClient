@@ -23,6 +23,7 @@ import net.wurstclient.settings.Setting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.util.ChatUtils;
+import net.wurstclient.util.KeyPresser;
 import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
 
@@ -155,10 +156,13 @@ public final class FishingSpotManager
 			jumpKey.setDown(
 				MC.player.isInWater() || MC.player.horizontalCollision);
 			
-			// walk or teleport depending on distance
+			// walk, or sneak-walk the last bit for precision (this used to
+			// teleport the player onto the spot)
 			if(distance < 0.2)
-				MC.player.setPos(nextPos.x, nextPos.y, nextPos.z);
-			else if(distance > 0.7 || MC.player.tickCount % 10 == 0)
+			{
+				KeyPresser.press(MC.options.keyShift);
+				forwardKey.setDown(true);
+			}else if(distance > 0.7 || MC.player.tickCount % 10 == 0)
 				forwardKey.setDown(true);
 			return;
 		}

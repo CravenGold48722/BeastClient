@@ -23,6 +23,7 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.KeyPresser;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.ChatUtils;
 import net.wurstclient.util.InteractionSimulator;
@@ -87,7 +88,7 @@ public final class InstantBunkerHack extends Hack implements UpdateListener
 				.relative(facing2, pos[0]));
 		
 		startTimer = 2;
-		MC.player.jumpFromGround();
+		KeyPresser.press(MC.options.keyJump);
 		
 		EVENTS.add(UpdateListener.class, this);
 	}

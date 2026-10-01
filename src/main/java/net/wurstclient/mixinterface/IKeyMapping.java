@@ -44,6 +44,16 @@ public interface IKeyMapping
 		asVanilla().setDown(down);
 	}
 	
+	/**
+	 * Sets the pressed state directly. Unlike {@link #setDown(boolean)}, this
+	 * doesn't flip toggle-mode keys (Toggle Sprint / Toggle Sneak) every time
+	 * it's called.
+	 */
+	public default void setDownIgnoringToggle(boolean down)
+	{
+		wurst_setDownIgnoringToggle(down);
+	}
+	
 	public default KeyMapping asVanilla()
 	{
 		return (KeyMapping)this;
@@ -75,4 +85,10 @@ public interface IKeyMapping
 	 */
 	@Deprecated
 	public void wurst_simulatePress(boolean pressed);
+	
+	/**
+	 * @deprecated Use {@link #setDownIgnoringToggle(boolean)} instead.
+	 */
+	@Deprecated
+	public void wurst_setDownIgnoringToggle(boolean down);
 }

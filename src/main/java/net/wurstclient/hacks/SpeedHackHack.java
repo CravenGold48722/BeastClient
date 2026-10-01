@@ -12,6 +12,7 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.KeyPresser;
 
 @SearchTags({"speed hack"})
 public final class SpeedHackHack extends Hack implements UpdateListener
@@ -44,7 +45,7 @@ public final class SpeedHackHack extends Hack implements UpdateListener
 		
 		// activate sprint if walking forward
 		if(MC.player.zza > 0 && !MC.player.horizontalCollision)
-			MC.player.setSprinting(true);
+			KeyPresser.press(MC.options.keySprint);
 		
 		// activate mini jump if on ground
 		if(!MC.player.onGround())

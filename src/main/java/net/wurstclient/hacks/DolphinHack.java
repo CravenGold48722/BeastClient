@@ -8,11 +8,11 @@
 package net.wurstclient.hacks;
 
 import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.KeyPresser;
 
 @SearchTags({"AutoSwim", "auto swim"})
 public final class DolphinHack extends Hack implements UpdateListener
@@ -42,8 +42,9 @@ public final class DolphinHack extends Hack implements UpdateListener
 		LocalPlayer player = MC.player;
 		if(!player.isInWater() || player.isShiftKeyDown())
 			return;
-		
-		Vec3 velocity = player.getDeltaMovement();
-		player.setDeltaMovement(velocity.x, velocity.y + 0.04, velocity.z);
+			
+		// Hold the jump key - in water, that's exactly how vanilla swims up
+		// (the same +0.04 per tick), and the input packet matches.
+		KeyPresser.press(MC.options.keyJump);
 	}
 }

@@ -15,6 +15,7 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.PlayerAttacksEntityListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.KeyPresser;
 import net.wurstclient.settings.EnumSetting;
 
 @SearchTags({"Crits"})
@@ -108,7 +109,7 @@ public final class CriticalsHack extends Hack
 	
 	private void doFullJump()
 	{
-		MC.player.jumpFromGround();
+		KeyPresser.press(MC.options.keyJump);
 	}
 	
 	private enum Mode

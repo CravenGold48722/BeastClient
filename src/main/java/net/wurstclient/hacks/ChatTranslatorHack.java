@@ -144,6 +144,6 @@ public final class ChatTranslatorHack extends Hack
 		if(translated == null)
 			translated = message;
 		
-		MC.getConnection().sendChat(translated);
+		ChatUtils.sendAsPlayer(translated);
 	}
 }

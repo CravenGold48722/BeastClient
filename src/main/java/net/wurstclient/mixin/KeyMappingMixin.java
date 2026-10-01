@@ -28,6 +28,9 @@ public abstract class KeyMappingMixin implements IKeyMapping
 	@Shadow
 	private InputConstants.Key key;
 	
+	@Shadow
+	private boolean isDown;
+	
 	@Override
 	@Unique
 	@Deprecated // use IKeyMapping.isActuallyDown() instead
@@ -80,6 +83,14 @@ public abstract class KeyMappingMixin implements IKeyMapping
 			System.out.println("Unknown key mapping type: " + key.getType());
 			break;
 		}
+	}
+	
+	@Override
+	@Unique
+	@Deprecated // use IKeyMapping.setDownIgnoringToggle() instead
+	public void wurst_setDownIgnoringToggle(boolean down)
+	{
+		isDown = down;
 	}
 	
 	@Override

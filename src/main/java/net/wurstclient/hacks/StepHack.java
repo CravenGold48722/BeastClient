@@ -14,6 +14,7 @@ import net.minecraft.world.phys.AABB;
 import net.wurstclient.Category;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.KeyPresser;
 import net.wurstclient.settings.EnumSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
@@ -87,7 +88,7 @@ public final class StepHack extends Hack implements UpdateListener
 		// a real jump: the server sees the same arc it would from a player
 		if(mode.getSelected() == Mode.JUMP)
 		{
-			player.jumpFromGround();
+			KeyPresser.press(MC.options.keyJump);
 			return;
 		}
 		

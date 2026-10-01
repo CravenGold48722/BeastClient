@@ -11,6 +11,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.wurstclient.command.CmdException;
 import net.wurstclient.command.CmdSyntaxError;
 import net.wurstclient.command.Command;
+import net.wurstclient.util.ChatUtils;
 
 public final class LeaveCmd extends Command
 {
@@ -24,7 +25,7 @@ public final class LeaveCmd extends Command
 	{
 		if(args.length == 1 && args[0].equalsIgnoreCase("taco"))
 			for(int i = 0; i < 128; i++)
-				MC.getConnection().sendChat("Taco!");
+				ChatUtils.sendAsPlayer("Taco!");
 		else if(args.length != 0)
 			throw new CmdSyntaxError();
 		

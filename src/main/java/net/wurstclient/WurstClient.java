@@ -77,6 +77,7 @@ public enum WurstClient
 	private CmdProcessor cmdProcessor;
 	private IngameHUD hud;
 	private RotationFaker rotationFaker;
+	private InventoryOpener inventoryOpener;
 	private FriendsList friends;
 	private WurstTranslator translator;
 	
@@ -163,6 +164,9 @@ public enum WurstClient
 		rotationFaker = new RotationFaker();
 		eventManager.add(PreMotionListener.class, rotationFaker);
 		eventManager.add(PostMotionListener.class, rotationFaker);
+		
+		inventoryOpener = new InventoryOpener();
+		eventManager.add(UpdateListener.class, inventoryOpener);
 		
 		updater = new WurstUpdater();
 		eventManager.add(UpdateListener.class, updater);
@@ -304,6 +308,11 @@ public enum WurstClient
 	public RotationFaker getRotationFaker()
 	{
 		return rotationFaker;
+	}
+	
+	public InventoryOpener getInventoryOpener()
+	{
+		return inventoryOpener;
 	}
 	
 	public FriendsList getFriends()

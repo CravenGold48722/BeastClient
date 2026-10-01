@@ -10,6 +10,7 @@ package net.wurstclient.mixin;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -37,6 +38,7 @@ import net.wurstclient.event.EventManager;
 import net.wurstclient.events.BlockBreakingProgressListener.BlockBreakingProgressEvent;
 import net.wurstclient.events.PlayerAttacksEntityListener.PlayerAttacksEntityEvent;
 import net.wurstclient.events.StopUsingItemListener.StopUsingItemEvent;
+import net.wurstclient.WurstClient;
 import net.wurstclient.hacks.AutoTotemHack;
 import net.wurstclient.mixinterface.IMultiPlayerGameMode;
 
@@ -126,6 +128,7 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	@Override
 	public void windowClick_PICKUP(int slot)
 	{
+		openInventoryFirst();
 		handleContainerInput(0, slot, 0, ContainerInput.PICKUP,
 			minecraft.player);
 	}
@@ -133,6 +136,7 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	@Override
 	public void windowClick_QUICK_MOVE(int slot)
 	{
+		openInventoryFirst();
 		handleContainerInput(0, slot, 0, ContainerInput.QUICK_MOVE,
 			minecraft.player);
 	}
@@ -140,6 +144,7 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	@Override
 	public void windowClick_THROW(int slot)
 	{
+		openInventoryFirst();
 		handleContainerInput(0, slot, 1, ContainerInput.THROW,
 			minecraft.player);
 	}
@@ -147,8 +152,19 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	@Override
 	public void windowClick_SWAP(int from, int to)
 	{
+		openInventoryFirst();
 		handleContainerInput(0, from, to, ContainerInput.SWAP,
 			minecraft.player);
+	}
+	
+	/**
+	 * Opens the real inventory screen if nothing is open, like pressing E
+	 * before clicking, instead of clicking slots with the inventory closed.
+	 */
+	@Unique
+	private void openInventoryFirst()
+	{
+		WurstClient.INSTANCE.getInventoryOpener().beforeInventoryClick();
 	}
 	
 	@Override

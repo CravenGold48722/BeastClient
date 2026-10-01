@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.player.Abilities;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.WurstClient;
 import net.wurstclient.mixinterface.IKeyMapping;
@@ -63,14 +64,30 @@ public abstract class PathProcessor
 			.faceVectorClientIgnorePitch(Vec3.atCenterOf(pos));
 	}
 	
+	/**
+	 * Starts or stops creative flight the way double-tapping jump does:
+	 * flips the flag and tells the server through vanilla's own abilities
+	 * update. Setting the flag alone left the server thinking you were still
+	 * (or not yet) flying.
+	 */
+	public static final void setCreativeFlying(boolean flying)
+	{
+		Abilities abilities = MC.player.getAbilities();
+		if(abilities.flying == flying || flying && !abilities.mayfly)
+			return;
+		
+		abilities.flying = flying;
+		MC.player.onUpdateAbilities();
+	}
+	
 	public static final void lockControls()
 	{
 		// disable keys
 		for(KeyMapping key : CONTROLS)
 			key.setDown(false);
-		
-		// disable sprinting
-		MC.player.setSprinting(false);
+			
+		// no setSprinting(false) - with the movement keys up, vanilla stops
+		// sprinting on its own, the same way it does for a player
 	}
 	
 	public static final void releaseControls()

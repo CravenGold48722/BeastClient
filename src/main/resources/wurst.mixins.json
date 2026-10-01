@@ -36,6 +36,7 @@
     "ItemInHandRendererMixin",
     "JoinMultiplayerScreenMixin",
     "KeyBindsListMixin",
+    "KeyboardInputMixin",
     "KeyMappingMixin",
     "KeyboardHandlerMixin",
     "LanguageManagerMixin",

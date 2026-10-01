@@ -123,7 +123,7 @@ public final class AntiAfkHack extends Hack
 			return;
 		}
 		
-		MC.player.getAbilities().flying = creativeFlying;
+		PathProcessor.setCreativeFlying(creativeFlying);
 		
 		if(useAi.isChecked())
 		{

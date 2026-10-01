@@ -10,6 +10,7 @@ package net.wurstclient.commands;
 import net.wurstclient.command.CmdException;
 import net.wurstclient.command.CmdSyntaxError;
 import net.wurstclient.command.Command;
+import net.wurstclient.util.ChatUtils;
 
 public final class GmCmd extends Command
 {
@@ -49,6 +50,6 @@ public final class GmCmd extends Command
 		}
 		
 		String message = "gamemode " + args2;
-		MC.getConnection().sendCommand(message);
+		ChatUtils.sendAsPlayer("/" + message);
 	}
 }

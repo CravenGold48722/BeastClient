@@ -304,8 +304,9 @@ does it. When writing or touching a hack:
   checks look for, and float noise otherwise sends a rotation packet every tick.
 - **VanillaSpoof** (on by default): brand -> "vanilla"; drops every other `ServerboundCustomPayloadPacket`
   (Fabric channel lists); login-query answers -> null; known data packs filtered to vanilla's
-  trusted list; sign/anvil text resolved via `withVanillaTranslations` (mod-only keys from
-  `ModTranslationKeys` hidden, mod keybinds raw); "Sign chat like vanilla" suspends NoChatReports.
+  trusted list; sign/anvil text resolved via `withVanillaTranslations` (language rebuilt
+  from non-mod packs by `VanillaLanguage`, fallback `ModTranslationKeys`; mod keybinds raw;
+  covered by gametest `VanillaSpoofTest`); "Sign chat like vanilla" suspends NoChatReports.
   Packet rewrites skip singleplayer. New fingerprint fixes go here.
 - **Background traffic:** Plausible analytics is off by default (config v3) and the upstream
   `WurstUpdater` is not registered — both only phoned upstream Wurst's servers.

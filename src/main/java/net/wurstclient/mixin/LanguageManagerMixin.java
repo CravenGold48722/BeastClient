@@ -16,6 +16,7 @@ import net.minecraft.client.resources.language.LanguageManager;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.wurstclient.WurstClient;
+import net.wurstclient.util.VanillaLanguage;
 
 @Mixin(LanguageManager.class)
 public abstract class LanguageManagerMixin
@@ -29,5 +30,6 @@ public abstract class LanguageManagerMixin
 		// Using a mixin for this because WurstClient.initialize() runs too
 		// early to call ResourceManager.registerReloader()
 		WurstClient.INSTANCE.getTranslator().onResourceManagerReload(manager);
+		VanillaLanguage.invalidate();
 	}
 }

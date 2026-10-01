@@ -55,6 +55,7 @@ public class WurstTest implements FabricClientGameTest
 			"https://i.imgur.com/xSAHDXr.png");
 		
 		AltManagerTest.testAltManagerButton(context);
+		VanillaSpoofTest.testTranslationSpoof(context);
 		
 		LOGGER.info("Creating test world");
 		TestWorldBuilder worldBuilder = context.worldBuilder();

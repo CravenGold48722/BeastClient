@@ -30,6 +30,7 @@ import net.wurstclient.events.ConnectionPacketOutputListener;
 import net.wurstclient.other_feature.OtherFeature;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.util.ModTranslationKeys;
+import net.wurstclient.util.VanillaLanguage;
 
 @DontBlock
 @SearchTags({"vanilla spoof", "AntiFabric", "anti fabric", "LibHatesMods",
@@ -261,10 +262,12 @@ public final class VanillaSpoofOtf extends OtherFeature
 	}
 	
 	/**
-	 * The current language with every mod-only key removed, so those keys
-	 * fall back to the raw key (or the component's fallback text) exactly
-	 * like they would on a vanilla client. Server resource pack translations
-	 * stay, since vanilla clients have those too.
+	 * The current language as vanilla would have it ({@link VanillaLanguage}:
+	 * same resource packs minus the mods'), so mod keys fall back to the raw
+	 * key (or the component's fallback text) and vanilla keys a mod reworded
+	 * show vanilla's text. Server and user resource pack translations stay,
+	 * since vanilla clients have those too. If that can't be built, falls
+	 * back to just hiding mod-only keys.
 	 */
 	private static final class VanillaOnlyLanguage extends Language
 	{
@@ -278,6 +281,12 @@ public final class VanillaSpoofOtf extends OtherFeature
 		@Override
 		public String getOrDefault(String key, String fallback)
 		{
+			// Exact: what vanilla would show with the same resource packs.
+			Language vanilla = VanillaLanguage.get();
+			if(vanilla != null)
+				return vanilla.getOrDefault(key, fallback);
+			
+			// Fallback: just hide the keys only mods provide.
 			if(ModTranslationKeys.isModOnly(key))
 				return fallback;
 			
@@ -287,6 +296,10 @@ public final class VanillaSpoofOtf extends OtherFeature
 		@Override
 		public boolean has(String key)
 		{
+			Language vanilla = VanillaLanguage.get();
+			if(vanilla != null)
+				return vanilla.has(key);
+			
 			return !ModTranslationKeys.isModOnly(key) && real.has(key);
 		}
 		

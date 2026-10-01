@@ -12,7 +12,9 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 import net.fabricmc.loader.api.FabricLoader;
@@ -47,6 +49,14 @@ public enum ModTranslationKeys
 	{
 		load();
 		return modOnlyKeys.contains(key);
+	}
+	
+	/** A key only a mod provides that matches the filter. Used by the tests. */
+	public static synchronized Optional<String> findModOnlyKey(
+		Predicate<String> filter)
+	{
+		load();
+		return modOnlyKeys.stream().filter(filter).findAny();
 	}
 	
 	private static void load()
@@ -89,7 +99,11 @@ public enum ModTranslationKeys
 				try(Stream<Path> files = Files.list(lang))
 				{
 					for(Path file : files.toList())
-						if(file.toString().endsWith(".json"))
+						// deprecated.json is vanilla's list of renamed keys,
+						// not
+						// a translation file
+						if(file.toString().endsWith(".json") && !file
+							.getFileName().toString().equals("deprecated.json"))
 							readKeys(file, keys);
 				}
 			}

@@ -47,6 +47,7 @@ import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.settings.filters.FilterSpeedSetting;
 import net.wurstclient.util.BlockUtils;
+import net.wurstclient.util.Rotation;
 
 /**
  * Port of the "BetterMaceSwap" mod as a single Wurst hack. Everything that mod
@@ -198,9 +199,11 @@ public final class MaceAssistHack extends Hack
 	
 	private final CheckboxSetting humanizeAim = new CheckboxSetting(
 		"Humanize aim",
-		"Adds the warm-up delay, random speed jitter and mouse-like rounding"
-			+ " that BetterMaceSwap used. Turn this off for a snappier, more"
-			+ " obvious aim.",
+		"Adds the warm-up delay, random speed jitter and skipped frames that"
+			+ " BetterMaceSwap used, plus jitter of a mouse count here and"
+			+ " there. Turn this off for a snappier, more obvious aim.\n\n"
+			+ "Either way, every turn is rounded to whole mouse counts of your"
+			+ " real sensitivity, like an actual mouse.",
 		true);
 	
 	private final CheckboxSetting checkLOS = new CheckboxSetting(
@@ -731,23 +734,23 @@ public final class MaceAssistHack extends Hack
 		
 		if(humanize)
 		{
-			// round the steps to a fake mouse sensitivity, the way a real mouse
-			// can only move in whole counts
-			float sens = speed / 100F;
-			float gcd = (float)Math.pow(sens * 0.6, 2) * 0.15F;
-			
-			if(gcd > 0.001F)
-			{
-				yawStep = Math.round(yawStep / gcd) * gcd;
-				pitchStep = Math.round(pitchStep / gcd) * gcd;
-			}
-			
-			yawStep += (float)(Math.random() * 0.02 - 0.01);
-			pitchStep += (float)(Math.random() * 0.015 - 0.0075);
+			// Hand jitter, in whole mouse counts of your real sensitivity:
+			// now and then one count more or less than planned. (This used to
+			// add fractions of a degree after rounding, which put the turn
+			// off any real mouse grid.)
+			double step = Rotation.getMouseStep();
+			if(Math.random() < 0.3)
+				yawStep += (float)(step * (Math.random() < 0.5 ? -1 : 1));
+			if(Math.random() < 0.2)
+				pitchStep += (float)(step * (Math.random() < 0.5 ? -1 : 1));
 		}
 		
-		MC.player.setYRot(currentYaw + yawStep);
-		MC.player.setXRot(Mth.clamp(currentPitch + pitchStep, -90F, 90F));
+		// Both modes turn in whole mouse counts of your real sensitivity, like
+		// an actual mouse (this used to round to a made-up sensitivity based
+		// on Aim speed). Snappy mode stays just as fast - rounding only moves
+		// the result by less than one count.
+		new Rotation(currentYaw + yawStep, currentPitch + pitchStep)
+			.applyToClientPlayer();
 	}
 	
 	private void resetAim()

@@ -299,6 +299,8 @@ does it. When writing or touching a hack:
   is on, so `.jump` from chat fires right after the chat closes.
   Only movement cheats that can't be done with keys (Flight, Jetpack, Speed, NoClip…) keep velocity
   edits.
+- **MaceAssist aim** also rounds to the real mouse step (both Humanize and snappy); humanize jitter is
+  whole mouse counts. KillauraLegit moves via MouseUpdateEvent deltas, so vanilla applies sensitivity.
 - **Mouse-step rotations:** every Wurst-made rotation (client via `Rotation.applyToClientPlayer`,
   silent via `RotationFaker.faceRotationPacket`) is snapped with `Rotation.snapToMouseSteps` to
   multiples of `Rotation.getMouseStep()` (vanilla's sensitivity math). Never call

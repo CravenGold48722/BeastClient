@@ -14,6 +14,7 @@ import org.spongepowered.asm.mixin.Unique;
 
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
@@ -46,22 +47,26 @@ public abstract class ContainerScreenMixin
 		
 		if(!WurstClient.INSTANCE.isEnabled())
 			return;
-		
-		if(autoSteal.areButtonsVisible())
-		{
-			addRenderableWidget(Button
-				.builder(Component.literal("Steal"),
-					b -> autoSteal.steal(this, containerRows))
-				.bounds(leftPos + imageWidth - 108, topPos + 4, 50, 12)
-				.build());
 			
+		// Steal has no button anymore: shift-double-click an empty container
+		// slot instead (see mouseClicked below).
+		if(autoSteal.areButtonsVisible())
 			addRenderableWidget(Button
 				.builder(Component.literal("Store"),
 					b -> autoSteal.store(this, containerRows))
 				.bounds(leftPos + imageWidth - 56, topPos + 4, 50, 12).build());
-		}
 		
 		if(autoSteal.isEnabled())
 			autoSteal.steal(this, containerRows);
+	}
+	
+	@Override
+	public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick)
+	{
+		if(WurstClient.INSTANCE.isEnabled() && autoSteal.onContainerClick(this,
+			hoveredSlot, event, containerRows))
+			return true;
+		
+		return super.mouseClicked(event, doubleClick);
 	}
 }

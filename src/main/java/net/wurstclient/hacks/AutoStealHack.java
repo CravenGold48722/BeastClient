@@ -10,7 +10,9 @@ package net.wurstclient.hacks;
 import java.util.List;
 import java.util.stream.IntStream;
 
+import net.minecraft.util.Util;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.Slot;
 import net.wurstclient.Category;
@@ -29,8 +31,20 @@ public final class AutoStealHack extends Hack
 			+ "Should be at least 70ms for NoCheat+ servers.",
 		100, 0, 500, 10, ValueDisplay.INTEGER.withSuffix("ms"));
 	
-	private final CheckboxSetting buttons =
-		new CheckboxSetting("Steal/Store buttons", true);
+	private final CheckboxSetting buttons = new CheckboxSetting(
+		"Steal/Store buttons",
+		"§lSteal§r: shift-double-click an empty slot in the"
+			+ " container (not in your own inventory) to take everything.\n\n"
+			+ "§lStore§r: the button at the top of the container puts"
+			+ " your inventory in.\n\n"
+			+ "Works whether or not AutoSteal itself is enabled.",
+		true);
+	
+	/** Same window vanilla uses for a double-click. */
+	private static final long DOUBLE_CLICK_MS = 250;
+	
+	private AbstractContainerScreen<?> lastEmptyClickScreen;
+	private long lastEmptyClickTime;
 	
 	private final CheckboxSetting reverseSteal =
 		new CheckboxSetting("Reverse steal order", false);
@@ -100,6 +114,56 @@ public final class AutoStealHack extends Hack
 	public boolean areButtonsVisible()
 	{
 		return buttons.isChecked();
+	}
+	
+	/**
+	 * The steal shortcut: shift-left-click an empty slot of the container
+	 * twice in a row, quickly. Slots of the player's own inventory don't
+	 * count.
+	 *
+	 * <p>
+	 * Every click that matches (shift, left button, empty container slot,
+	 * nothing on the cursor) is swallowed. Vanilla would send a click packet
+	 * for it that does nothing on the server, so this way the shortcut itself
+	 * sends no packets at all.
+	 *
+	 * @param hoveredSlot
+	 *            the slot under the mouse
+	 * @param rows
+	 *            rows of container slots; the player's inventory starts after
+	 * @return {@code true} if the click was used up by the shortcut
+	 */
+	public boolean onContainerClick(AbstractContainerScreen<?> screen,
+		Slot hoveredSlot, MouseButtonEvent event, int rows)
+	{
+		if(!buttons.isChecked())
+			return false;
+		
+		if(event.button() != 0 || !event.hasShiftDown())
+			return false;
+		
+		if(hoveredSlot == null || hoveredSlot.hasItem()
+			|| hoveredSlot.index >= rows * 9
+			|| hoveredSlot.container == MC.player.getInventory())
+			return false;
+		
+		if(!screen.getMenu().getCarried().isEmpty())
+			return false;
+		
+		long now = Util.getMillis();
+		if(screen == lastEmptyClickScreen
+			&& now - lastEmptyClickTime <= DOUBLE_CLICK_MS)
+		{
+			lastEmptyClickScreen = null;
+			steal(screen, rows);
+			
+		}else
+		{
+			lastEmptyClickScreen = screen;
+			lastEmptyClickTime = now;
+		}
+		
+		return true;
 	}
 	
 	// See ContainerScreenMixin and ShulkerBoxScreenMixin

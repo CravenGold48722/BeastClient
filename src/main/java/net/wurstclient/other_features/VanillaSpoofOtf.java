@@ -22,6 +22,9 @@ import net.minecraft.server.packs.repository.ServerPacksSource;
 import net.minecraft.network.chat.FormattedText;
 import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
 import net.minecraft.network.protocol.common.custom.BrandPayload;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
+import net.fabricmc.fabric.impl.networking.RegistrationPayload;
 import net.minecraft.network.protocol.login.ServerboundCustomQueryAnswerPacket;
 import net.minecraft.util.FormattedCharSequence;
 import net.wurstclient.DontBlock;
@@ -52,6 +55,8 @@ public final class VanillaSpoofOtf extends OtherFeature
 			+ "§lKnown data packs§r - when joining, only claims to have the"
 			+ " data packs vanilla ships with. Fabric otherwise claims every"
 			+ " mod's pack too, which a server can ask about.\n\n"
+			+ "Simple Voice Chat can still connect if §lAllow Simple Voice"
+			+ " Chat§r is on.\n\n"
 			+ "Packets are only touched on real servers, not in singleplayer."
 			+ " Servers that require Fabric mods will treat you as vanilla.",
 		true)
@@ -81,6 +86,20 @@ public final class VanillaSpoofOtf extends OtherFeature
 		}
 	};
 	
+	private static final String VOICE_CHAT_NAMESPACE = "voicechat";
+	
+	private final CheckboxSetting allowVoiceChat = new CheckboxSetting(
+		"Allow Simple Voice Chat",
+		"Lets Simple Voice Chat's network messages through while Spoof"
+			+ " Vanilla is on, and lists only its channels when the client"
+			+ " announces which channels it can receive.\n\n"
+			+ "Without this, voice chat can't connect on any server. With it,"
+			+ " a server can tell you run Simple Voice Chat (a common, normally"
+			+ " allowed mod) - but every other mod and Fabric itself stay"
+			+ " hidden.\n\n"
+			+ "Does nothing if Simple Voice Chat isn't installed.",
+		true);
+	
 	/** Depth of {@link #withVanillaTranslations(Supplier)} calls. */
 	private int vanillaScopeDepth;
 	
@@ -94,6 +113,7 @@ public final class VanillaSpoofOtf extends OtherFeature
 				+ " a vanilla client.");
 		addSetting(spoof);
 		addSetting(signChat);
+		addSetting(allowVoiceChat);
 		
 		EVENTS.add(ConnectionPacketOutputListener.class, this);
 	}
@@ -127,7 +147,8 @@ public final class VanillaSpoofOtf extends OtherFeature
 			
 		// A vanilla client sends exactly one custom payload: its brand. So
 		// rewrite that one and drop all the others (Fabric's "register"
-		// channel list, "c:version", mod channels, ...).
+		// channel list, "c:version", mod channels, ...) - except Simple Voice
+		// Chat's, if that exception is on.
 		//
 		// Dropping the channel list is also what keeps this from hanging the
 		// connection: Fabric servers only start their own handshake for
@@ -135,9 +156,14 @@ public final class VanillaSpoofOtf extends OtherFeature
 		// treat us as vanilla and never wait for an answer.
 		if(event.getPacket() instanceof ServerboundCustomPayloadPacket packet)
 		{
-			if(packet.payload() instanceof BrandPayload)
+			CustomPacketPayload payload = packet.payload();
+			if(payload instanceof BrandPayload)
 				event.setPacket(new ServerboundCustomPayloadPacket(
 					new BrandPayload("vanilla")));
+			else if(isAllowedChannel(payload.type().id()))
+				return;
+			else if(payload instanceof RegistrationPayload registration)
+				filterChannelList(event, registration);
 			else
 				event.cancel();
 			
@@ -166,6 +192,40 @@ public final class VanillaSpoofOtf extends OtherFeature
 			&& answer.payload() != null)
 			event.setPacket(new ServerboundCustomQueryAnswerPacket(
 				answer.transactionId(), null));
+	}
+	
+	/**
+	 * Channels whose messages still go through while spoofing. Only Simple
+	 * Voice Chat's, and only if that exception is on.
+	 */
+	private boolean isAllowedChannel(Identifier channel)
+	{
+		return allowVoiceChat.isChecked()
+			&& VOICE_CHAT_NAMESPACE.equals(channel.getNamespace());
+	}
+	
+	/**
+	 * Fabric's list of channels the client can receive on (minecraft:register,
+	 * sent in reply to the server's own list). Normally dropped entirely,
+	 * since a vanilla client never sends one. With the voice chat exception
+	 * it goes out with only voice chat's channels in it: Paper/Spigot only
+	 * deliver plugin messages on channels the client announced, so without
+	 * this the server would never send voice chat its handshake.
+	 */
+	private void filterChannelList(ConnectionPacketOutputEvent event,
+		RegistrationPayload registration)
+	{
+		List<Identifier> allowed = registration.channels().stream()
+			.filter(this::isAllowedChannel).toList();
+		
+		if(allowed.isEmpty())
+		{
+			event.cancel();
+			return;
+		}
+		
+		event.setPacket(new ServerboundCustomPayloadPacket(
+			new RegistrationPayload(registration.type(), allowed)));
 	}
 	
 	private boolean isVanillaKnownPack(KnownPack pack)

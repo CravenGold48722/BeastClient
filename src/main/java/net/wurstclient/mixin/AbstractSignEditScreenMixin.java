@@ -7,12 +7,18 @@
  */
 package net.wurstclient.mixin;
 
+import java.util.function.IntFunction;
+import java.util.stream.Stream;
+
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen;
@@ -30,6 +36,23 @@ public abstract class AbstractSignEditScreenMixin extends Screen
 	private AbstractSignEditScreenMixin(WurstClient wurst, Component title)
 	{
 		super(title);
+	}
+	
+	/**
+	 * VanillaSpoof: the sign's lines are turned into the strings that get
+	 * sent back to the server when you close the editor. Resolve them as a
+	 * vanilla client would, so a mod translation key or keybind that a server
+	 * planted on the sign comes back raw instead of revealing the mod.
+	 */
+	@WrapOperation(
+		method = "<init>(Lnet/minecraft/world/level/block/entity/SignBlockEntity;ZZLnet/minecraft/network/chat/Component;)V",
+		at = @At(value = "INVOKE",
+			target = "Ljava/util/stream/Stream;toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;"))
+	private Object[] wrapMessagesToArray(Stream<?> stream,
+		IntFunction<?> generator, Operation<Object[]> original)
+	{
+		return WurstClient.INSTANCE.getOtfs().vanillaSpoofOtf
+			.withVanillaTranslations(() -> original.call(stream, generator));
 	}
 	
 	@Inject(method = "init()V", at = @At("HEAD"))

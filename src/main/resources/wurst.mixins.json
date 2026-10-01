@@ -5,6 +5,7 @@
   "mixins": [],
   "client": [
     "AbstractSignEditScreenMixin",
+    "AnvilScreenMixin",
     "AtmosphericFogEnvironmentMixin",
     "BlockMixin",
     "BlockStateBaseMixin",
@@ -36,6 +37,7 @@
     "ItemInHandRendererMixin",
     "JoinMultiplayerScreenMixin",
     "KeyBindsListMixin",
+    "KeybindContentsMixin",
     "KeyboardInputMixin",
     "KeyMappingMixin",
     "KeyboardHandlerMixin",

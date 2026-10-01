@@ -316,14 +316,10 @@ public final class AutoTotemHack extends Hack
 	
 	private void moveToOffhand(int itemSlot)
 	{
-		boolean offhandEmpty = MC.player.getOffhandItem().isEmpty();
-		
-		IMultiPlayerGameMode im = IMC.getInteractionManager();
-		im.windowClick_PICKUP(itemSlot);
-		im.windowClick_PICKUP(45);
-		
-		if(!offhandEmpty)
-			nextTickSlot = itemSlot;
+		// One click: hovering the totem and pressing the offhand-swap key (F)
+		// in the inventory. The old pick-up / put-down / put-back took two
+		// or three clicks, the last one a tick later.
+		IMC.getInteractionManager().windowClick_SWAP(itemSlot, 40);
 	}
 	
 	private void finishMovingTotem()

@@ -294,6 +294,13 @@ does it. When writing or touching a hack:
   it uses `IKeyMapping.setDownIgnoringToggle()` so Toggle Sprint/Sneak keys don't flip.
   Only movement cheats that can't be done with keys (Flight, Jetpack, Speed, NoClip…) keep velocity
   edits.
+- **Mouse-step rotations:** every Wurst-made rotation (client via `Rotation.applyToClientPlayer`,
+  silent via `RotationFaker.faceRotationPacket`) is snapped with `Rotation.snapToMouseSteps` to
+  multiples of `Rotation.getMouseStep()` (vanilla's sensitivity math). Never call
+  `setYRot/setXRot` with a computed angle directly — un-snapped deltas are what GCD/"aim modulo"
+  checks look for, and float noise otherwise sends a rotation packet every tick.
+- **Background traffic:** Plausible analytics is off by default (config v3) and the upstream
+  `WurstUpdater` is not registered — both only phoned upstream Wurst's servers.
 - **Rotations:** `FaceTargetSetting` defaults to `CLIENT` everywhere; hard-coded
   `faceVectorPacket`/`sendPlayerLookPacket` is only allowed behind a user-selected option. With
   CLIENT/SERVER, act on one target per tick (`canFaceMultipleTargetsPerTick()`).

@@ -83,7 +83,7 @@ public final class SneakHack extends Hack
 			if(offWhileFlying.isChecked() && isFlying())
 				sneakKey.resetPressedState();
 			else
-				sneakKey.setDown(true);
+				sneakKey.setDownIgnoringToggle(true);
 			break;
 			
 			case PACKET:

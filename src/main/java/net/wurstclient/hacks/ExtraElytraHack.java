@@ -108,7 +108,7 @@ public final class ExtraElytraHack extends Hack implements UpdateListener
 		
 		// ensure we don't enter sneaking pose
 		if(sneak)
-			MC.options.keyShift.setDown(false);
+			IKeyMapping.get(MC.options.keyShift).setDownIgnoringToggle(false);
 		
 		if(jump && !sneak)
 			MC.player.setDeltaMovement(v.x, v.y + 0.08, v.z);

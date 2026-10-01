@@ -260,6 +260,22 @@ public final class AimAssistHack extends Hack
 	/** Previous target, for spotting switches and kills. */
 	private Entity lastAimedTarget;
 	
+	/**
+	 * Camera rotation right after AimAssist last turned it (or, if it didn't,
+	 * as of the last tick). Comparing against it next tick tells how far the
+	 * player moved the mouse in between.
+	 */
+	private float lastCameraYaw;
+	private float lastCameraPitch;
+	private boolean lastCameraValid;
+	
+	/**
+	 * Mouse movement per tick, in degrees, above which the player counts as
+	 * actively turning. A real flick toward another target is far above this;
+	 * hand tremor and the aim's own rounding are far below it.
+	 */
+	private static final float STEER_THRESHOLD = 1.5F;
+	
 	private ComboPhase comboPhase = ComboPhase.IDLE;
 	private boolean attackKeyDownLastTick;
 	private boolean forwardKeyForced;
@@ -437,6 +453,10 @@ public final class AimAssistHack extends Hack
 		boolean attackClicked = attackKeyDown && !attackKeyDownLastTick;
 		attackKeyDownLastTick = attackKeyDown;
 		
+		// Tracked every tick, early returns included, so the baseline is
+		// never stale.
+		boolean steering = isPlayerSteering();
+		
 		// don't aim when a container/inventory screen is open
 		if(MC.screen instanceof AbstractContainerScreen)
 		{
@@ -459,7 +479,18 @@ public final class AimAssistHack extends Hack
 		
 		if(switchRequested || !isValidTarget(target))
 			target = pickTarget(switchRequested ? target : null);
-			
+		else if(steering)
+		{
+			// The player is turning toward something else. Follow their
+			// crosshair instead of clinging to the old target: whatever is
+			// closest to it now becomes the target. Without this, AimAssist
+			// pulled the camera back every tick and the player could never
+			// get it onto a target 20-40 degrees away.
+			Entity closest = pickTarget(null);
+			if(closest != null)
+				target = closest;
+		}
+		
 		// A different entity here means the target was switched or the old one
 		// died, both of which are caught up to by turning instead of snapping.
 		if(target != lastAimedTarget)
@@ -493,6 +524,11 @@ public final class AimAssistHack extends Hack
 			// silent aim. Otherwise the server sees the real spin.
 			if(faceTarget.getSelected() == FaceTarget.SERVER)
 				WURST.getRotationFaker().faceVectorPacket(aimPoint);
+			aimStateValid = false;
+		}else if(steering)
+		{
+			// Don't fight the mouse while the player is turning. The aim picks
+			// up again from wherever they stop.
 			aimStateValid = false;
 		}else
 			applyAim(aimPoint, autoAttack.isChecked() && autoCombo.isChecked());
@@ -632,9 +668,33 @@ public final class AimAssistHack extends Hack
 	
 	private void setClientRotation()
 	{
-		MC.player.setYRot(
-			RotationUtils.limitAngleChange(MC.player.getYRot(), aimYaw));
-		MC.player.setXRot(aimPitch);
+		// mouse-sized steps, see Rotation.applyToClientPlayer()
+		new Rotation(aimYaw, aimPitch).applyToClientPlayer();
+		rememberCamera();
+	}
+	
+	/**
+	 * Whether the player moved the mouse noticeably since AimAssist last
+	 * touched the camera. Also takes the new baseline for next tick.
+	 */
+	private boolean isPlayerSteering()
+	{
+		float yaw = MC.player.getYRot();
+		float pitch = MC.player.getXRot();
+		
+		boolean steering = lastCameraValid
+			&& (Math.abs(Mth.wrapDegrees(yaw - lastCameraYaw)) > STEER_THRESHOLD
+				|| Math.abs(pitch - lastCameraPitch) > STEER_THRESHOLD);
+		
+		rememberCamera();
+		return steering;
+	}
+	
+	private void rememberCamera()
+	{
+		lastCameraYaw = MC.player.getYRot();
+		lastCameraPitch = MC.player.getXRot();
+		lastCameraValid = true;
 	}
 	
 	private void resetAimState()
@@ -643,6 +703,7 @@ public final class AimAssistHack extends Hack
 		smoothCatchUp = false;
 		lastAimedTarget = null;
 		lastAimTime = System.nanoTime();
+		lastCameraValid = false;
 	}
 	
 	/**
@@ -1271,8 +1332,10 @@ public final class AimAssistHack extends Hack
 		float nextPitch = RotationUtils.limitAngleChange(currentPitch,
 			needed.pitch(), maxChange);
 		
-		MC.player.setYRot(currentYaw + delta);
-		MC.player.setXRot(nextPitch);
+		new Rotation(currentYaw + delta, nextPitch).applyToClientPlayer();
+		
+		// the spin is AimAssist turning the camera, not the player steering
+		rememberCamera();
 	}
 	
 	private boolean isValidTarget(Entity e)

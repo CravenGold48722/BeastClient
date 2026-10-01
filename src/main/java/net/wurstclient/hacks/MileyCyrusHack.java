@@ -54,7 +54,7 @@ public final class MileyCyrusHack extends Hack implements UpdateListener
 			return;
 		
 		KeyMapping sneakKey = MC.options.keyShift;
-		sneakKey.setDown(!sneakKey.isDown());
+		IKeyMapping.get(sneakKey).setDownIgnoringToggle(!sneakKey.isDown());
 		timer = -1;
 	}
 }

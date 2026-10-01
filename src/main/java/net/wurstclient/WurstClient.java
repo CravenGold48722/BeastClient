@@ -168,8 +168,10 @@ public enum WurstClient
 		inventoryOpener = new InventoryOpener();
 		eventManager.add(UpdateListener.class, inventoryOpener);
 		
+		// Not registered: it checks upstream Wurst's GitHub releases, which
+		// says nothing about Beast versions and only costs a web request every
+		// launch (plus a chat nag to download upstream Wurst).
 		updater = new WurstUpdater();
-		eventManager.add(UpdateListener.class, updater);
 		
 		problematicPackDetector = new ProblematicResourcePackDetector();
 		problematicPackDetector.start();

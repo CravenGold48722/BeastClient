@@ -27,6 +27,7 @@ import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.DontSaveState;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.util.KeyPresser;
 import net.wurstclient.settings.AttackSpeedSliderSetting;
 import net.wurstclient.settings.CheckboxSetting;
@@ -188,12 +189,14 @@ public final class FightBotHack extends Hack
 						entity.getY(), MC.player.getZ()))
 			{
 				if(MC.player.getY() > entity.getY() + 1D)
-					MC.options.keyShift.setDown(true);
+					IKeyMapping.get(MC.options.keyShift)
+						.setDownIgnoringToggle(true);
 				else if(MC.player.getY() < entity.getY() - 1D)
 					MC.options.keyJump.setDown(true);
 			}else
 			{
-				MC.options.keyShift.setDown(false);
+				IKeyMapping.get(MC.options.keyShift)
+					.setDownIgnoringToggle(false);
 				MC.options.keyJump.setDown(false);
 			}
 			

@@ -39,6 +39,7 @@ import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.settings.filterlists.EntityFilterList;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.RenderUtils;
+import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
 
 @SearchTags({"bow aimbot"})
@@ -198,11 +199,7 @@ public final class BowAimbotHack extends Hack
 		if(silentAim.isChecked())
 			WURST.getRotationFaker().faceRotationPacket(neededYaw, neededPitch);
 		else
-		{
-			MC.player.setYRot(
-				RotationUtils.limitAngleChange(MC.player.getYRot(), neededYaw));
-			MC.player.setXRot(neededPitch);
-		}
+			new Rotation(neededYaw, neededPitch).applyToClientPlayer();
 	}
 	
 	private Entity filterEntities(Stream<Entity> s)

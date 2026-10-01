@@ -19,12 +19,54 @@ public record Rotation(float yaw, float pitch)
 {
 	private static final Minecraft MC = WurstClient.MC;
 	
+	/**
+	 * Turns the camera to this rotation the way the mouse would: the change is
+	 * rounded to whole steps of {@link #getMouseStep()}.
+	 *
+	 * <p>
+	 * A real mouse can only turn the camera in multiples of that step, which
+	 * anti-cheats check for. It also means a change smaller than half a step
+	 * leaves the rotation untouched, so tracking a still target doesn't send
+	 * a new rotation packet every tick over floating-point noise.
+	 */
 	public void applyToClientPlayer()
 	{
-		float adjustedYaw =
-			RotationUtils.limitAngleChange(MC.player.getYRot(), yaw);
-		MC.player.setYRot(adjustedYaw);
-		MC.player.setXRot(pitch);
+		Rotation snapped =
+			snapToMouseSteps(MC.player.getYRot(), MC.player.getXRot());
+		
+		if(snapped.yaw != MC.player.getYRot())
+			MC.player.setYRot(snapped.yaw);
+		if(snapped.pitch != MC.player.getXRot())
+			MC.player.setXRot(snapped.pitch);
+	}
+	
+	/**
+	 * Returns the rotation a mouse could actually reach when turning from
+	 * {@code fromYaw}/{@code fromPitch} toward this one: the change is rounded
+	 * to whole {@link #getMouseStep()} steps, and the yaw stays continuous
+	 * (no jump by 360 degrees).
+	 */
+	public Rotation snapToMouseSteps(float fromYaw, float fromPitch)
+	{
+		double step = getMouseStep();
+		double yawChange = Mth.wrapDegrees(yaw - fromYaw);
+		double pitchChange = pitch - fromPitch;
+		yawChange = Math.round(yawChange / step) * step;
+		pitchChange = Math.round(pitchChange / step) * step;
+		
+		return new Rotation((float)(fromYaw + yawChange),
+			Mth.clamp((float)(fromPitch + pitchChange), -90F, 90F));
+	}
+	
+	/**
+	 * The smallest turn, in degrees, that one unit of mouse movement makes at
+	 * the current sensitivity. Same math as vanilla's
+	 * {@code MouseHandler.turnPlayer()} and {@code Entity.turn()}.
+	 */
+	public static double getMouseStep()
+	{
+		double s = MC.options.sensitivity().get() * 0.6 + 0.2;
+		return s * s * s * 8.0 * 0.15;
 	}
 	
 	public void sendPlayerLookPacket()

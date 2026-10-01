@@ -16,6 +16,8 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.util.RotationUtils;
 
+import net.wurstclient.mixinterface.IKeyMapping;
+
 public class FlyPathProcessor extends PathProcessor
 {
 	private final boolean creativeFlying;
@@ -125,7 +127,8 @@ public class FlyPathProcessor extends PathProcessor
 			
 			if(MC.player.horizontalCollision)
 				if(posVec.y > nextBox.maxY)
-					MC.options.keyShift.setDown(true);
+					IKeyMapping.get(MC.options.keyShift)
+						.setDownIgnoringToggle(true);
 				else if(posVec.y < nextBox.minY)
 					MC.options.keyJump.setDown(true);
 				
@@ -142,11 +145,13 @@ public class FlyPathProcessor extends PathProcessor
 			if(posVec.y < nextBox.minY)
 				MC.options.keyJump.setDown(true);
 			else
-				MC.options.keyShift.setDown(true);
+				IKeyMapping.get(MC.options.keyShift)
+					.setDownIgnoringToggle(true);
 			
 			if(MC.player.verticalCollision)
 			{
-				MC.options.keyShift.setDown(false);
+				IKeyMapping.get(MC.options.keyShift)
+					.setDownIgnoringToggle(false);
 				MC.options.keyUp.setDown(true);
 			}
 		}

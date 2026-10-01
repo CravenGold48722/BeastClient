@@ -54,8 +54,10 @@ public final class AnalyticsConfigFile
 		{
 			disableSaving = true;
 			
-			// v1 was bugged, don't load it
-			if(!wson.has("version"))
+			// v1 was bugged, don't load it. v2 files are skipped once too, so
+			// the new off-by-default reaches installs that saved the old "on";
+			// anyone who turns it back on gets a v3 file that loads normally.
+			if(wson.getInt("version", 1) < 3)
 				return;
 			
 			plausible.setEnabled(wson.getBoolean("enabled"));
@@ -87,7 +89,7 @@ public final class AnalyticsConfigFile
 	private JsonObject createJson(PlausibleAnalytics plausible)
 	{
 		JsonObject json = new JsonObject();
-		json.addProperty("version", 2);
+		json.addProperty("version", 3);
 		json.addProperty("enabled", plausible.isEnabled());
 		return json;
 	}

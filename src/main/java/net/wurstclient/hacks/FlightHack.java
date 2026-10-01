@@ -127,7 +127,7 @@ public final class FlightHack extends Hack implements UpdateListener,
 		
 		if(IKeyMapping.get(MC.options.keyShift).isActuallyDown())
 		{
-			MC.options.keyShift.setDown(false);
+			IKeyMapping.get(MC.options.keyShift).setDownIgnoringToggle(false);
 			player.addDeltaMovement(new Vec3(0, -vSpeed, 0));
 		}
 		

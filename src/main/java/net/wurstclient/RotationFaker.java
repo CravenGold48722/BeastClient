@@ -51,12 +51,7 @@ public final class RotationFaker
 	public void faceVectorPacket(Vec3 vec)
 	{
 		Rotation needed = RotationUtils.getNeededRotations(vec);
-		LocalPlayer player = WurstClient.MC.player;
-		
-		fakeRotation = true;
-		serverYaw =
-			RotationUtils.limitAngleChange(player.getYRot(), needed.yaw());
-		serverPitch = needed.pitch();
+		faceRotationPacket(needed.yaw(), needed.pitch());
 	}
 	
 	/**
@@ -68,29 +63,29 @@ public final class RotationFaker
 	{
 		LocalPlayer player = WurstClient.MC.player;
 		
+		// Snapped to mouse steps away from the real camera, so even the
+		// silent rotation is one a mouse could have produced.
+		Rotation snapped = new Rotation(yaw, pitch)
+			.snapToMouseSteps(player.getYRot(), player.getXRot());
+		
 		fakeRotation = true;
-		serverYaw = RotationUtils.limitAngleChange(player.getYRot(), yaw);
-		serverPitch = pitch;
+		serverYaw = snapped.yaw();
+		serverPitch = snapped.pitch();
 	}
 	
+	/**
+	 * Turns the camera toward the given point in mouse-sized steps; see
+	 * {@link Rotation#applyToClientPlayer()}.
+	 */
 	public void faceVectorClient(Vec3 vec)
 	{
-		Rotation needed = RotationUtils.getNeededRotations(vec);
-		
-		LocalPlayer player = WurstClient.MC.player;
-		player.setYRot(
-			RotationUtils.limitAngleChange(player.getYRot(), needed.yaw()));
-		player.setXRot(needed.pitch());
+		RotationUtils.getNeededRotations(vec).applyToClientPlayer();
 	}
 	
 	public void faceVectorClientIgnorePitch(Vec3 vec)
 	{
-		Rotation needed = RotationUtils.getNeededRotations(vec);
-		
-		LocalPlayer player = WurstClient.MC.player;
-		player.setYRot(
-			RotationUtils.limitAngleChange(player.getYRot(), needed.yaw()));
-		player.setXRot(0);
+		RotationUtils.getNeededRotations(vec).withPitch(0)
+			.applyToClientPlayer();
 	}
 	
 	public float getServerYaw()

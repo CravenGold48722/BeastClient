@@ -42,6 +42,7 @@ import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.DontSaveState;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.hack.HackList;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.EnumSetting;
@@ -457,7 +458,7 @@ public final class TunnellerHack extends Hack
 		{
 			// Stop the way a player would: let go of the movement keys and
 			// sneak, rather than zeroing the velocity.
-			MC.options.keyShift.setDown(true);
+			IKeyMapping.get(MC.options.keyShift).setDownIgnoringToggle(true);
 			MC.options.keyUp.setDown(false);
 			MC.options.keyDown.setDown(false);
 			MC.options.keyLeft.setDown(false);
@@ -701,7 +702,7 @@ public final class TunnellerHack extends Hack
 				return;
 			}
 			
-			MC.options.keyShift.setDown(true);
+			IKeyMapping.get(MC.options.keyShift).setDownIgnoringToggle(true);
 			placeBlockSimple(nextTorch);
 		}
 		

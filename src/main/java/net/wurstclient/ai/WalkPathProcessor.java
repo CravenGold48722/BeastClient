@@ -19,6 +19,8 @@ import net.wurstclient.WurstClient;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.RotationUtils;
 
+import net.wurstclient.mixinterface.IKeyMapping;
+
 public class WalkPathProcessor extends PathProcessor
 {
 	public WalkPathProcessor(ArrayList<PathPos> path)
@@ -87,7 +89,8 @@ public class WalkPathProcessor extends PathProcessor
 				&& (WurstClient.MC.player.isInWater()
 					|| WurstClient.MC.player.isInLava()
 					|| WURST.getHax().jesusHack.isOverLiquid()))
-				MC.options.keyShift.setDown(true);
+				IKeyMapping.get(MC.options.keyShift)
+					.setDownIgnoringToggle(true);
 		}
 		
 		// horizontal movement

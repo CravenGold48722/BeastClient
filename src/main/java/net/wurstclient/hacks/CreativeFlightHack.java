@@ -114,7 +114,7 @@ public final class CreativeFlightHack extends Hack implements UpdateListener
 	
 	private void setMotionY(double motionY)
 	{
-		MC.options.keyShift.setDown(false);
+		IKeyMapping.get(MC.options.keyShift).setDownIgnoringToggle(false);
 		MC.options.keyJump.setDown(false);
 		
 		Vec3 velocity = MC.player.getDeltaMovement();

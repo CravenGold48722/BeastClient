@@ -19,6 +19,7 @@ import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.util.InteractionSimulator;
 import net.wurstclient.util.ItemUtils;
+import net.wurstclient.util.Rotation;
 
 @SearchTags({"AutoPotion", "auto potion", "AutoSplashPotion",
 	"auto splash potion"})
@@ -60,7 +61,7 @@ public final class AutoPotionHack extends Hack implements UpdateListener
 		if(Float.isNaN(restorePitch))
 			return;
 		
-		MC.player.setXRot(restorePitch);
+		new Rotation(MC.player.getYRot(), restorePitch).applyToClientPlayer();
 		restorePitch = Float.NaN;
 	}
 	
@@ -92,7 +93,7 @@ public final class AutoPotionHack extends Hack implements UpdateListener
 			// actually look down - the throw packet carries the camera's own
 			// rotation, so a faked look packet wouldn't aim the potion anyway
 			restorePitch = MC.player.getXRot();
-			MC.player.setXRot(90);
+			new Rotation(MC.player.getYRot(), 90).applyToClientPlayer();
 			
 			// throw potion in hotbar
 			MC.player.getInventory().setSelectedSlot(potionInHotbar);

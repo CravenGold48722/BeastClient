@@ -607,12 +607,9 @@ public final class InstacartHack extends Hack implements UpdateListener
 		int slot = InventoryUtils.indexOf(Items.TOTEM_OF_UNDYING, 36);
 		if(slot == -1)
 			return;
-		int networkSlot = InventoryUtils.toNetworkSlot(slot);
-		boolean offhandOccupied = !MC.player.getOffhandItem().isEmpty();
-		IMC.getInteractionManager().windowClick_PICKUP(networkSlot);
-		IMC.getInteractionManager().windowClick_PICKUP(45);
-		if(offhandOccupied)
-			IMC.getInteractionManager().windowClick_PICKUP(networkSlot);
+		// one click, like pressing F over the totem in the inventory
+		IMC.getInteractionManager()
+			.windowClick_SWAP(InventoryUtils.toNetworkSlot(slot), 40);
 	}
 	
 	/**

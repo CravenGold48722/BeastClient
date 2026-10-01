@@ -57,7 +57,9 @@ public final class PlausibleAnalytics
 		new LinkedBlockingQueue<>();
 	private final JsonObject sessionProps = new JsonObject();
 	private final AnalyticsConfigFile configFile;
-	private boolean enabled = true;
+	// Off by default in Beast: this pings upstream Wurst's analytics server
+	// at startup and on every world join. Can be turned on in Wurst Options.
+	private boolean enabled = false;
 	
 	/**
 	 * Creates a new PlausibleAnalytics instance and starts a background thread

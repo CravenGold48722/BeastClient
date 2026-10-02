@@ -93,10 +93,21 @@ public final class AimAssistHack extends Hack
 			+ " target you just switched to or killed the last one of. Inside"
 			+ " that distance the aim snaps like before, so close-range"
 			+ " tracking stays exact.\n\n"
-			+ "The turn rate is fixed at 2000°/s - a 180 in about 90ms,"
-			+ " which is as fast as a human hand can flick. Quick enough to"
-			+ " feel instant, slow enough that the rotation is a turn rather"
-			+ " than a teleport.",
+			+ "Tops out at 1080°/s - a 180 in about 170ms, as fast as a"
+			+ " quick flick. See §lHumanize smooth aim§r for how the turn"
+			+ " moves.",
+		true);
+	
+	private final CheckboxSetting humanizeSmoothAim = new CheckboxSetting(
+		"Humanize smooth aim",
+		"Makes §lSmooth aim§r move like a hand on a mouse: a short reaction"
+			+ " delay before turning to a new target, fast at first and"
+			+ " slowing down as it closes in, a speed that varies from tick to"
+			+ " tick, a slightly curved path, horizontal before vertical, and"
+			+ " the odd one-count wobble while still far off.\n\n"
+			+ "Only affects the smooth part. Inside §lSmooth aim distance§r"
+			+ " the aim still snaps.\n\n"
+			+ "Off: turns at a constant speed in a straight line.",
 		true);
 	
 	private final SliderSetting smoothAimDistance =
@@ -258,6 +269,12 @@ public final class AimAssistHack extends Hack
 	 */
 	private boolean smoothCatchUp;
 	
+	/** Humanized smooth aim: ticks left before reacting to a new target. */
+	private int reactionTicks;
+	
+	/** Humanized smooth aim: sideways bend of the current catch-up turn. */
+	private float aimCurve;
+	
 	/** Previous target, for spotting switches and kills. */
 	private Entity lastAimedTarget;
 	
@@ -368,6 +385,7 @@ public final class AimAssistHack extends Hack
 		addSetting(aimAt);
 		addSetting(faceTarget);
 		addSetting(smoothAim);
+		addSetting(humanizeSmoothAim);
 		addSetting(smoothAimDistance);
 		addSetting(switchTargetKey);
 		addSetting(checkLOS);
@@ -498,6 +516,8 @@ public final class AimAssistHack extends Hack
 		{
 			lastAimedTarget = target;
 			smoothCatchUp = target != null;
+			if(smoothCatchUp)
+				startHumanizedCatchUp();
 		}
 		
 		if(target == null)
@@ -624,16 +644,21 @@ public final class AimAssistHack extends Hack
 			float yawDiff = Mth.wrapDegrees(needed.yaw() - aimYaw);
 			float pitchDiff = Mth.wrapDegrees(needed.pitch() - aimPitch);
 			
-			aimYaw = Mth.wrapDegrees(
-				aimYaw + Mth.clamp(yawDiff, -maxChange, maxChange));
-			aimPitch = Mth.clamp(
-				aimPitch + Mth.clamp(pitchDiff, -maxChange, maxChange), -90F,
-				90F);
-			
-			// Caught up - back to snapping until the next switch or kill.
-			if(Math.abs(yawDiff) <= maxChange
-				&& Math.abs(pitchDiff) <= maxChange)
-				smoothCatchUp = false;
+			if(humanizeSmoothAim.isChecked())
+				humanizedSmoothStep(yawDiff, pitchDiff, dt);
+			else
+			{
+				aimYaw = Mth.wrapDegrees(
+					aimYaw + Mth.clamp(yawDiff, -maxChange, maxChange));
+				aimPitch = Mth.clamp(
+					aimPitch + Mth.clamp(pitchDiff, -maxChange, maxChange),
+					-90F, 90F);
+				
+				// Caught up - back to snapping until the next switch or kill.
+				if(Math.abs(yawDiff) <= maxChange
+					&& Math.abs(pitchDiff) <= maxChange)
+					smoothCatchUp = false;
+			}
 			
 		}else
 		{
@@ -644,6 +669,96 @@ public final class AimAssistHack extends Hack
 		
 		lastAimTime = now;
 		applyAimRotation(forceClient);
+	}
+	
+	/**
+	 * One tick of smooth aim that moves like a hand on a mouse rather than a
+	 * machine:
+	 * <ul>
+	 * <li>a short reaction delay before turning toward a new target,</li>
+	 * <li>fast at first, slowing down as it closes in (each tick covers a
+	 * random 30-55% of what's left, so the speed also varies tick to
+	 * tick),</li>
+	 * <li>a slightly curved path that straightens out near the target,</li>
+	 * <li>horizontal first - the vertical part lags while the horizontal gap
+	 * is still big,</li>
+	 * <li>now and then one mouse count of jitter while still far off.</li>
+	 * </ul>
+	 * The camera still ends up in whole mouse counts of the real sensitivity
+	 * (see {@link #setClientRotation()}).
+	 */
+	private void humanizedSmoothStep(float yawDiff, float pitchDiff, float dt)
+	{
+		double distance = Math.hypot(yawDiff, pitchDiff);
+		
+		// Close enough: back to snapping (if within Smooth aim distance)
+		// until the next switch or kill.
+		if(distance <= 1.5)
+			smoothCatchUp = false;
+		
+		if(distance < 1e-3)
+			return;
+		
+		// reacting to a new target
+		if(smoothCatchUp && reactionTicks > 0)
+		{
+			reactionTicks--;
+			return;
+		}
+		
+		// Ease-out: cover a share of the remaining angle per tick, scaled
+		// to the real elapsed time.
+		float ticks = dt / 0.05F;
+		double share = 0.30 + random.nextDouble() * 0.25;
+		double step = distance * (1 - Math.pow(1 - share, ticks));
+		
+		// Not faster than a quick flick, and not so slow that the last few
+		// degrees take forever.
+		double maxStep = SMOOTH_AIM_SPEED * dt;
+		double minStep = Math.min(distance, 30 * dt);
+		step = Mth.clamp(step, minStep, maxStep);
+		
+		// Direction toward the target, bent sideways a little. The bend fades
+		// out as the target gets close, so it still lands on it.
+		double dirYaw = yawDiff / distance;
+		double dirPitch = pitchDiff / distance;
+		double bend = aimCurve * Math.min(1, distance / 30);
+		double bentYaw = dirYaw - dirPitch * bend;
+		double bentPitch = dirPitch + dirYaw * bend;
+		double bentLength = Math.hypot(bentYaw, bentPitch);
+		
+		double moveYaw = bentYaw / bentLength * step;
+		double movePitch = bentPitch / bentLength * step;
+		
+		// People line up horizontally first.
+		if(Math.abs(yawDiff) > 20)
+			movePitch *= 0.6;
+			
+		// The odd extra mouse count, only while still far enough off that it
+		// can't make the aim wobble around the target.
+		if(distance > 3)
+		{
+			double count = Rotation.getMouseStep();
+			if(random.nextFloat() < 0.25F)
+				moveYaw += random.nextBoolean() ? count : -count;
+			if(random.nextFloat() < 0.15F)
+				movePitch += random.nextBoolean() ? count : -count;
+		}
+		
+		aimYaw = Mth.wrapDegrees(aimYaw + (float)moveYaw);
+		aimPitch = Mth.clamp(aimPitch + (float)movePitch, -90F, 90F);
+	}
+	
+	/**
+	 * Picks a fresh reaction delay and path bend for turning toward a newly
+	 * acquired target.
+	 */
+	private void startHumanizedCatchUp()
+	{
+		// 1-3 ticks = 50-150ms, a quick but human reaction
+		reactionTicks = 1 + random.nextInt(3);
+		// up to about 15% sideways bend, either way
+		aimCurve = (float)(random.nextGaussian() * 0.08);
 	}
 	
 	/** Sends {@link #aimYaw}/{@link #aimPitch} the way Face target asks for. */

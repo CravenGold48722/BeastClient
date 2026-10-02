@@ -90,23 +90,25 @@ public final class AimAssistHack extends Hack
 	private final CheckboxSetting smoothAim = new CheckboxSetting("Smooth aim",
 		"Turns toward the target in continuous steps instead of snapping"
 			+ " straight to the needed angle.\n\n"
-			+ "Only used when the target is further away than"
-			+ " §lSmooth aim distance§r, and while catching up to a"
-			+ " target you just switched to or killed the last one of. Inside"
-			+ " that distance the aim snaps like before, so close-range"
-			+ " tracking stays exact.\n\n"
-			+ "Tops out at 1080°/s - a 180 in about 170ms, as fast as a"
-			+ " quick flick. See §lHumanize smooth aim§r for how the turn"
-			+ " moves.",
+			+ "Used when the target is further away than"
+			+ " §lSmooth aim distance§r, and every time the aim picks up"
+			+ " a target - starting, switching, after a kill, after you steered"
+			+ " away, after an Aura-Farming spin - until your crosshair is on"
+			+ " it. Once it is, the aim snaps within that distance like"
+			+ " before, so close-range tracking stays exact.\n\n"
+			+ "With §lFace target§r on Client-side the camera turns every"
+			+ " frame, like a mouse, instead of 20 times a second.\n\n"
+			+ "Tops out at 720°/s - a 180 in about a quarter of a second. See"
+			+ " §lHumanize smooth aim§r for how the turn moves.",
 		true);
 	
 	private final CheckboxSetting humanizeSmoothAim = new CheckboxSetting(
 		"Humanize smooth aim",
 		"Makes §lSmooth aim§r move like a hand on a mouse: a short reaction"
-			+ " delay before turning to a new target, fast at first and"
-			+ " slowing down as it closes in, a speed that varies from tick to"
-			+ " tick, a slightly curved path, horizontal before vertical, and"
-			+ " the odd one-count wobble while still far off.\n\n"
+			+ " delay before turning to a new target, speeding up at the start"
+			+ " and slowing down as it closes in, a speed that drifts a little"
+			+ " over time, a slightly curved path, horizontal before vertical,"
+			+ " and a slight hand tremor while still far off.\n\n"
 			+ "Only affects the smooth part. Inside §lSmooth aim distance§r"
 			+ " the aim still snaps.\n\n"
 			+ "Off: turns at a constant speed in a straight line.",
@@ -151,8 +153,8 @@ public final class AimAssistHack extends Hack
 	
 	private final CheckboxSetting auraFarming =
 		new CheckboxSetting("Aura-Farming",
-			"Does a 360 spin while airborne on the way up, then snaps back to"
-				+ " facing the target.\n\n"
+			"Does a 360 spin while airborne on the way up, then turns back to"
+				+ " face the target (smoothly, with §lSmooth aim§r on).\n\n"
 				+ "With §lFace target§r on Client-side the server sees the"
 				+ " real spin, so Auto attack only hits when your crosshair"
 				+ " sweeps over the target. On Server-side the attacks keep"
@@ -271,11 +273,48 @@ public final class AimAssistHack extends Hack
 	 */
 	private boolean smoothCatchUp;
 	
-	/** Humanized smooth aim: ticks left before reacting to a new target. */
-	private int reactionTicks;
+	/** Humanized smooth aim: when the hand starts moving (System.nanoTime). */
+	private long reactionEndNs;
 	
 	/** Humanized smooth aim: sideways bend of the current catch-up turn. */
 	private float aimCurve;
+	
+	/**
+	 * Humanized smooth aim: how fast the aim is turning right now, in degrees
+	 * per second. Kept between steps so the turn speeds up and slows down
+	 * like a hand instead of jumping from one speed to the next.
+	 */
+	private double aimVelYaw;
+	private double aimVelPitch;
+	
+	/** Humanized smooth aim: slowly drifting speed variation (around 1). */
+	private double speedFactor = 1;
+	private double speedFactorTarget = 1;
+	private long nextSpeedChangeNs;
+	
+	/** Humanized smooth aim: slowly drifting hand tremor, in degrees/s. */
+	private double tremorYaw;
+	private double tremorPitch;
+	private double tremorTargetYaw;
+	private double tremorTargetPitch;
+	private long nextTremorChangeNs;
+	
+	/**
+	 * Set by onUpdate when the camera should be aimed this tick. The actual
+	 * turning then happens every frame in onRender, the way a mouse moves the
+	 * camera, instead of in 20 jumps per second.
+	 */
+	private boolean frameAimActive;
+	private boolean frameAimForceClient;
+	
+	/**
+	 * Mouse movement by the player since the last tick, summed up frame by
+	 * frame. Needed because AimAssist now writes the camera every frame, so
+	 * a once-per-tick comparison would only see the last frame's movement.
+	 */
+	private float steerAccumYaw;
+	private float steerAccumPitch;
+	private boolean steeringNow;
 	
 	/** Previous target, for spotting switches and kills. */
 	private Entity lastAimedTarget;
@@ -363,18 +402,15 @@ public final class AimAssistHack extends Hack
 	 * How fast the smooth aim turns, in degrees per second.
 	 *
 	 * <p>
-	 * Set to the fastest a person can actually flick: a 180 in roughly 90ms,
-	 * which is what the quickest players in aim trainers and tac shooters hit
-	 * at high sensitivity. That's 100 degrees per tick, so a full turnaround
-	 * takes about two ticks - fast enough to feel instant in a fight, slow
-	 * enough that the rotation is still a turn rather than a teleport.
+	 * 720: a 180 in a quarter of a second (36 degrees per tick) - a fast but
+	 * ordinary flick, well inside what a hand does, and quick enough to feel
+	 * instant in a fight. The humanized turn uses this as its top speed and
+	 * eases in and out below it.
 	 *
 	 * <p>
-	 * Deliberately not raised past this. Anything quicker is a speed no hand
-	 * could produce, which is exactly the thing the smooth path exists to
-	 * avoid.
+	 * Chosen by the user; keep it at 720.
 	 */
-	private static final float SMOOTH_AIM_SPEED = 1080F;
+	private static final float SMOOTH_AIM_SPEED = 720F;
 	
 	private static final double FAR_THRESHOLD_SQ = 3.01 * 3.01;
 	private static final double CLOSE_THRESHOLD_SQ = 0.75 * 0.75;
@@ -466,6 +502,9 @@ public final class AimAssistHack extends Hack
 		// Exactly one attack is allowed per tick; see attackTarget().
 		attackedThisTick = false;
 		
+		// re-armed below if the camera should be aimed this tick
+		frameAimActive = false;
+		
 		// Music is managed every tick before combat logic so it responds to
 		// target changes from the previous tick without any extra early-return
 		// handling.
@@ -485,6 +524,8 @@ public final class AimAssistHack extends Hack
 		// don't aim when a container/inventory screen is open
 		if(MC.screen instanceof AbstractContainerScreen)
 		{
+			// picks up again with a smooth turn from wherever the camera is
+			aimStateValid = false;
 			resetCombo();
 			resetDodge();
 			return;
@@ -493,6 +534,7 @@ public final class AimAssistHack extends Hack
 		if(!aimWhileBlocking.isChecked() && MC.player.isUsingItem())
 		{
 			target = null;
+			aimStateValid = false;
 			resetCombo();
 			resetDodge();
 			return;
@@ -555,10 +597,25 @@ public final class AimAssistHack extends Hack
 		}else if(steering)
 		{
 			// Don't fight the mouse while the player is turning. The aim picks
-			// up again from wherever they stop.
+			// up again from wherever they stop - with a smooth turn, see
+			// applyAim().
 			aimStateValid = false;
 		}else
-			applyAim(aimPoint, autoAttack.isChecked() && autoCombo.isChecked());
+		{
+			boolean forceClient =
+				autoAttack.isChecked() && autoCombo.isChecked();
+			
+			// Turning the camera happens every frame in onRender, like a
+			// mouse. Only the silent and packet modes, which have nothing to
+			// show on screen, stay on the tick.
+			if(forceClient || faceTarget.getSelected() == FaceTarget.CLIENT)
+			{
+				frameAimActive = true;
+				frameAimForceClient = forceClient;
+			}else
+				applyAim(aimPoint, getTargetBox(target.getBoundingBox()),
+					forceClient);
+		}
 		
 		if(!autoAttack.isChecked())
 		{
@@ -621,7 +678,7 @@ public final class AimAssistHack extends Hack
 	 *            auto-combo needs a real camera angle to sprint toward the
 	 *            target with.
 	 */
-	private void applyAim(Vec3 aimPoint, boolean forceClient)
+	private void applyAim(Vec3 aimPoint, AABB targetBox, boolean forceClient)
 	{
 		Rotation needed = RotationUtils.getNeededRotations(aimPoint);
 		long now = System.nanoTime();
@@ -631,9 +688,19 @@ public final class AimAssistHack extends Hack
 			aimYaw = MC.player.getYRot();
 			aimPitch = MC.player.getXRot();
 			aimStateValid = true;
-			// One tick back, so the first smooth step after acquiring a target
-			// actually turns instead of burning a tick on dt = 0.
-			lastAimTime = now - 50_000_000L;
+			// One frame back, so the first smooth step actually turns instead
+			// of burning a call on dt = 0.
+			lastAimTime = now - 16_000_000L;
+			
+			// Picking the aim up again - on a new target, after the player
+			// steered, after an Aura-Farming spin - always turns smoothly
+			// until the crosshair is on the target, instead of snapping there
+			// just because the target happens to be close.
+			if(!smoothCatchUp)
+			{
+				smoothCatchUp = true;
+				startHumanizedCatchUp();
+			}
 		}
 		
 		boolean smooth = smoothAim.isChecked() && (smoothCatchUp || EntityUtils
@@ -651,7 +718,7 @@ public final class AimAssistHack extends Hack
 			float pitchDiff = Mth.wrapDegrees(needed.pitch() - aimPitch);
 			
 			if(humanizeSmoothAim.isChecked())
-				humanizedSmoothStep(yawDiff, pitchDiff, dt);
+				humanizedSmoothStep(yawDiff, pitchDiff, dt, now);
 			else
 			{
 				aimYaw = Mth.wrapDegrees(
@@ -659,18 +726,26 @@ public final class AimAssistHack extends Hack
 				aimPitch = Mth.clamp(
 					aimPitch + Mth.clamp(pitchDiff, -maxChange, maxChange),
 					-90F, 90F);
-				
-				// Caught up - back to snapping until the next switch or kill.
-				if(Math.abs(yawDiff) <= maxChange
-					&& Math.abs(pitchDiff) <= maxChange)
-					smoothCatchUp = false;
 			}
+			
+			// Caught up: the crosshair is on the target and has settled on the
+			// aim point, so switching to snapping (within Smooth aim distance)
+			// doesn't jump. Until then the turn stays smooth.
+			// (Being right on the aim point counts too, for aim points that sit
+			// exactly on the hitbox's edge.)
+			double left = Math.hypot(Mth.wrapDegrees(needed.yaw() - aimYaw),
+				needed.pitch() - aimPitch);
+			if(smoothCatchUp && (left <= 0.5
+				|| left <= CATCH_UP_SETTLED && isAimOnTarget(targetBox)))
+				smoothCatchUp = false;
 			
 		}else
 		{
 			aimYaw = needed.yaw();
 			aimPitch = needed.pitch();
 			smoothCatchUp = false;
+			aimVelYaw = 0;
+			aimVelPitch = 0;
 		}
 		
 		lastAimTime = now;
@@ -678,51 +753,72 @@ public final class AimAssistHack extends Hack
 	}
 	
 	/**
-	 * One tick of smooth aim that moves like a hand on a mouse rather than a
-	 * machine:
+	 * How far from the aim point, in degrees, the catch-up turn counts as
+	 * settled once the crosshair is on the target.
+	 */
+	private static final double CATCH_UP_SETTLED = 2;
+	
+	/**
+	 * How quickly the ease-out closes the remaining angle, per second. Same
+	 * as the old per-tick version, which covered about 42% of what was left
+	 * every tick: -ln(1 - 0.425) / 0.05s.
+	 */
+	private static final double EASE_RATE = 11;
+	
+	/**
+	 * How quickly the hand gets up to speed and slows down again, in seconds.
+	 * This is what makes the turn speed up at the start instead of jumping
+	 * straight to full speed.
+	 */
+	private static final double HAND_RESPONSE = 0.04;
+	
+	/**
+	 * One step of smooth aim that moves like a hand on a mouse rather than a
+	 * machine. Called every frame for camera aiming, every tick otherwise -
+	 * everything is scaled by the real elapsed time, so both behave the same.
 	 * <ul>
-	 * <li>a short reaction delay before turning toward a new target,</li>
-	 * <li>fast at first, slowing down as it closes in (each tick covers a
-	 * random 30-55% of what's left, so the speed also varies tick to
-	 * tick),</li>
+	 * <li>a short reaction delay before the hand starts to move,</li>
+	 * <li>speeds up, then slows down as it closes in (ease-in, ease-out),
+	 * never faster than {@link #SMOOTH_AIM_SPEED},</li>
+	 * <li>a speed that drifts a little over time instead of jumping around,
+	 * </li>
 	 * <li>a slightly curved path that straightens out near the target,</li>
 	 * <li>horizontal first - the vertical part lags while the horizontal gap
 	 * is still big,</li>
-	 * <li>now and then one mouse count of jitter while still far off.</li>
+	 * <li>a slow hand tremor while still far off.</li>
 	 * </ul>
 	 * The camera still ends up in whole mouse counts of the real sensitivity
 	 * (see {@link #setClientRotation()}).
 	 */
-	private void humanizedSmoothStep(float yawDiff, float pitchDiff, float dt)
+	private void humanizedSmoothStep(float yawDiff, float pitchDiff, float dt,
+		long now)
 	{
 		double distance = Math.hypot(yawDiff, pitchDiff);
-		
-		// Close enough: back to snapping (if within Smooth aim distance)
-		// until the next switch or kill.
-		if(distance <= 1.5)
-			smoothCatchUp = false;
-		
-		if(distance < 1e-3)
-			return;
-		
-		// reacting to a new target
-		if(smoothCatchUp && reactionTicks > 0)
+		if(distance < 1e-3 || dt <= 0)
 		{
-			reactionTicks--;
+			aimVelYaw = 0;
+			aimVelPitch = 0;
 			return;
 		}
 		
-		// Ease-out: cover a share of the remaining angle per tick, scaled
-		// to the real elapsed time.
-		float ticks = dt / 0.05F;
-		double share = 0.30 + random.nextDouble() * 0.25;
-		double step = distance * (1 - Math.pow(1 - share, ticks));
+		// still reacting - the hand hasn't started moving yet
+		if(now < reactionEndNs)
+			return;
+			
+		// Speed variation that drifts instead of jumping: every 120-280ms a
+		// new target speed (80-120%), eased toward over ~120ms.
+		if(now >= nextSpeedChangeNs)
+		{
+			speedFactorTarget = 0.8 + random.nextDouble() * 0.4;
+			nextSpeedChangeNs = now + (120 + random.nextInt(161)) * 1_000_000L;
+		}
+		speedFactor += (speedFactorTarget - speedFactor) * ease(dt, 0.12);
 		
-		// Not faster than a quick flick, and not so slow that the last few
-		// degrees take forever.
-		double maxStep = SMOOTH_AIM_SPEED * dt;
-		double minStep = Math.min(distance, 30 * dt);
-		step = Mth.clamp(step, minStep, maxStep);
+		// Ease-out: the further off, the faster, up to the speed limit. The
+		// minimum keeps the last bit from crawling.
+		double desiredSpeed = distance * EASE_RATE * speedFactor;
+		desiredSpeed = Mth.clamp(desiredSpeed, Math.min(30, distance / dt),
+			SMOOTH_AIM_SPEED);
 		
 		// Direction toward the target, bent sideways a little. The bend fades
 		// out as the target gets close, so it still lands on it.
@@ -733,22 +829,39 @@ public final class AimAssistHack extends Hack
 		double bentPitch = dirPitch + dirYaw * bend;
 		double bentLength = Math.hypot(bentYaw, bentPitch);
 		
-		double moveYaw = bentYaw / bentLength * step;
-		double movePitch = bentPitch / bentLength * step;
+		double wantYaw = bentYaw / bentLength * desiredSpeed;
+		double wantPitch = bentPitch / bentLength * desiredSpeed;
 		
 		// People line up horizontally first.
 		if(Math.abs(yawDiff) > 20)
-			movePitch *= 0.6;
+			wantPitch *= 0.6;
 			
-		// The odd extra mouse count, only while still far enough off that it
-		// can't make the aim wobble around the target.
-		if(distance > 3)
+		// The hand eases into the wanted speed instead of jumping to it:
+		// speeds up at the start, slows down smoothly at the end.
+		double response = ease(dt, HAND_RESPONSE);
+		aimVelYaw += (wantYaw - aimVelYaw) * response;
+		aimVelPitch += (wantPitch - aimVelPitch) * response;
+		
+		// never faster than a quick flick
+		double speed = Math.hypot(aimVelYaw, aimVelPitch);
+		if(speed > SMOOTH_AIM_SPEED)
 		{
-			double count = Rotation.getMouseStep();
-			if(random.nextFloat() < 0.25F)
-				moveYaw += random.nextBoolean() ? count : -count;
-			if(random.nextFloat() < 0.15F)
-				movePitch += random.nextBoolean() ? count : -count;
+			aimVelYaw *= SMOOTH_AIM_SPEED / speed;
+			aimVelPitch *= SMOOTH_AIM_SPEED / speed;
+			speed = SMOOTH_AIM_SPEED;
+		}
+		
+		updateTremor(distance, speed, dt, now);
+		
+		double moveYaw = (aimVelYaw + tremorYaw) * dt;
+		double movePitch = (aimVelPitch + tremorPitch) * dt;
+		
+		// never past the aim point
+		double move = Math.hypot(moveYaw, movePitch);
+		if(move > distance)
+		{
+			moveYaw *= distance / move;
+			movePitch *= distance / move;
 		}
 		
 		aimYaw = Mth.wrapDegrees(aimYaw + (float)moveYaw);
@@ -756,15 +869,70 @@ public final class AimAssistHack extends Hack
 	}
 	
 	/**
-	 * Picks a fresh reaction delay and path bend for turning toward a newly
-	 * acquired target.
+	 * A slow, small wobble on top of the turn, like the tremor of a real hand.
+	 * Grows a little with speed and fades out near the target, so it can't
+	 * make the aim shake around it.
+	 */
+	private void updateTremor(double distance, double speed, float dt, long now)
+	{
+		if(distance > 3)
+		{
+			if(now >= nextTremorChangeNs)
+			{
+				double size = 2 + speed * 0.03;
+				tremorTargetYaw = random.nextGaussian() * size;
+				tremorTargetPitch = random.nextGaussian() * size * 0.7;
+				nextTremorChangeNs =
+					now + (60 + random.nextInt(81)) * 1_000_000L;
+			}
+		}else
+		{
+			tremorTargetYaw = 0;
+			tremorTargetPitch = 0;
+		}
+		
+		double e = ease(dt, 0.08);
+		tremorYaw += (tremorTargetYaw - tremorYaw) * e;
+		tremorPitch += (tremorTargetPitch - tremorPitch) * e;
+	}
+	
+	/** How much of the way to close in {@code dt} with time constant tau. */
+	private static double ease(double dt, double tau)
+	{
+		return 1 - Math.exp(-dt / tau);
+	}
+	
+	/**
+	 * Whether a ray along the current aim rotation hits the target's hitbox,
+	 * i.e. where the crosshair would be on it.
+	 */
+	private boolean isAimOnTarget(AABB targetBox)
+	{
+		Vec3 eyes = RotationUtils.getEyesPos();
+		if(targetBox.contains(eyes))
+			return true;
+		
+		Vec3 look = new Rotation(aimYaw, aimPitch).toLookVec();
+		Vec3 end = eyes.add(look.scale(range.getValue() + 2));
+		return targetBox.clip(eyes, end).isPresent();
+	}
+	
+	/**
+	 * Picks a fresh reaction delay and path bend for a new catch-up turn, and
+	 * starts the hand from rest.
 	 */
 	private void startHumanizedCatchUp()
 	{
-		// 1-3 ticks = 50-150ms, a quick but human reaction
-		reactionTicks = 1 + random.nextInt(3);
+		// 50-150ms, a quick but human reaction
+		reactionEndNs =
+			System.nanoTime() + (50 + random.nextInt(101)) * 1_000_000L;
 		// up to about 15% sideways bend, either way
 		aimCurve = (float)(random.nextGaussian() * 0.08);
+		
+		aimVelYaw = 0;
+		aimVelPitch = 0;
+		tremorYaw = 0;
+		tremorPitch = 0;
 	}
 	
 	/** Sends {@link #aimYaw}/{@link #aimPitch} the way Face target asks for. */
@@ -796,20 +964,47 @@ public final class AimAssistHack extends Hack
 	}
 	
 	/**
-	 * Whether the player moved the mouse noticeably since AimAssist last
-	 * touched the camera. Also takes the new baseline for next tick.
+	 * Whether the player moved the mouse noticeably during the last tick.
+	 * Called once per tick; starts a new tick's worth of counting.
 	 */
 	private boolean isPlayerSteering()
 	{
-		float yaw = MC.player.getYRot();
-		float pitch = MC.player.getXRot();
+		absorbMouseMovement();
+		boolean steering = isSteerAccumHigh();
 		
-		boolean steering = lastCameraValid
-			&& (Math.abs(Mth.wrapDegrees(yaw - lastCameraYaw)) > STEER_THRESHOLD
-				|| Math.abs(pitch - lastCameraPitch) > STEER_THRESHOLD);
+		steerAccumYaw = 0;
+		steerAccumPitch = 0;
+		steeringNow = steering;
+		return steering;
+	}
+	
+	/**
+	 * Adds how far the camera moved since AimAssist last touched it - which
+	 * can only be the player's mouse - to this tick's total, and takes the
+	 * new baseline.
+	 */
+	private void absorbMouseMovement()
+	{
+		if(lastCameraValid)
+		{
+			steerAccumYaw +=
+				Math.abs(Mth.wrapDegrees(MC.player.getYRot() - lastCameraYaw));
+			steerAccumPitch += Math.abs(MC.player.getXRot() - lastCameraPitch);
+		}
 		
 		rememberCamera();
-		return steering;
+	}
+	
+	private boolean isSteerAccumHigh()
+	{
+		return steerAccumYaw > STEER_THRESHOLD
+			|| steerAccumPitch > STEER_THRESHOLD;
+	}
+	
+	/** The hitbox the crosshair has to be on, as the game's own pick uses. */
+	private AABB getTargetBox(AABB box)
+	{
+		return box.inflate(target.getPickRadius());
 	}
 	
 	private void rememberCamera()
@@ -826,6 +1021,10 @@ public final class AimAssistHack extends Hack
 		lastAimedTarget = null;
 		lastAimTime = System.nanoTime();
 		lastCameraValid = false;
+		steerAccumYaw = 0;
+		steerAccumPitch = 0;
+		steeringNow = false;
+		frameAimActive = false;
 	}
 	
 	/**
@@ -1430,11 +1629,13 @@ public final class AimAssistHack extends Hack
 		
 		updateAuraFarming();
 		
-		// Normal aiming happens in onUpdate (as Face target says). The only
-		// thing that still moves the camera here is the cosmetic Aura-Farming
-		// spin, which is meant to be seen.
+		// Camera aiming happens here, every frame. (Silent and packet aiming
+		// only matter once per tick and stay in onUpdate.)
 		if(spinRemaining <= 0F)
+		{
+			aimFrame(partialTicks);
 			return;
+		}
 		
 		Vec3 hitVec = aimAt.getAimPoint(target);
 		Rotation needed = RotationUtils.getNeededRotations(hitVec);
@@ -1458,6 +1659,36 @@ public final class AimAssistHack extends Hack
 		
 		// the spin is AimAssist turning the camera, not the player steering
 		rememberCamera();
+	}
+	
+	/**
+	 * Turns the camera toward the target for this frame. A mouse moves the
+	 * camera every frame, so doing it once per tick looked like 20 small jumps
+	 * a second no matter how smooth the turn itself was.
+	 */
+	private void aimFrame(float partialTicks)
+	{
+		if(!frameAimActive)
+			return;
+			
+		// The player grabbing the mouse in the middle of a tick stops the aim
+		// right away, not only at the next tick.
+		absorbMouseMovement();
+		if(steeringNow || isSteerAccumHigh())
+		{
+			steeringNow = true;
+			aimStateValid = false;
+			return;
+		}
+		
+		// aim at where the target is drawn in this frame, not where it was at
+		// the last tick
+		Vec3 offset = EntityUtils.getLerpedPos(target, partialTicks)
+			.subtract(target.position());
+		Vec3 aimPoint = aimAt.getAimPoint(target).add(offset);
+		AABB box = getTargetBox(target.getBoundingBox().move(offset));
+		
+		applyAim(aimPoint, box, frameAimForceClient);
 	}
 	
 	private boolean isValidTarget(Entity e)

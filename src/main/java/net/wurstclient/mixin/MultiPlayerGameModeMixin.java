@@ -39,6 +39,7 @@ import net.wurstclient.events.BlockBreakingProgressListener.BlockBreakingProgres
 import net.wurstclient.events.PlayerAttacksEntityListener.PlayerAttacksEntityEvent;
 import net.wurstclient.events.StopUsingItemListener.StopUsingItemEvent;
 import net.wurstclient.WurstClient;
+import net.wurstclient.InventoryOpener;
 import net.wurstclient.hacks.AutoTotemHack;
 import net.wurstclient.mixinterface.IMultiPlayerGameMode;
 
@@ -76,7 +77,9 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	{
 		if(player != minecraft.player)
 			return;
-			
+		
+		closeOurInventory();
+		
 		// A totem going into the offhand outranks any attack, including the
 		// ones other hacks send.
 		if(AutoTotemHack.isInputFrozen())
@@ -99,6 +102,7 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 		cancellable = true)
 	private void onPiercingAttack(PiercingWeapon weapon, CallbackInfo ci)
 	{
+		closeOurInventory();
 		if(AutoTotemHack.isInputFrozen())
 			ci.cancel();
 	}
@@ -110,6 +114,7 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	private void onUseItem(Player player, InteractionHand hand,
 		CallbackInfoReturnable<InteractionResult> cir)
 	{
+		closeOurInventory();
 		if(AutoTotemHack.isInputFrozen())
 			cir.setReturnValue(InteractionResult.FAIL);
 	}
@@ -121,8 +126,40 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	private void onUseItemOn(LocalPlayer player, InteractionHand hand,
 		BlockHitResult hitResult, CallbackInfoReturnable<InteractionResult> cir)
 	{
+		closeOurInventory();
 		if(AutoTotemHack.isInputFrozen())
 			cir.setReturnValue(InteractionResult.FAIL);
+	}
+	
+	@Inject(
+		method = "startDestroyBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/core/Direction;)Z",
+		at = @At("HEAD"))
+	private void onStartDestroyBlock(BlockPos pos, Direction direction,
+		CallbackInfoReturnable<Boolean> cir)
+	{
+		closeOurInventory();
+	}
+	
+	@Inject(
+		method = "continueDestroyBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/core/Direction;)Z",
+		at = @At("HEAD"))
+	private void onContinueDestroyBlock(BlockPos pos, Direction direction,
+		CallbackInfoReturnable<Boolean> cir)
+	{
+		closeOurInventory();
+	}
+	
+	/**
+	 * If a hack's inventory clicks opened the inventory (InventoryOpener),
+	 * close it before attacking, using, placing or mining - a player has to
+	 * close it first too.
+	 */
+	@Unique
+	private void closeOurInventory()
+	{
+		InventoryOpener opener = WurstClient.INSTANCE.getInventoryOpener();
+		if(opener != null)
+			opener.beforeWorldInteraction();
 	}
 	
 	@Override

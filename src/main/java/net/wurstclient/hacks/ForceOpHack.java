@@ -83,7 +83,8 @@ public final class ForceOpHack extends Hack implements ChatInputListener
 			for(String line = ""; (line = bf.readLine()) != null;)
 				messageFromDialog(line);
 			
-			setEnabled(false);
+			// on the game thread, like every other toggle
+			MC.execute(() -> setEnabled(false));
 			
 		}catch(IOException e)
 		{
@@ -168,7 +169,7 @@ public final class ForceOpHack extends Hack implements ChatInputListener
 		// abort if disconnected before pressing start
 		if(MC.player == null)
 		{
-			setEnabled(false);
+			MC.execute(() -> setEnabled(false));
 			return;
 		}
 		

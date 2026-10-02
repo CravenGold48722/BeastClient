@@ -546,7 +546,9 @@ public final class InstacartHack extends Hack implements UpdateListener
 		{
 			// Sub-divide this tick into ≤0.25-block steps so the simulated
 			// path stays within 1/4 block of the real arc between ticks.
-			int subSteps = Math.max(1, (int)Math.ceil(vel.length() / 0.01));
+			// (This used to divide by 0.01, i.e. 300 raycasts per tick and
+			// ~24,000 per shot, which froze the game for a moment every time.)
+			int subSteps = Math.max(1, (int)Math.ceil(vel.length() / 0.25));
 			Vec3 subVel = vel.scale(1.0 / subSteps);
 			
 			for(int s = 0; s < subSteps; s++)

@@ -302,7 +302,8 @@ public final class AltManagerScreen extends Screen
 		
 		for(String line : lines)
 		{
-			String[] data = line.split(":");
+			// limit 2: passwords can contain colons
+			String[] data = line.split(":", 2);
 			
 			switch(data.length)
 			{

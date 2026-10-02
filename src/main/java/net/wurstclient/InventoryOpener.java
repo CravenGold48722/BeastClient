@@ -94,6 +94,21 @@ public final class InventoryOpener implements UpdateListener
 	}
 	
 	/**
+	 * Called before attacking, using an item, placing or mining. A player has
+	 * to close the inventory before doing any of that, so if this class opened
+	 * it for a hack's clicks, close it now - the same way Esc does - instead
+	 * of acting with the inventory still open.
+	 */
+	public void beforeWorldInteraction()
+	{
+		if(!isOpenedByUs())
+			return;
+		
+		MC.screen.onClose();
+		openedByUs = false;
+	}
+	
+	/**
 	 * Whether the inventory screen that's open right now was opened by this
 	 * class rather than by the player.
 	 */

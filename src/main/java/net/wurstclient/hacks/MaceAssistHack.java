@@ -626,7 +626,9 @@ public final class MaceAssistHack extends Hack
 	
 	private boolean isValidTarget(Entity e)
 	{
-		if(e == null || e == MC.player || !e.isAlive() || e.isRemoved())
+		// also drops a target left over from the previous world or dimension
+		if(e == null || e == MC.player || !e.isAlive() || e.isRemoved()
+			|| e.level() != MC.level)
 			return false;
 		
 		if(WURST.getFriends().isFriend(e))
@@ -987,6 +989,17 @@ public final class MaceAssistHack extends Hack
 	
 	private void tickStunSlam()
 	{
+		// A queued hit whose target died, despawned or got left behind in
+		// another dimension is dropped. Entity IDs get reused, so attacking
+		// it anyway could hit something else entirely.
+		if(slamTarget != null && !isStillAttackable(slamTarget))
+		{
+			slamPending = false;
+			slamTarget = null;
+		}
+		if(slamFollowUpTarget != null && !isStillAttackable(slamFollowUpTarget))
+			slamFollowUpTarget = null;
+		
 		if(slamPending && slamTarget != null)
 		{
 			slamPending = false;
@@ -1025,6 +1038,11 @@ public final class MaceAssistHack extends Hack
 				slamFollowUpTarget = null;
 			}
 		}
+	}
+	
+	private boolean isStillAttackable(Entity e)
+	{
+		return e.isAlive() && !e.isRemoved() && e.level() == MC.level;
 	}
 	
 	private void restoreOriginalSlot()

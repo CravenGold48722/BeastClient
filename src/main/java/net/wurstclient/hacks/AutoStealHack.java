@@ -89,26 +89,44 @@ public final class AutoStealHack extends Hack
 		
 		if(reverseSteal.isChecked() && steal)
 			slots = slots.reversed();
-		
+			
+		// This thread only does the waiting. Reading the slots and clicking
+		// them happens on the game thread, which owns the container, the
+		// screen and the connection - doing that from here raced the game
+		// thread updating the same container.
 		for(Slot slot : slots)
 			try
 			{
-				if(slot.getItem().isEmpty())
+				if(!MC.submit(() -> isStillOpen(screen) && slot.hasItem())
+					.join())
 					continue;
 				
 				Thread.sleep(delay.getValueI());
 				
-				if(MC.screen == null)
-					break;
+				boolean clicked = MC.submit(() -> {
+					// closed or replaced while we were waiting
+					if(!isStillOpen(screen))
+						return false;
+					
+					if(slot.hasItem())
+						screen.slotClicked(slot, slot.index, 0,
+							ContainerInput.QUICK_MOVE);
+					return true;
+				}).join();
 				
-				screen.slotClicked(slot, slot.index, 0,
-					ContainerInput.QUICK_MOVE);
+				if(!clicked)
+					break;
 				
 			}catch(InterruptedException e)
 			{
 				Thread.currentThread().interrupt();
 				break;
 			}
+	}
+	
+	private boolean isStillOpen(AbstractContainerScreen<?> screen)
+	{
+		return MC.screen == screen && MC.player != null;
 	}
 	
 	public boolean areButtonsVisible()

@@ -190,8 +190,10 @@ public abstract class AltEditorScreen extends Screen
 			e.printStackTrace();
 			return "\u00a74\u00a7lSkin could not be saved.";
 			
-		}catch(NullPointerException e)
+		}catch(RuntimeException e)
 		{
+			// Mojang's API answered with something unexpected (no such player,
+			// an empty or differently shaped reply). Not worth a crash.
 			e.printStackTrace();
 			return "\u00a74\u00a7lPlayer does not exist.";
 		}

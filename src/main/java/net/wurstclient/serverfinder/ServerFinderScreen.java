@@ -174,7 +174,9 @@ public class ServerFinderScreen extends Screen
 				working++;
 				String name = "Grief me #" + working;
 				String ip = pinger.getServerIP();
-				addServerToList(name, ip);
+				// This is the search thread; the server list and its widget
+				// belong to the game thread, which is drawing them.
+				minecraft.execute(() -> addServerToList(name, ip));
 			}
 			
 			pingers.remove(i);

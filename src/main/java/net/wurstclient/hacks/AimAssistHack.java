@@ -25,6 +25,8 @@ import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 import javax.sound.sampled.UnsupportedAudioFileException;
 
+import org.lwjgl.glfw.GLFW;
+
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.vertex.PoseStack;
 
@@ -354,6 +356,9 @@ public final class AimAssistHack extends Hack
 	private Thread musicThread;
 	private volatile boolean musicRunning;
 	private volatile SourceDataLine musicLine;
+	
+	/** The track that last ended on its own, so it isn't restarted. */
+	private volatile Path musicEndedFile;
 	
 	/**
 	 * How fast the smooth aim turns, in degrees per second.
@@ -939,22 +944,19 @@ public final class AimAssistHack extends Hack
 			// Hold backward briefly to reset the sprint state. The forward
 			// key was already released in the JUMPED case at the moment of
 			// the hit; this is the s-tap that follows that w-release.
-			WURST.getHax().autoSprintHack.setEnabled(false);
+			// (AutoSprint used to be switched off and straight back on here
+			// in the same tick, which did nothing but rewrite
+			// enabled-hacks.json on every hit.)
 			holdBackward();
 			// No sprint here: a real s-tap is just S. Holding sprint while
 			// walking backward is impossible in vanilla and only "works" with
 			// Omnidirectional Sprint, which makes it a giveaway.
 			KeyPresser.release(MC.options.keySprint);
-			WURST.getHax().autoSprintHack.setEnabled(true);
 			if(--stapTicksLeft <= 0)
 			{
 				releaseBackward();
-				WURST.getHax().autoSprintHack.setEnabled(true);
 				comboPhase = ComboPhase.IDLE;
-				WURST.getHax().autoSprintHack.setEnabled(true);
-				
 			}
-			WURST.getHax().autoSprintHack.setEnabled(true);
 			break;
 		}
 	}
@@ -1459,7 +1461,8 @@ public final class AimAssistHack extends Hack
 	
 	private boolean isValidTarget(Entity e)
 	{
-		if(e == null || !e.isAlive())
+		// also drops a target left over from the previous world or dimension
+		if(e == null || !e.isAlive() || e.level() != MC.level)
 			return false;
 		if(EntityUtils.distanceToHitboxSq(e) > range.getValueSq())
 			return false;
@@ -1500,8 +1503,20 @@ public final class AimAssistHack extends Hack
 	{
 		try
 		{
-			return InputConstants.isKeyDown(MC.getWindow(),
-				InputConstants.getKey(switchTargetKey.getValue()).getValue());
+			InputConstants.Key key =
+				InputConstants.getKey(switchTargetKey.getValue());
+			int code = key.getValue();
+			
+			// GLFW logs a "GL ERROR" for every invalid key code it's asked
+			// about, so unbound keys and mouse buttons need their own path.
+			if(code == InputConstants.UNKNOWN.getValue())
+				return false;
+			if(key.getType() == InputConstants.Type.MOUSE)
+				return GLFW.glfwGetMouseButton(MC.getWindow().handle(),
+					code) == GLFW.GLFW_PRESS;
+			
+			return InputConstants.isKeyDown(MC.getWindow(), code);
+			
 		}catch(IllegalArgumentException e)
 		{
 			return false;
@@ -1528,14 +1543,26 @@ public final class AimAssistHack extends Hack
 		{
 			if(isMusicPlaying())
 				stopMusic();
+			musicEndedFile = null;
 			return;
 		}
 		boolean shouldPlay =
 			playWhen.getSelected() == PlayWhen.WHILE_ENABLED || target != null;
-		if(shouldPlay && !isMusicPlaying())
-			startMusic();
-		else if(!shouldPlay && isMusicPlaying())
-			stopMusic();
+		if(!shouldPlay)
+		{
+			if(isMusicPlaying())
+				stopMusic();
+			musicEndedFile = null;
+			return;
+		}
+		
+		// Once a track has ended on its own (finished with Loop music off, or
+		// the file is missing or unreadable), don't start it again until
+		// something changes - otherwise "Loop music" off still looped, and a
+		// bad file was retried on a fresh thread every tick.
+		Path file = musicFile.getSelectedFile();
+		if(!isMusicPlaying() && !file.equals(musicEndedFile))
+			startMusic(file);
 	}
 	
 	private boolean isMusicPlaying()
@@ -1543,10 +1570,10 @@ public final class AimAssistHack extends Hack
 		return musicThread != null && musicThread.isAlive();
 	}
 	
-	private void startMusic()
+	private void startMusic(Path file)
 	{
 		musicRunning = true;
-		Path file = musicFile.getSelectedFile();
+		musicEndedFile = null;
 		float vol = (float)musicVolume.getValue() / 100F;
 		
 		musicThread = new Thread(() -> {
@@ -1584,11 +1611,15 @@ public final class AimAssistHack extends Hack
 						musicLine = null;
 					}
 				}catch(UnsupportedAudioFileException | LineUnavailableException
-					| IOException e)
+					| IOException | IllegalArgumentException e)
 				{
 					break;
 				}
 			}while(musicRunning && loopMusic.isChecked());
+			
+			// ended by itself rather than by stopMusic()
+			if(musicRunning)
+				musicEndedFile = file;
 		}, "wurst-aimassist-music");
 		musicThread.setDaemon(true);
 		musicThread.start();

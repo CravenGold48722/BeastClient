@@ -53,6 +53,15 @@ public abstract class Hack extends Feature
 		userInitiatedToggle = true;
 	}
 	
+	/**
+	 * Drops a mark from {@link #markUserInitiatedToggle()} that no toggle used
+	 * up.
+	 */
+	public static void clearUserInitiatedToggle()
+	{
+		userInitiatedToggle = false;
+	}
+	
 	public Hack(String name)
 	{
 		this.name = Objects.requireNonNull(name);

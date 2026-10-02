@@ -51,8 +51,8 @@ public final class WurstLogo
 	
 	private String getVersionString()
 	{
-		String version = "v" + "7.56.0";
-		version += " MC" + "26.1.2";
+		String version = "v" + WurstClient.VERSION;
+		version += " MC" + WurstClient.MC_VERSION;
 		
 		if(WURST.getUpdater().isOutdated())
 			version += " (outdated)";

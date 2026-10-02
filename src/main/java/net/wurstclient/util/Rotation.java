@@ -48,6 +48,12 @@ public record Rotation(float yaw, float pitch)
 	 */
 	public Rotation snapToMouseSteps(float fromYaw, float fromPitch)
 	{
+		// A NaN or infinite angle (e.g. from a failed calculation) would end
+		// up in a movement packet and get you kicked for an invalid rotation.
+		// Stay where we are instead.
+		if(!Float.isFinite(yaw) || !Float.isFinite(pitch))
+			return new Rotation(fromYaw, fromPitch);
+		
 		double step = getMouseStep();
 		double yawChange = Mth.wrapDegrees(yaw - fromYaw);
 		double pitchChange = pitch - fromPitch;

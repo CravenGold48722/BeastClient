@@ -135,10 +135,11 @@ public final class AutoCompleteHack extends Hack
 			{
 				if(suggestion.isEmpty())
 					continue;
-				
-				// apply suggestion
-				suggestionHandler.addSuggestion(suggestion, draftMessage2,
-					suggestionsUpdater2);
+					
+				// apply suggestion - on the game thread, since it updates the
+				// chat box's widgets, which the game is busy drawing
+				MC.execute(() -> suggestionHandler.addSuggestion(suggestion,
+					draftMessage2, suggestionsUpdater2));
 			}
 		});
 		apiCallThread.setName("AutoComplete API Call");

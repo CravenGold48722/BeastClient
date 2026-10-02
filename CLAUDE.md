@@ -123,6 +123,15 @@ EVENTS.remove(UpdateListener.class, this);
 `addPriority(...)` inserts before existing listeners. Events extending `CancellableEvent` stop
 propagating once cancelled.
 
+**Threads (each of these has caused a real crash or disconnect):**
+- `PacketInputListener` runs on the **netty thread**, and any exception there is rethrown and
+  disconnects you. Read `MC.player` etc. into a local once, compare entity IDs instead of
+  `level.getEntity()`, and only set flags/volatiles — do the work in the next `onUpdate`.
+- Never touch chat, screens, widgets, hack state (`setEnabled`) or the connection from a
+  background thread: hand it over with `MC.execute(...)` (or `MC.submit(...).join()` if the thread
+  needs the result). `ChatUtils.component/sendAsPlayer` already do this themselves.
+- `IdentityHashMap` iterator entries die on `itr.remove()` — read the key first, or iterate a copy.
+
 ### Which mixin fires what
 
 | Event | Fired from |
@@ -324,7 +333,9 @@ does it. When writing or touching a hack:
   `InventoryOpener` (only when no screen is open, not in creative) and closes it with `onClose()`
   3 idle ticks later, which sends the container-close packet. While that auto-opened
   screen is up, `KeyboardInputMixin` zeroes movement input (unless InvWalk). Skipped while riding
-  something with its own inventory.
+  something with its own inventory. Attacking, using, placing or mining closes it first
+  (`MultiPlayerGameModeMixin` → `InventoryOpener.beforeWorldInteraction()`), since nobody can do
+  those with the inventory open.
 - **Hotbar slot:** after `setSelectedSlot`, sync with `IMC.getInteractionManager().syncSelectedSlot()`
   (vanilla's `ensureHasSentCarriedItem`), never a hand-built `ServerboundSetCarriedItemPacket`.
 - **Chat / server commands:** `ChatUtils.sendAsPlayer("/cmd …")` — same normalisation and chat

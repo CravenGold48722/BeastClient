@@ -125,6 +125,15 @@ public enum ChatUtils
 	{
 		if(!enabled)
 			return;
+			
+		// Some features report from their own threads (ForceOp, AutoComplete,
+		// ...). The chat's message list belongs to the game thread, which may
+		// be drawing it at that very moment, so hand the message over.
+		if(!MC.isSameThread())
+		{
+			MC.execute(() -> component(component));
+			return;
+		}
 		
 		ChatComponent chatHud = MC.gui.getChat();
 		chatHud.addClientSystemMessage(prefix().append(component));

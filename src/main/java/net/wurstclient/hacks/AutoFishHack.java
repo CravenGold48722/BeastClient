@@ -199,16 +199,20 @@ public final class AutoFishHack extends Hack
 		// check sound type
 		if(!SoundEvents.FISHING_BOBBER_SPLASH.equals(sound.getSound().value()))
 			return;
-		
-		// check if player is fishing
-		if(!isFishing())
+			
+		// This runs on the network thread, while the game thread can remove
+		// the bobber at any moment - so read it once and work with that.
+		// Reading MC.player.fishing again after the check could throw, and an
+		// exception here disconnects you from the server.
+		FishingHook hook = getOwnBobber();
+		if(hook == null)
 			return;
 		
 		// register sound position
 		debugDraw.updateSoundPos(sound);
 		
 		// check sound position (Chebyshev distance)
-		Vec3 bobber = MC.player.fishing.position();
+		Vec3 bobber = hook.position();
 		double dx = Math.abs(sound.getX() - bobber.x());
 		double dz = Math.abs(sound.getZ() - bobber.z());
 		if(Math.max(dx, dz) > validRange.getValue())
@@ -223,20 +227,32 @@ public final class AutoFishHack extends Hack
 		if(!(event
 			.getPacket() instanceof ClientboundSetEntityDataPacket update))
 			return;
-		
-		// check if the entity is a bobber
-		if(!(MC.level.getEntity(update.id()) instanceof FishingHook bobber))
-			return;
-		
-		// check if it's our bobber
-		if(bobber != MC.player.fishing)
-			return;
-		
-		// check if player is fishing
-		if(!isFishing())
+			
+		// Network thread: compare IDs with our own bobber rather than looking
+		// the entity up in the level, which the game thread may be changing.
+		FishingHook bobber = getOwnBobber();
+		if(bobber == null || update.id() != bobber.getId())
 			return;
 		
 		biteDetected = true;
+	}
+	
+	/**
+	 * Our bobber, if we're fishing with a rod. Reads everything once, so it
+	 * is safe to call from the network thread.
+	 */
+	private FishingHook getOwnBobber()
+	{
+		LocalPlayer player = MC.player;
+		if(player == null)
+			return null;
+		
+		FishingHook hook = player.fishing;
+		if(hook == null || hook.isRemoved()
+			|| !player.getMainHandItem().is(Items.FISHING_ROD))
+			return null;
+		
+		return hook;
 	}
 	
 	@Override

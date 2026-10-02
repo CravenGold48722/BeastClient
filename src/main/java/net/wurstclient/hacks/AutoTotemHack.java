@@ -10,9 +10,8 @@ package net.wurstclient.hacks;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
-import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityEvent;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -170,29 +169,18 @@ public final class AutoTotemHack extends Hack
 		if(packet.getEventId() != EntityEvent.PROTECTED_FROM_DEATH)
 			return;
 			
-		// This runs on the network thread, so everything it touches is read
-		// defensively.
-		try
-		{
-			ClientLevel level = MC.level;
-			if(level == null || MC.player == null)
-				return;
-			
-			Entity entity = packet.getEntity(level);
-			if(entity == MC.player)
-			{
-				totemPopped = true;
-				// Armed here rather than on our next tick so the freeze is
-				// already up for the rest of this one. If it turns out there
-				// is no totem to equip, the next tick drops it again.
-				freezeTicksLeft = freezeTicks.getValueI();
-			}
-			
-		}catch(Exception e)
-		{
-			// A torn read of the entity list is harmless here - worst case we
-			// miss one pop and fall back to the normal offhand check below.
-		}
+		// This runs on the network thread. Comparing entity IDs avoids looking
+		// the entity up in the level's entity map, which the game thread may
+		// be changing at the same moment.
+		LocalPlayer player = MC.player;
+		if(player == null || packet.entityId != player.getId())
+			return;
+		
+		totemPopped = true;
+		// Armed here rather than on our next tick so the freeze is already up
+		// for the rest of this one. If it turns out there is no totem to
+		// equip, the next tick drops it again.
+		freezeTicksLeft = freezeTicks.getValueI();
 	}
 	
 	/**

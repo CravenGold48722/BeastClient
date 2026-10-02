@@ -35,3 +35,4 @@ accessible	field	net/minecraft/world/entity/LivingEntity	jumping	Z
 accessible	field	net/minecraft/client/renderer/ItemInHandRenderer	mainHandHeight	F
 accessible	field	net/minecraft/client/renderer/ItemInHandRenderer	oMainHandHeight	F
 accessible	field	net/minecraft/network/protocol/game/ClientboundSectionBlocksUpdatePacket	sectionPos	Lnet/minecraft/core/SectionPos;
+accessible	field	net/minecraft/network/protocol/game/ClientboundEntityEventPacket	entityId	I

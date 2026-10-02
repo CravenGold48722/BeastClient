@@ -59,7 +59,17 @@ public final class CmdProcessor implements ChatOutputListener
 			// toggles gets announced. Covers .t, .blink, .follow, .protect
 			// and friends in one place.
 			Hack.markUserInitiatedToggle();
-			runCmd(cmd, input);
+			try
+			{
+				runCmd(cmd, input);
+				
+			}finally
+			{
+				// A command that didn't toggle anything (.say, .gm, ...)
+				// mustn't leave the mark behind for the next toggle some
+				// hack does on its own, which would then get announced.
+				Hack.clearUserInitiatedToggle();
+			}
 			
 		}catch(CmdNotFoundException e)
 		{

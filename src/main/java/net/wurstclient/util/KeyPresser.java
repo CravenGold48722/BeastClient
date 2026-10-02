@@ -7,8 +7,8 @@
  */
 package net.wurstclient.util;
 
+import java.util.ArrayList;
 import java.util.IdentityHashMap;
-import java.util.Iterator;
 import java.util.Map;
 
 import net.minecraft.client.KeyMapping;
@@ -90,8 +90,13 @@ public enum KeyPresser
 		if(!canPressNow())
 			return;
 		
-		for(Map.Entry<KeyMapping, Press> entry : PRESSES.entrySet())
-			assertDown(entry.getKey(), entry.getValue());
+		// copy, in case pressing a key leads to a press()/release()
+		for(KeyMapping key : new ArrayList<>(PRESSES.keySet()))
+		{
+			Press press = PRESSES.get(key);
+			if(press != null)
+				assertDown(key, press);
+		}
 	}
 	
 	/**
@@ -102,19 +107,18 @@ public enum KeyPresser
 		// waiting presses aren't used up while a screen is open
 		if(!canPressNow())
 			return;
-		
-		Iterator<Map.Entry<KeyMapping, Press>> itr =
-			PRESSES.entrySet().iterator();
-		
-		while(itr.hasNext())
+			
+		// Work on a copy: IdentityHashMap entries die as soon as they're
+		// removed (getKey() then throws), and restoring a key can lead to a
+		// new press() that changes the map mid-loop.
+		for(KeyMapping key : new ArrayList<>(PRESSES.keySet()))
 		{
-			Map.Entry<KeyMapping, Press> entry = itr.next();
-			Press press = entry.getValue();
-			if(--press.readsLeft > 0)
+			Press press = PRESSES.get(key);
+			if(press == null || --press.readsLeft > 0)
 				continue;
 			
-			itr.remove();
-			restore(entry.getKey(), press);
+			PRESSES.remove(key);
+			restore(key, press);
 		}
 	}
 	

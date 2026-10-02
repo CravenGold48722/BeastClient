@@ -36,6 +36,7 @@ import net.wurstclient.settings.SwingHandSetting;
 import net.wurstclient.settings.SwingHandSetting.SwingHand;
 import net.wurstclient.settings.filterlists.EntityFilterList;
 import net.wurstclient.util.BlockUtils;
+import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.RotationUtils;
@@ -75,8 +76,23 @@ public final class KillauraHack extends Hack
 	
 	private final FaceTargetSetting faceTarget =
 		FaceTargetSetting.withoutPacketSpam(
-			WText.literal("How Killaura faces the entity it attacks."),
+			WText.literal("How Killaura faces the entity it attacks.\n\n"
+				+ "§lClient-side§r turns your camera smoothly, like a hand"
+				+ " on a mouse (the same aim AimAssist uses), and only attacks"
+				+ " once your crosshair is on the target."),
 			FaceTarget.CLIENT);
+	
+	private final SliderSetting aimSpeed = new SliderSetting("Aim speed",
+		"How fast Killaura turns your camera toward the target, with"
+			+ " §lFace target§r on Client-side. On top of this it keeps up"
+			+ " with a moving target.\n\n" + "AimAssist turns at 720.",
+		720, 30, 3600, 10, ValueDisplay.DEGREES.withSuffix("/s"));
+	
+	/** The smooth, human-like aim, shared with AimAssist. */
+	private final CameraAim cameraAim = new CameraAim();
+	
+	/** What the camera is turning toward (Client-side). */
+	private Entity aimTarget;
 	
 	private final SwingHandSetting swingHand = new SwingHandSetting(
 		SwingHandSetting.genericCombatDescription(this), SwingHand.CLIENT);
@@ -112,6 +128,7 @@ public final class KillauraHack extends Hack
 		addSetting(priority);
 		addSetting(fov);
 		addSetting(faceTarget);
+		addSetting(aimSpeed);
 		addSetting(swingHand);
 		addSetting(damageIndicator);
 		addSetting(pauseOnContainers);
@@ -149,17 +166,30 @@ public final class KillauraHack extends Hack
 		
 		target = null;
 		renderTarget = null;
+		aimTarget = null;
+		cameraAim.reset();
 	}
 	
 	@Override
 	public void onUpdate()
 	{
 		speed.updateTimer();
-		if(!speed.isTimeToAttack())
+		
+		// Client-side aiming turns the camera smoothly toward the target
+		// every frame, so the target is picked every tick, not just when the
+		// next attack is due.
+		boolean smoothAim = faceTarget.getSelected() == FaceTarget.CLIENT;
+		if(!smoothAim)
+			aimTarget = null;
+		
+		if(!smoothAim && !speed.isTimeToAttack())
 			return;
 		
 		if(pauseOnContainers.shouldPause())
+		{
+			aimTarget = null;
 			return;
+		}
 		
 		Stream<Entity> stream = EntityUtils.getAttackableEntities();
 		double rangeSq = range.getValueSq();
@@ -172,21 +202,65 @@ public final class KillauraHack extends Hack
 		
 		stream = entityFilters.applyTo(stream);
 		
-		target = stream.min(priority.getSelected().comparator).orElse(null);
-		renderTarget = target;
-		if(target == null)
+		Entity found =
+			stream.min(priority.getSelected().comparator).orElse(null);
+		
+		// Keep turning toward the same target while it's still valid, rather
+		// than flicking between targets every tick.
+		if(smoothAim && aimTarget != null && isStillValid(aimTarget, found))
+			found = aimTarget;
+		
+		target = null;
+		renderTarget = found;
+		if(found == null)
+		{
+			aimTarget = null;
 			return;
+		}
 		
-		WURST.getHax().autoSwordHack.setSlot(target);
+		WURST.getHax().autoSwordHack.setSlot(found);
 		
-		Vec3 hitVec = target.getBoundingBox().getCenter();
+		Vec3 hitVec = found.getBoundingBox().getCenter();
 		if(checkLOS.isChecked() && !BlockUtils.hasLineOfSight(hitVec))
 		{
-			target = null;
+			aimTarget = null;
+			return;
+		}
+		
+		if(smoothAim)
+		{
+			aimTarget = found;
+			
+			// Attack only once the crosshair is actually on it - the camera
+			// is still turning otherwise.
+			if(speed.isTimeToAttack() && CameraAim.isLookingAt(
+				MC.player.getYRot(), MC.player.getXRot(),
+				found.getBoundingBox().inflate(found.getPickRadius()),
+				range.getValue() + 1))
+				target = found;
 			return;
 		}
 		
 		faceTarget.face(hitVec);
+		target = found;
+	}
+	
+	/**
+	 * Whether the entity being aimed at is still a fine target: still among
+	 * the ones the filters let through this tick.
+	 */
+	private boolean isStillValid(Entity current, Entity best)
+	{
+		if(current == best)
+			return true;
+		
+		if(!current.isAlive() || current.level() != MC.level)
+			return false;
+		
+		if(EntityUtils.distanceToHitboxSq(current) > range.getValueSq())
+			return false;
+		
+		return entityFilters.applyTo(Stream.of(current)).findAny().isPresent();
 	}
 	
 	@Override
@@ -205,6 +279,16 @@ public final class KillauraHack extends Hack
 	@Override
 	public void onRender(PoseStack matrixStack, float partialTicks)
 	{
+		// Client-side: the camera turns every frame, like a mouse, with the
+		// same
+		// smooth, human-like aim as AimAssist.
+		if(aimTarget != null && faceTarget.getSelected() == FaceTarget.CLIENT)
+			cameraAim.aimAtEntity(aimTarget,
+				aimTarget.getBoundingBox().getCenter(), partialTicks, true,
+				aimSpeed.getValue());
+		else
+			cameraAim.reset();
+		
 		if(renderTarget == null || !damageIndicator.isChecked())
 			return;
 		

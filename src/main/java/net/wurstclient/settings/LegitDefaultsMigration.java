@@ -56,7 +56,12 @@ public enum LegitDefaultsMigration
 		
 		// Spoof Vanilla on by default
 		new Batch("legit-defaults-v2",
-			new String[][]{{"VanillaSpoof", "Spoof Vanilla", "false"}})};
+			new String[][]{{"VanillaSpoof", "Spoof Vanilla", "false"}}),
+		
+		// BowAimbot: "Predict movement" now scales an exact physics lead, so
+		// 100% is right; the old 20% only made sense for the old guesswork
+		new Batch("legit-defaults-v3",
+			new String[][]{{"BowAimbot", "Predict movement", "0.2"}})};
 	
 	public static void run(Path wurstFolder,
 		Function<String, Feature> featureByName)
@@ -72,6 +77,8 @@ public enum LegitDefaultsMigration
 				.setSelected(enumSetting.getDefaultSelected().toString());
 		else if(setting instanceof CheckboxSetting checkbox)
 			checkbox.setChecked(checkbox.isCheckedByDefault());
+		else if(setting instanceof SliderSetting slider)
+			slider.setValue(slider.getDefaultValue());
 	}
 	
 	private record Batch(String markerFile, String[][] oldDefaults)

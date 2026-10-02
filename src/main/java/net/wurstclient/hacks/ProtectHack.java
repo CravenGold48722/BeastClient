@@ -37,6 +37,7 @@ import net.wurstclient.settings.SwingHandSetting;
 import net.wurstclient.settings.SwingHandSetting.SwingHand;
 import net.wurstclient.settings.filterlists.EntityFilterList;
 import net.wurstclient.settings.filters.*;
+import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.FakePlayerEntity;
 
@@ -44,6 +45,15 @@ import net.wurstclient.util.FakePlayerEntity;
 public final class ProtectHack extends Hack
 	implements UpdateListener, RenderListener
 {
+	/** Same top speed as AimAssist. */
+	private static final double AIM_SPEED = 720;
+	
+	/** The smooth, human-like aim, shared with AimAssist. */
+	private final CameraAim cameraAim = new CameraAim();
+	
+	/** What the camera turns toward this tick (close range only). */
+	private Entity frameAimTarget;
+	
 	private final AttackSpeedSliderSetting speed =
 		new AttackSpeedSliderSetting();
 	
@@ -183,6 +193,9 @@ public final class ProtectHack extends Hack
 	{
 		speed.updateTimer();
 		
+		// set again below while fighting at close range
+		frameAimTarget = null;
+		
 		if(pauseOnContainers.shouldPause())
 			return;
 		
@@ -276,8 +289,7 @@ public final class ProtectHack extends Hack
 			}
 			
 			// follow target
-			WURST.getRotationFaker()
-				.faceVectorClient(target.getBoundingBox().getCenter());
+			frameAimTarget = target;
 			MC.options.keyUp.setDown(MC.player.distanceTo(
 				target) > (target == friend ? distanceF : distanceE));
 		}
@@ -290,6 +302,13 @@ public final class ProtectHack extends Hack
 			if(!speed.isTimeToAttack())
 				return;
 			
+			// while turning smoothly, only swing once the crosshair is on it
+			if(enemy == frameAimTarget
+				&& !CameraAim.isLookingAt(MC.player.getYRot(),
+					MC.player.getXRot(),
+					enemy.getBoundingBox().inflate(enemy.getPickRadius()), 7))
+				return;
+			
 			// attack enemy
 			MC.gameMode.attack(MC.player, enemy);
 			swingHand.swing(InteractionHand.MAIN_HAND);
@@ -300,6 +319,15 @@ public final class ProtectHack extends Hack
 	@Override
 	public void onRender(PoseStack matrixStack, float partialTicks)
 	{
+		// While fighting at close range the camera turns every frame, like a
+		// mouse, with the same smooth, human-like aim as AimAssist.
+		if(frameAimTarget != null)
+			cameraAim.aimAtEntity(frameAimTarget,
+				frameAimTarget.getBoundingBox().getCenter(), partialTicks, true,
+				AIM_SPEED);
+		else
+			cameraAim.reset();
+		
 		if(!useAi.isChecked())
 			return;
 		

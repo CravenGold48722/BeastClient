@@ -47,6 +47,7 @@ import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.settings.filters.FilterSpeedSetting;
 import net.wurstclient.util.BlockUtils;
+import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.Rotation;
 
 /**
@@ -176,8 +177,12 @@ public final class MaceAssistHack extends Hack
 			false);
 	
 	private final SliderSetting aimSpeed = new SliderSetting("Aim speed",
-		"How fast the camera is allowed to turn, in degrees per second.", 15,
-		0.5, 100, 0.5, ValueDisplay.DECIMAL);
+		"How fast the camera is allowed to turn toward the target, in degrees"
+			+ " per second.\n\n"
+			+ "On top of this it moves as fast as the target moves across your"
+			+ " view, so once it's on the target it stays there.\n\n"
+			+ "AimAssist turns at 720.",
+		15, 0.5, 720, 0.5, ValueDisplay.DECIMAL);
 	
 	private final SliderSetting aimRange = new SliderSetting("Aim range",
 		"How far away a target can be before aim assist ignores it.", 15, 0.5,
@@ -199,11 +204,15 @@ public final class MaceAssistHack extends Hack
 	
 	private final CheckboxSetting humanizeAim = new CheckboxSetting(
 		"Humanize aim",
-		"Adds the warm-up delay, random speed jitter and skipped frames that"
-			+ " BetterMaceSwap used, plus jitter of a mouse count here and"
-			+ " there. Turn this off for a snappier, more obvious aim.\n\n"
-			+ "Either way, every turn is rounded to whole mouse counts of your"
-			+ " real sensitivity, like an actual mouse.",
+		"Turns like a hand on a mouse - the same aim AimAssist uses: a short"
+			+ " reaction delay, speeding up and slowing down, a speed that"
+			+ " drifts a little, a slightly curved path and a slight hand"
+			+ " tremor while still far off.\n\n"
+			+ "Off: a snappier, more obvious turn at a constant speed in a"
+			+ " straight line.\n\n"
+			+ "Either way the camera turns every frame, keeps up with a moving"
+			+ " target, and moves in whole mouse counts of your real"
+			+ " sensitivity, like an actual mouse.",
 		true);
 	
 	private final CheckboxSetting checkLOS = new CheckboxSetting(
@@ -339,8 +348,8 @@ public final class MaceAssistHack extends Hack
 	
 	private Entity lockedTarget;
 	private int losGraceTicks;
-	private long lastAimTimeMs;
-	private int aimWarmupTicks;
+	/** The smooth, human-like aim, shared with AimAssist. */
+	private final CameraAim cameraAim = new CameraAim();
 	
 	private int triggerHitsThisFall;
 	private int triggerCooldownTimer;
@@ -498,8 +507,9 @@ public final class MaceAssistHack extends Hack
 		
 		updateTarget();
 		
-		if(aimActive)
-			applyRotation();
+		// (the camera itself is turned every frame, in onRender)
+		if(!aimActive)
+			cameraAim.reset();
 		
 		if(lockedTarget == null)
 			return;
@@ -523,9 +533,12 @@ public final class MaceAssistHack extends Hack
 	{
 		if(MC.player == null || MC.level == null || lockedTarget == null)
 			return;
-		
+			
+		// Turned every frame, like a mouse, with the same smooth, human-like
+		// aim as AimAssist - including keeping up with a moving target.
 		if(isAimActive())
-			applyRotation();
+			cameraAim.aimAtEntity(lockedTarget, getAimPoint(lockedTarget),
+				partialTicks, humanizeAim.isChecked(), aimSpeed.getValue());
 			
 		// Every rendered frame is another chance to notice that the target got
 		// close enough, on top of the checks the tick already did.
@@ -572,7 +585,7 @@ public final class MaceAssistHack extends Hack
 			{
 				lockedTarget = null;
 				losGraceTicks = 0;
-				lastAimTimeMs = 0;
+				cameraAim.reset();
 				
 			}else if(!hasLineOfSight(lockedTarget))
 			{
@@ -581,7 +594,7 @@ public final class MaceAssistHack extends Hack
 				else
 				{
 					lockedTarget = null;
-					lastAimTimeMs = 0;
+					cameraAim.reset();
 				}
 				
 			}else
@@ -618,11 +631,8 @@ public final class MaceAssistHack extends Hack
 		}
 		
 		losGraceTicks = 3;
-		lastAimTimeMs = 0;
-		
-		if(lockedTarget != null)
-			aimWarmupTicks =
-				humanizeAim.isChecked() ? 1 + (int)(Math.random() * 2) : 0;
+		// (a new target starts a fresh turn with a reaction delay - see
+		// CameraAim)
 	}
 	
 	private boolean isValidTarget(Entity e)
@@ -672,96 +682,27 @@ public final class MaceAssistHack extends Hack
 	
 	// ── Aim assist ───────────────────────────────────────────────────────
 	
-	private void applyRotation()
+	/**
+	 * The point on the target to aim at, at its tick position, picked by
+	 * §lAim bone§r.
+	 */
+	private Vec3 getAimPoint(Entity target)
 	{
-		if(lockedTarget == null)
-			return;
-		
-		boolean humanize = humanizeAim.isChecked();
-		
-		if(aimWarmupTicks > 0)
+		double y = switch(aimBone.getSelected())
 		{
-			aimWarmupTicks--;
-			return;
-		}
-		
-		if(humanize && Math.random() < 0.35)
-			return;
-		
-		long now = System.currentTimeMillis();
-		float deltaSeconds =
-			lastAimTimeMs == 0 ? 1F / 20F : (now - lastAimTimeMs) / 1000F;
-		deltaSeconds = Math.min(deltaSeconds, 3F / 20F);
-		lastAimTimeMs = now;
-		
-		double targetY = switch(aimBone.getSelected())
-		{
-			case CHEST -> lockedTarget.getY()
-				+ lockedTarget.getBbHeight() * 0.65;
-			case LEGS -> lockedTarget.getY() + lockedTarget.getBbHeight() * 0.2;
-			default -> lockedTarget.getEyeY();
+			case CHEST -> target.getY() + target.getBbHeight() * 0.65;
+			case LEGS -> target.getY() + target.getBbHeight() * 0.2;
+			default -> target.getEyeY();
 		};
 		
-		double dx = lockedTarget.getX() - MC.player.getX();
-		double dy = targetY - MC.player.getEyeY();
-		double dz = lockedTarget.getZ() - MC.player.getZ();
-		double diffXZ = Math.sqrt(dx * dx + dz * dz);
-		
-		float targetYaw = (float)Math.toDegrees(Math.atan2(dz, dx)) - 90F;
-		float targetPitch = (float)-Math.toDegrees(Math.atan2(dy, diffXZ));
-		
-		float currentYaw = MC.player.getYRot();
-		float currentPitch = MC.player.getXRot();
-		
-		float yawDiff = Mth.wrapDegrees(targetYaw - currentYaw);
-		float pitchDiff = Mth.wrapDegrees(targetPitch - currentPitch);
-		
-		float speed = (float)aimSpeed.getValue();
-		float yawSpeed =
-			humanize ? speed + (float)(Math.random() * 8 - 4) : speed;
-		float pitchSpeed =
-			humanize ? speed * 0.75F + (float)(Math.random() * 6 - 3) : speed;
-		
-		float yawMax = yawSpeed * deltaSeconds;
-		float pitchMax = pitchSpeed * deltaSeconds;
-		
-		float smoothing =
-			humanize ? 0.08F + (float)(Math.random() * 0.06F) : 0.12F;
-		
-		float yawStep = Mth.clamp(yawDiff * smoothing, -yawMax, yawMax);
-		float pitchStep = Mth.clamp(pitchDiff * smoothing, -pitchMax, pitchMax);
-		
-		// don't fight the pitch while the yaw is still way off
-		if(Math.abs(yawDiff) > 15F)
-			pitchStep *= 0.3F;
-		
-		if(humanize)
-		{
-			// Hand jitter, in whole mouse counts of your real sensitivity:
-			// now and then one count more or less than planned. (This used to
-			// add fractions of a degree after rounding, which put the turn
-			// off any real mouse grid.)
-			double step = Rotation.getMouseStep();
-			if(Math.random() < 0.3)
-				yawStep += (float)(step * (Math.random() < 0.5 ? -1 : 1));
-			if(Math.random() < 0.2)
-				pitchStep += (float)(step * (Math.random() < 0.5 ? -1 : 1));
-		}
-		
-		// Both modes turn in whole mouse counts of your real sensitivity, like
-		// an actual mouse (this used to round to a made-up sensitivity based
-		// on Aim speed). Snappy mode stays just as fast - rounding only moves
-		// the result by less than one count.
-		new Rotation(currentYaw + yawStep, currentPitch + pitchStep)
-			.applyToClientPlayer();
+		return new Vec3(target.getX(), y, target.getZ());
 	}
 	
 	private void resetAim()
 	{
 		lockedTarget = null;
 		losGraceTicks = 0;
-		lastAimTimeMs = 0;
-		aimWarmupTicks = 0;
+		cameraAim.reset();
 	}
 	
 	// ── Trigger bot ──────────────────────────────────────────────────────

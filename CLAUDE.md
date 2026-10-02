@@ -308,6 +308,13 @@ does it. When writing or touching a hack:
   is on, so `.jump` from chat fires right after the chat closes.
   Only movement cheats that can't be done with keys (Flight, Jetpack, Speed, NoClip…) keep velocity
   edits.
+- **Aiming at entities:** use the shared engine, never a hand-rolled turn. `util/HumanAim` is
+  the math (reaction delay, critically damped ease-in/out, drifting speed, curve, tremor,
+  tracking a moving target; unit-tested in `HumanAimTest`), `util/CameraAim` drives it per
+  frame from `onRender` (or per tick for silent aim). Used by AimAssist, MaceAssist, BowAimbot,
+  Killaura (Client-side), KillauraLegit, FightBot, Protect. Gate attacks on the crosshair actually
+  being on the target while turning. BowAimbot's lead comes from `util/BallisticSolver`
+  (vanilla projectile physics, tested in `BallisticSolverTest`).
 - **MaceAssist aim** also rounds to the real mouse step (both Humanize and snappy); humanize jitter is
   whole mouse counts. KillauraLegit moves via MouseUpdateEvent deltas, so vanilla applies sensitivity.
 - **Mouse-step rotations:** every Wurst-made rotation (client via `Rotation.applyToClientPlayer`,

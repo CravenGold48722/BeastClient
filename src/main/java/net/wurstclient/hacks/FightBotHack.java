@@ -37,6 +37,7 @@ import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.settings.SwingHandSetting;
 import net.wurstclient.settings.SwingHandSetting.SwingHand;
 import net.wurstclient.settings.filterlists.EntityFilterList;
+import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.EntityUtils;
 
 @SearchTags({"fight bot"})
@@ -44,6 +45,15 @@ import net.wurstclient.util.EntityUtils;
 public final class FightBotHack extends Hack
 	implements UpdateListener, RenderListener
 {
+	/** Same top speed as AimAssist. */
+	private static final double AIM_SPEED = 720;
+	
+	/** The smooth, human-like aim, shared with AimAssist. */
+	private final CameraAim cameraAim = new CameraAim();
+	
+	/** What the camera turns toward this tick (close range only). */
+	private Entity frameAimTarget;
+	
 	private final SliderSetting range = new SliderSetting("Range",
 		"Attack range (like Killaura)", 4.25, 1, 6, 0.05, ValueDisplay.DECIMAL);
 	
@@ -126,6 +136,9 @@ public final class FightBotHack extends Hack
 	{
 		speed.updateTimer();
 		
+		// set again below while fighting at close range
+		frameAimTarget = null;
+		
 		if(pauseOnContainers.shouldPause())
 			return;
 		
@@ -203,8 +216,7 @@ public final class FightBotHack extends Hack
 			// follow entity
 			MC.options.keyUp
 				.setDown(MC.player.distanceTo(entity) > distance.getValueF());
-			WURST.getRotationFaker()
-				.faceVectorClient(entity.getBoundingBox().getCenter());
+			frameAimTarget = entity;
 		}
 		
 		// check cooldown
@@ -213,6 +225,13 @@ public final class FightBotHack extends Hack
 		
 		// check range
 		if(EntityUtils.distanceToHitboxSq(entity) > range.getValueSq())
+			return;
+		
+		// while turning smoothly, only swing once the crosshair is on it
+		if(entity == frameAimTarget
+			&& !CameraAim.isLookingAt(MC.player.getYRot(), MC.player.getXRot(),
+				entity.getBoundingBox().inflate(entity.getPickRadius()),
+				range.getValue() + 1))
 			return;
 		
 		// attack entity
@@ -224,6 +243,15 @@ public final class FightBotHack extends Hack
 	@Override
 	public void onRender(PoseStack matrixStack, float partialTicks)
 	{
+		// While fighting at close range the camera turns every frame, like a
+		// mouse, with the same smooth, human-like aim as AimAssist.
+		if(frameAimTarget != null)
+			cameraAim.aimAtEntity(frameAimTarget,
+				frameAimTarget.getBoundingBox().getCenter(), partialTicks, true,
+				AIM_SPEED);
+		else
+			cameraAim.reset();
+		
 		PathCmd pathCmd = WURST.getCmds().pathCmd;
 		pathFinder.renderPath(matrixStack, pathCmd.isDebugMode(),
 			pathCmd.isDepthTest());

@@ -14,14 +14,12 @@ import java.util.stream.Stream;
 import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
-import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.AABB;
 import net.wurstclient.Category;
 import net.wurstclient.events.HandleInputListener;
-import net.wurstclient.events.MouseUpdateListener;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
@@ -35,13 +33,13 @@ import net.wurstclient.settings.SwingHandSetting.SwingHand;
 import net.wurstclient.settings.filterlists.EntityFilterList;
 import net.wurstclient.settings.filters.*;
 import net.wurstclient.util.BlockUtils;
+import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.RenderUtils;
-import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
 
-public final class KillauraLegitHack extends Hack implements UpdateListener,
-	HandleInputListener, MouseUpdateListener, RenderListener
+public final class KillauraLegitHack extends Hack
+	implements UpdateListener, HandleInputListener, RenderListener
 {
 	private final SliderSetting range =
 		new SliderSetting("Range", 4.25, 1, 4.25, 0.05, ValueDisplay.DECIMAL);
@@ -116,8 +114,8 @@ public final class KillauraLegitHack extends Hack implements UpdateListener,
 			FilterCrystalsSetting.genericCombat(false));
 	
 	private Entity target;
-	private float nextYaw;
-	private float nextPitch;
+	/** The smooth, human-like aim, shared with AimAssist. */
+	private final CameraAim cameraAim = new CameraAim();
 	
 	public KillauraLegitHack()
 	{
@@ -153,7 +151,6 @@ public final class KillauraLegitHack extends Hack implements UpdateListener,
 		speed.resetTimer(speedRandMS.getValue());
 		EVENTS.add(UpdateListener.class, this);
 		EVENTS.add(HandleInputListener.class, this);
-		EVENTS.add(MouseUpdateListener.class, this);
 		EVENTS.add(RenderListener.class, this);
 	}
 	
@@ -162,7 +159,7 @@ public final class KillauraLegitHack extends Hack implements UpdateListener,
 	{
 		EVENTS.remove(UpdateListener.class, this);
 		EVENTS.remove(HandleInputListener.class, this);
-		EVENTS.remove(MouseUpdateListener.class, this);
+		cameraAim.reset();
 		EVENTS.remove(RenderListener.class, this);
 		target = null;
 	}
@@ -198,9 +195,8 @@ public final class KillauraLegitHack extends Hack implements UpdateListener,
 			return;
 		}
 		
-		// face entity
+		// (the camera turns toward it every frame, in onRender)
 		WURST.getHax().autoSwordHack.setSlot(target);
-		faceEntityClient(target);
 	}
 	
 	@Override
@@ -223,44 +219,18 @@ public final class KillauraLegitHack extends Hack implements UpdateListener,
 		speed.resetTimer(speedRandMS.getValue());
 	}
 	
-	private boolean faceEntityClient(Entity entity)
-	{
-		// get needed rotation
-		AABB box = entity.getBoundingBox();
-		Rotation needed = RotationUtils.getNeededRotations(box.getCenter());
-		
-		// turn towards center of boundingBox
-		Rotation next = RotationUtils.slowlyTurnTowards(needed,
-			rotationSpeed.getValueI() / 20F);
-		nextYaw = next.yaw();
-		nextPitch = next.pitch();
-		
-		// check if facing center
-		if(RotationUtils.isAlreadyFacing(needed))
-			return true;
-		
-		// if not facing center, check if facing anything in boundingBox
-		return RotationUtils.isFacingBox(box, range.getValue());
-	}
-	
-	@Override
-	public void onMouseUpdate(MouseUpdateEvent event)
-	{
-		if(target == null || MC.player == null)
-			return;
-		
-		int diffYaw = (int)(nextYaw - MC.player.getYRot());
-		int diffPitch = (int)(nextPitch - MC.player.getXRot());
-		if(Mth.abs(diffYaw) < 1 && Mth.abs(diffPitch) < 1)
-			return;
-		
-		event.setDeltaX(event.getDefaultDeltaX() + diffYaw);
-		event.setDeltaY(event.getDefaultDeltaY() + diffPitch);
-	}
-	
 	@Override
 	public void onRender(PoseStack matrixStack, float partialTicks)
 	{
+		// Turned every frame, like a mouse, with the same smooth, human-like
+		// aim
+		// as AimAssist - including keeping up with a moving target.
+		if(target != null)
+			cameraAim.aimAtEntity(target, target.getBoundingBox().getCenter(),
+				partialTicks, true, rotationSpeed.getValue());
+		else
+			cameraAim.reset();
+		
 		if(target == null || !damageIndicator.isChecked())
 			return;
 		

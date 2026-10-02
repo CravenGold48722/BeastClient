@@ -8,6 +8,7 @@
 package net.wurstclient.hacks;
 
 import java.awt.Color;
+import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.function.ToDoubleFunction;
 import java.util.stream.Stream;
@@ -18,13 +19,23 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.BowItem;
 import net.minecraft.world.item.CrossbowItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.TridentItem;
+import net.minecraft.world.item.component.ChargedProjectiles;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.GUIRenderListener;
@@ -37,27 +48,51 @@ import net.wurstclient.settings.EnumSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.settings.filterlists.EntityFilterList;
+import net.wurstclient.util.BallisticSolver;
+import net.wurstclient.util.BallisticSolver.Projectile;
+import net.wurstclient.util.BallisticSolver.Solution;
+import net.wurstclient.util.BallisticSolver.TargetPath;
+import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
 
-@SearchTags({"bow aimbot"})
+@SearchTags({"bow aimbot", "crossbow aimbot", "trident aimbot"})
 public final class BowAimbotHack extends Hack
 	implements UpdateListener, RenderListener, GUIRenderListener
 {
 	private final EnumSetting<Priority> priority = new EnumSetting<>("Priority",
 		"Determines which entity will be attacked first.\n"
-			+ "\u00a7lDistance\u00a7r - Attacks the closest entity.\n"
-			+ "\u00a7lAngle\u00a7r - Attacks the entity that requires the least head movement.\n"
-			+ "\u00a7lAngle+Dist\u00a7r - A hybrid of Angle and Distance. This is usually the best at figuring out what you want to aim at.\n"
-			+ "\u00a7lHealth\u00a7r - Attacks the weakest entity.",
+			+ "§lDistance§r - Attacks the closest entity.\n"
+			+ "§lAngle§r - Attacks the entity that requires the least head movement.\n"
+			+ "§lAngle+Dist§r - A hybrid of Angle and Distance. This is usually the best at figuring out what you want to aim at.\n"
+			+ "§lHealth§r - Attacks the weakest entity.",
 		Priority.values(), Priority.ANGLE_DIST);
 	
 	private final SliderSetting predictMovement = new SliderSetting(
 		"Predict movement",
-		"Controls the strength of BowAimbot's movement prediction algorithm.",
-		0.2, 0, 2, 0.01, ValueDisplay.PERCENTAGE);
+		"How much of the target's movement to lead the shot by.\n\n"
+			+ "BowAimbot works out exactly where the target will be when the"
+			+ " projectile gets there - running, strafing, jumping or"
+			+ " falling - by simulating the projectile's real flight (drag,"
+			+ " gravity, your own movement). 100% leads by exactly that; less"
+			+ " leads by less, more by more.",
+		1, 0, 2, 0.01, ValueDisplay.PERCENTAGE);
+	
+	private final SliderSetting aimSpeed = new SliderSetting("Aim speed",
+		"How fast BowAimbot turns toward the firing solution. On top of this"
+			+ " it keeps up as the solution moves with the target.\n\n"
+			+ "AimAssist turns at 720.",
+		720, 30, 3600, 10, ValueDisplay.DEGREES.withSuffix("/s"));
+	
+	private final CheckboxSetting humanizeAim = new CheckboxSetting(
+		"Humanize aim",
+		"Turns like a hand on a mouse - the same aim AimAssist uses: a short"
+			+ " reaction delay, speeding up and slowing down, a slightly curved"
+			+ " path.\n\n"
+			+ "Off: turns at a constant speed in a straight line.",
+		true);
 	
 	private final CheckboxSetting silentAim = new CheckboxSetting("Silent aim",
 		"Aims the bow on the server only, inside the outgoing movement packet"
@@ -73,8 +108,33 @@ public final class BowAimbotHack extends Hack
 	private final ColorSetting color = new ColorSetting("ESP color",
 		"Color of the box that BowAimbot draws around the target.", Color.RED);
 	
+	/** What the projectile in hand does, or null if it can't be aimed. */
+	private record Shot(Projectile projectile, double spawnDrop, float charge)
+	{}
+	
+	private enum Status
+	{
+		CHARGING,
+		LOCKED,
+		OUT_OF_RANGE,
+		BLOCKED
+	}
+	
+	/** Ticks of target positions kept for measuring its velocity. */
+	private static final int HISTORY = 4;
+	
+	private final CameraAim cameraAim = new CameraAim();
+	private final ArrayDeque<Vec3> targetHistory = new ArrayDeque<>();
+	
 	private Entity target;
 	private float velocity;
+	private Status status = Status.CHARGING;
+	
+	/** The firing solution, and how fast it moves (degrees per second). */
+	private Solution solution;
+	private double[] solutionTrack = {0, 0};
+	private boolean aimInFrames;
+	private boolean lastSilent;
 	
 	public BowAimbotHack()
 	{
@@ -83,6 +143,8 @@ public final class BowAimbotHack extends Hack
 		setCategory(Category.COMBAT);
 		addSetting(priority);
 		addSetting(predictMovement);
+		addSetting(aimSpeed);
+		addSetting(humanizeAim);
 		addSetting(silentAim);
 		
 		entityFilters.forEach(this::addSetting);
@@ -97,6 +159,8 @@ public final class BowAimbotHack extends Hack
 		WURST.getHax().excavatorHack.setEnabled(false);
 		WURST.getHax().templateToolHack.setEnabled(false);
 		
+		clearTarget();
+		
 		// register event listeners
 		EVENTS.add(GUIRenderListener.class, this);
 		EVENTS.add(RenderListener.class, this);
@@ -109,97 +173,244 @@ public final class BowAimbotHack extends Hack
 		EVENTS.remove(GUIRenderListener.class, this);
 		EVENTS.remove(RenderListener.class, this);
 		EVENTS.remove(UpdateListener.class, this);
+		clearTarget();
+	}
+	
+	private void clearTarget()
+	{
+		target = null;
+		solution = null;
+		aimInFrames = false;
+		targetHistory.clear();
+		cameraAim.reset();
 	}
 	
 	@Override
 	public void onUpdate()
 	{
 		LocalPlayer player = MC.player;
-		
-		// check if item is ranged weapon
-		ItemStack stack = MC.player.getInventory().getSelectedItem();
-		Item item = stack.getItem();
-		if(!(item instanceof BowItem || item instanceof CrossbowItem))
+		Shot shot = getShot(player, player.getInventory().getSelectedItem());
+		if(shot == null)
 		{
-			target = null;
+			clearTarget();
 			return;
 		}
+		velocity = shot.charge();
 		
-		// check if using bow
-		if(item instanceof BowItem && !MC.options.keyUse.isDown()
-			&& !player.isUsingItem())
-		{
-			target = null;
-			return;
-		}
-		
-		// check if crossbow is loaded
-		if(item instanceof CrossbowItem && !CrossbowItem.isCharged(stack))
-		{
-			target = null;
-			return;
-		}
-		
-		// set target
+		// keep the current target while it's still valid
+		Entity previous = target;
 		if(filterEntities(Stream.of(target)) == null)
 			target = filterEntities(StreamSupport
 				.stream(MC.level.entitiesForRendering().spliterator(), true));
 		
 		if(target == null)
-			return;
-		
-		// set velocity
-		velocity = (72000 - player.getUseItemRemainingTicks()) / 20F;
-		velocity = (velocity * velocity + velocity * 2) / 3;
-		if(velocity > 1)
-			velocity = 1;
-		
-		// set position to aim at
-		double d = RotationUtils.getEyesPos().distanceTo(
-			target.getBoundingBox().getCenter()) * predictMovement.getValue();
-		double posX =
-			target.getX() + (target.getX() - target.xOld) * d - player.getX();
-		double posY = target.getY() + (target.getY() - target.yOld) * d
-			+ target.getBbHeight() * 0.5 - player.getY()
-			- player.getEyeHeight(player.getPose());
-		double posZ =
-			target.getZ() + (target.getZ() - target.zOld) * d - player.getZ();
-		
-		// calculate needed yaw
-		float neededYaw = (float)Math.toDegrees(Math.atan2(posZ, posX)) - 90;
-		
-		// calculate needed pitch using actual arrow physics constants
-		double hDistance = Math.sqrt(posX * posX + posZ * posZ);
-		double hDistanceSq = hDistance * hDistance;
-		float actualSpeed = velocity * 3.0F; // blocks/tick at this charge level
-		float g = 0.05F; // vanilla arrow gravity (blocks/tick²)
-		float speedSq = actualSpeed * actualSpeed;
-		float speedPow4 = speedSq * speedSq;
-		float neededPitch = (float)-Math.toDegrees(Math.atan((speedSq
-			- Math.sqrt(speedPow4 - g * (g * hDistanceSq + 2 * posY * speedSq)))
-			/ (g * hDistance)));
-		
-		// If there's no firing solution (target out of range), just aim at the
-		// target's center so the arrow at least heads the right way.
-		if(Float.isNaN(neededPitch))
 		{
-			if(silentAim.isChecked())
-				WURST.getRotationFaker()
-					.faceVectorPacket(target.getBoundingBox().getCenter());
-			else
-				WURST.getRotationFaker()
-					.faceVectorClient(target.getBoundingBox().getCenter());
+			clearTarget();
 			return;
 		}
 		
-		// Apply the firing solution. Silent aim writes the rotation only into
-		// the outgoing movement packet (LiquidBounce-style), so the server
-		// fires the arrow at the target without turning your camera; otherwise
-		// rotate the camera toward the solution like before.
-		if(silentAim.isChecked())
-			WURST.getRotationFaker().faceRotationPacket(neededYaw, neededPitch);
+		if(target != previous)
+		{
+			targetHistory.clear();
+			solution = null;
+		}
+		
+		targetHistory.addLast(target.position());
+		while(targetHistory.size() > HISTORY)
+			targetHistory.removeFirst();
+			
+		// Solve the shot: spawn point, what your own movement adds to the
+		// projectile, and where the target is headed.
+		Vec3 start = RotationUtils.getEyesPos().add(0, -shot.spawnDrop(), 0);
+		Vec3 inherited = getInheritedVelocity(player);
+		Solution next = BallisticSolver.solve(start, inherited,
+			shot.projectile(), predictPath(target));
+		
+		// how fast the solution itself is moving, so the aim keeps up
+		if(solution != null)
+			solutionTrack = new double[]{
+				Mth.wrapDegrees(next.yaw() - solution.yaw()) / 0.05,
+				(next.pitch() - solution.pitch()) / 0.05};
 		else
-			new Rotation(neededYaw, neededPitch).applyToClientPlayer();
+			solutionTrack = new double[]{0, 0};
+		solution = next;
+		
+		if(!next.reachable())
+			status = Status.OUT_OF_RANGE;
+		else if(isBlocked(start, inherited, shot.projectile(), next))
+			status = Status.BLOCKED;
+		else
+			status = velocity < 1 ? Status.CHARGING : Status.LOCKED;
+		
+		// switching between silent and camera aim starts the aim over
+		boolean silent = silentAim.isChecked();
+		if(silent != lastSilent)
+		{
+			cameraAim.reset();
+			lastSilent = silent;
+		}
+		
+		Rotation wanted = new Rotation(next.yaw(), next.pitch());
+		if(silent)
+		{
+			// Silent aim only matters once per tick, in the movement packet.
+			aimInFrames = false;
+			Rotation r = cameraAim.turnSilently(target, wanted, solutionTrack,
+				humanizeAim.isChecked(), aimSpeed.getValue());
+			WURST.getRotationFaker().faceRotationPacket(r.yaw(), r.pitch());
+			
+		}else
+			// The camera turns every frame, in onRender, like a mouse.
+			aimInFrames = true;
+	}
+	
+	/**
+	 * What the held item shoots and how, or null if it isn't something
+	 * BowAimbot can aim right now.
+	 */
+	private Shot getShot(LocalPlayer player, ItemStack stack)
+	{
+		Item item = stack.getItem();
+		
+		// bow: power from how long it's been drawn (BowItem.releaseUsing)
+		if(item instanceof BowItem)
+		{
+			if(!MC.options.keyUse.isDown() && !player.isUsingItem())
+				return null;
+			
+			float power = BowItem.getPowerForTime(player.getTicksUsingItem());
+			return new Shot(
+				new Projectile(Math.max(power, 0.1) * 3, 0.05, 0.99), 0.1,
+				power);
+		}
+		
+		// loaded crossbow: arrows at 3.15, fireworks at 1.6 in a straight line
+		if(item instanceof CrossbowItem)
+		{
+			if(!CrossbowItem.isCharged(stack))
+				return null;
+			
+			ChargedProjectiles loaded =
+				stack.get(DataComponents.CHARGED_PROJECTILES);
+			if(loaded != null && loaded.contains(Items.FIREWORK_ROCKET))
+				return new Shot(new Projectile(1.6, 0, 1), 0.15, 1);
+			
+			return new Shot(new Projectile(3.15, 0.05, 0.99), 0.1, 1);
+		}
+		
+		// trident: thrown at 2.5 once held back for 10 ticks
+		if(item instanceof TridentItem)
+		{
+			if(!player.isUsingItem())
+				return null;
+			
+			float charge = Math.min(player.getTicksUsingItem() / 10F, 1);
+			return new Shot(new Projectile(2.5, 0.05, 0.99), 0.1, charge);
+		}
+		
+		return null;
+	}
+	
+	/**
+	 * What your own movement adds to the projectile: vanilla adds the
+	 * shooter's movement, minus the vertical part while on the ground
+	 * (Projectile.shootFromRotation).
+	 */
+	private static Vec3 getInheritedVelocity(LocalPlayer player)
+	{
+		Vec3 move = player.position().subtract(player.xo, player.yo, player.zo);
+		return new Vec3(move.x, player.onGround() ? 0 : move.y, move.z);
+	}
+	
+	/**
+	 * Where the target's hitbox center will be, some ticks from now: keeps
+	 * running the way it's been running (averaged over the last few ticks),
+	 * and if it's in the air, falls the way players and mobs fall, landing on
+	 * the ground below it.
+	 */
+	private TargetPath predictPath(Entity e)
+	{
+		double predict = predictMovement.getValue();
+		Vec3 center = e.getBoundingBox().getCenter();
+		double centerOffset = center.y - e.getY();
+		
+		// horizontal velocity, averaged to smooth out the network's steps
+		Vec3 oldest = targetHistory.peekFirst();
+		Vec3 newest = targetHistory.peekLast();
+		int span = targetHistory.size() - 1;
+		Vec3 velocity =
+			span > 0 ? newest.subtract(oldest).scale(1.0 / span).scale(predict)
+				: e.position().subtract(e.xo, e.yo, e.zo).scale(predict);
+		
+		boolean flying = e instanceof LivingEntity le && le.isFallFlying()
+			|| e instanceof Player p && p.getAbilities().flying
+			|| e.isNoGravity();
+		boolean falling = !flying && !e.onGround() && !e.isInWater();
+		
+		// on the ground or swimming: stays at its height
+		if(!flying && !falling)
+			return t -> new Vec3(center.x + velocity.x * t, center.y,
+				center.z + velocity.z * t);
+		
+		// flying (elytra, creative): carries on in a straight line
+		if(flying)
+			return t -> center.add(velocity.scale(t));
+			
+		// falling: vanilla gravity and drag (LivingEntity.travel), stopping
+		// on the ground below
+		double feetY = e.getY();
+		double groundY = findGroundBelow(e);
+		double vy = (e.getY() - e.yo) * predict;
+		return t -> {
+			double y = feetY;
+			double v = vy;
+			int whole = (int)t;
+			for(int i = 0; i < whole && y > groundY; i++)
+			{
+				y += v;
+				v = (v - 0.08) * 0.98;
+			}
+			if(y > groundY)
+				y += v * (t - whole);
+			y = Math.max(y, groundY);
+			return new Vec3(center.x + velocity.x * t, y + centerOffset,
+				center.z + velocity.z * t);
+		};
+	}
+	
+	/** Height of the ground under the entity, or far below if there's none. */
+	private static double findGroundBelow(Entity e)
+	{
+		Vec3 from = e.position();
+		Vec3 to = from.add(0, -64, 0);
+		BlockHitResult hit = MC.level.clip(new ClipContext(from, to,
+			ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, e));
+		return hit.getType() == HitResult.Type.MISS ? to.y
+			: hit.getLocation().y;
+	}
+	
+	/** Whether a block is in the way of the solved shot. */
+	private boolean isBlocked(Vec3 start, Vec3 inherited, Projectile p,
+		Solution s)
+	{
+		Vec3 velocity = BallisticSolver
+			.launchVelocity(s.yaw(), s.pitch(), p.speed()).add(inherited);
+		Vec3 pos = start;
+		
+		for(int tick = 0; tick < Math.ceil(s.ticks()); tick++)
+		{
+			double part = Math.min(1, s.ticks() - tick);
+			Vec3 next = pos.add(velocity.scale(part));
+			BlockHitResult hit = MC.level.clip(new ClipContext(pos, next,
+				ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, MC.player));
+			if(hit.getType() != HitResult.Type.MISS)
+				return true;
+			
+			pos = next;
+			velocity = velocity.scale(p.drag()).add(0, -p.gravity(), 0);
+		}
+		
+		return false;
 	}
 	
 	private Entity filterEntities(Stream<Entity> s)
@@ -215,6 +426,13 @@ public final class BowAimbotHack extends Hack
 	{
 		if(target == null)
 			return;
+			
+		// Camera aim: turned every frame, like a mouse, with the same smooth,
+		// human-like aim as AimAssist, keeping up as the solution moves.
+		if(aimInFrames && solution != null)
+			cameraAim.turnCamera(target,
+				new Rotation(solution.yaw(), solution.pitch()), solutionTrack,
+				humanizeAim.isChecked(), aimSpeed.getValue());
 		
 		AABB box = EntityUtils.getLerpedBox(target, partialTicks)
 			.move(0, 0.05, 0).inflate(0.05);
@@ -232,11 +450,13 @@ public final class BowAimbotHack extends Hack
 		if(target == null)
 			return;
 		
-		String message;
-		if(velocity < 1)
-			message = "Charging: " + (int)(velocity * 100) + "%";
-		else
-			message = "Target Locked";
+		String message = switch(status)
+		{
+			case OUT_OF_RANGE -> "Out of range";
+			case BLOCKED -> "Shot blocked";
+			case CHARGING -> "Charging: " + (int)(velocity * 100) + "%";
+			case LOCKED -> "Target Locked";
+		};
 		
 		Font tr = MC.font;
 		int msgWidth = tr.width(message);

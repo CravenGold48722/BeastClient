@@ -98,7 +98,12 @@ public final class AimAssistHack extends Hack
 			+ " before, so close-range tracking stays exact.\n\n"
 			+ "With §lFace target§r on Client-side the camera turns every"
 			+ " frame, like a mouse, instead of 20 times a second.\n\n"
-			+ "Tops out at 720°/s - a 180 in about a quarter of a second. See"
+			+ "It also moves as fast as the target is moving across your"
+			+ " view - from how fast you move and how fast it moves - so the"
+			+ " crosshair stays on a moving target instead of trailing"
+			+ " behind it.\n\n"
+			+ "The turn toward the target tops out at 720°/s (a 180 in about"
+			+ " a quarter of a second), on top of that tracking speed. See"
 			+ " §lHumanize smooth aim§r for how the turn moves.",
 		true);
 	
@@ -286,6 +291,14 @@ public final class AimAssistHack extends Hack
 	 */
 	private double aimVelYaw;
 	private double aimVelPitch;
+	
+	/**
+	 * How fast the aim point moves across your view because you and/or the
+	 * target are moving, in degrees per second. The smooth aim adds this to
+	 * its turn so the crosshair keeps up with a moving target.
+	 */
+	private double trackYaw;
+	private double trackPitch;
 	
 	/** Humanized smooth aim: slowly drifting speed variation (around 1). */
 	private double speedFactor = 1;
@@ -614,7 +627,7 @@ public final class AimAssistHack extends Hack
 				frameAimForceClient = forceClient;
 			}else
 				applyAim(aimPoint, getTargetBox(target.getBoundingBox()),
-					forceClient);
+					RotationUtils.getEyesPos(), forceClient);
 		}
 		
 		if(!autoAttack.isChecked())
@@ -678,9 +691,10 @@ public final class AimAssistHack extends Hack
 	 *            auto-combo needs a real camera angle to sprint toward the
 	 *            target with.
 	 */
-	private void applyAim(Vec3 aimPoint, AABB targetBox, boolean forceClient)
+	private void applyAim(Vec3 aimPoint, AABB targetBox, Vec3 eyes,
+		boolean forceClient)
 	{
-		Rotation needed = RotationUtils.getNeededRotations(aimPoint);
+		Rotation needed = RotationUtils.getNeededRotations(eyes, aimPoint);
 		long now = System.nanoTime();
 		
 		if(!aimStateValid)
@@ -703,15 +717,20 @@ public final class AimAssistHack extends Hack
 			}
 		}
 		
+		// Real elapsed time rather than a flat tick, so the turn keeps the same
+		// degrees-per-second under a laggy or sped-up tick loop. The cap stops
+		// a long freeze from turning into one huge jump.
+		float dt = Math.min((now - lastAimTime) / 1_000_000_000F, 0.15F);
+		
+		// kept up to date while snapping too, so it's ready when smoothing
+		// takes over
+		updateTracking(eyes, aimPoint, needed, dt);
+		
 		boolean smooth = smoothAim.isChecked() && (smoothCatchUp || EntityUtils
 			.distanceToHitboxSq(target) > smoothAimDistance.getValueSq());
 		
 		if(smooth)
 		{
-			// Real elapsed time rather than a flat tick, so the turn keeps the
-			// same degrees-per-second under a laggy or sped-up tick loop. The
-			// cap stops a long freeze from turning into one huge jump.
-			float dt = Math.min((now - lastAimTime) / 1_000_000_000F, 0.15F);
 			float maxChange = SMOOTH_AIM_SPEED * dt;
 			
 			float yawDiff = Mth.wrapDegrees(needed.yaw() - aimYaw);
@@ -721,10 +740,14 @@ public final class AimAssistHack extends Hack
 				humanizedSmoothStep(yawDiff, pitchDiff, dt, now);
 			else
 			{
+				// the capped turn toward the target, plus keeping up with how
+				// fast it moves across your view
 				aimYaw = Mth.wrapDegrees(
-					aimYaw + Mth.clamp(yawDiff, -maxChange, maxChange));
+					aimYaw + Mth.clamp(yawDiff, -maxChange, maxChange)
+						+ (float)(trackYaw * dt));
 				aimPitch = Mth.clamp(
-					aimPitch + Mth.clamp(pitchDiff, -maxChange, maxChange),
+					aimPitch + Mth.clamp(pitchDiff, -maxChange, maxChange)
+						+ (float)(trackPitch * dt),
 					-90F, 90F);
 			}
 			
@@ -736,7 +759,7 @@ public final class AimAssistHack extends Hack
 			double left = Math.hypot(Mth.wrapDegrees(needed.yaw() - aimYaw),
 				needed.pitch() - aimPitch);
 			if(smoothCatchUp && (left <= 0.5
-				|| left <= CATCH_UP_SETTLED && isAimOnTarget(targetBox)))
+				|| left <= CATCH_UP_SETTLED && isAimOnTarget(targetBox, eyes)))
 				smoothCatchUp = false;
 			
 		}else
@@ -794,17 +817,23 @@ public final class AimAssistHack extends Hack
 		long now)
 	{
 		double distance = Math.hypot(yawDiff, pitchDiff);
-		if(distance < 1e-3 || dt <= 0)
-		{
-			aimVelYaw = 0;
-			aimVelPitch = 0;
+		if(dt <= 0)
 			return;
-		}
 		
 		// still reacting - the hand hasn't started moving yet
 		if(now < reactionEndNs)
 			return;
 			
+		// Already right on it: nothing left to correct, just keep following
+		// the target's motion across the view.
+		if(distance < 1e-3)
+		{
+			aimVelYaw = 0;
+			aimVelPitch = 0;
+			applyTrackingOnly(dt);
+			return;
+		}
+		
 		// Speed variation that drifts instead of jumping: every 120-280ms a
 		// new target speed (80-120%), eased toward over ~120ms.
 		if(now >= nextSpeedChangeNs)
@@ -856,7 +885,7 @@ public final class AimAssistHack extends Hack
 		double moveYaw = (aimVelYaw + tremorYaw) * dt;
 		double movePitch = (aimVelPitch + tremorPitch) * dt;
 		
-		// never past the aim point
+		// the correction never goes past the aim point
 		double move = Math.hypot(moveYaw, movePitch);
 		if(move > distance)
 		{
@@ -864,8 +893,61 @@ public final class AimAssistHack extends Hack
 			movePitch *= distance / move;
 		}
 		
+		// On top of the correction, follow the target's own motion across
+		// the view. Without this the turn only ever chases where the target
+		// is, and trails behind it while you or it are moving.
+		moveYaw += trackYaw * dt;
+		movePitch += trackPitch * dt;
+		
 		aimYaw = Mth.wrapDegrees(aimYaw + (float)moveYaw);
 		aimPitch = Mth.clamp(aimPitch + (float)movePitch, -90F, 90F);
+	}
+	
+	private void applyTrackingOnly(float dt)
+	{
+		aimYaw = Mth.wrapDegrees(aimYaw + (float)(trackYaw * dt));
+		aimPitch = Mth.clamp(aimPitch + (float)(trackPitch * dt), -90F, 90F);
+	}
+	
+	/**
+	 * The most the tracking can add, in degrees per second. Only reached by a
+	 * target zipping right past your face; keeps a measurement glitch from
+	 * flinging the camera.
+	 */
+	private static final double MAX_TRACKING = 1440;
+	
+	/**
+	 * Works out how fast the aim point is moving across your view right now,
+	 * from how fast the target moves and how fast you move (both in the last
+	 * tick), so the smooth aim can move at that speed on top of closing the
+	 * gap. That's what keeps the crosshair on a moving target instead of
+	 * trailing behind it.
+	 */
+	private void updateTracking(Vec3 eyes, Vec3 aimPoint, Rotation needed,
+		float dt)
+	{
+		// target's movement minus yours, in blocks per second
+		Vec3 targetMove =
+			target.position().subtract(target.xo, target.yo, target.zo);
+		Vec3 ownMove = MC.player.position().subtract(MC.player.xo, MC.player.yo,
+			MC.player.zo);
+		Vec3 relativeVel = targetMove.subtract(ownMove).scale(20);
+		
+		// where the aim point will be, as seen from your eyes, a moment later
+		double ahead = 0.05;
+		Rotation later = RotationUtils.getNeededRotations(eyes,
+			aimPoint.add(relativeVel.scale(ahead)));
+		
+		double rawYaw = Mth.wrapDegrees(later.yaw() - needed.yaw()) / ahead;
+		double rawPitch = (later.pitch() - needed.pitch()) / ahead;
+		rawYaw = Mth.clamp(rawYaw, -MAX_TRACKING, MAX_TRACKING);
+		rawPitch = Mth.clamp(rawPitch, -MAX_TRACKING, MAX_TRACKING);
+		
+		// Movement is measured once per tick, so smooth it a little to keep
+		// the frame-by-frame turn free of steps.
+		double e = ease(dt, 0.05);
+		trackYaw += (rawYaw - trackYaw) * e;
+		trackPitch += (rawPitch - trackPitch) * e;
 	}
 	
 	/**
@@ -906,9 +988,8 @@ public final class AimAssistHack extends Hack
 	 * Whether a ray along the current aim rotation hits the target's hitbox,
 	 * i.e. where the crosshair would be on it.
 	 */
-	private boolean isAimOnTarget(AABB targetBox)
+	private boolean isAimOnTarget(AABB targetBox, Vec3 eyes)
 	{
-		Vec3 eyes = RotationUtils.getEyesPos();
 		if(targetBox.contains(eyes))
 			return true;
 		
@@ -933,6 +1014,8 @@ public final class AimAssistHack extends Hack
 		aimVelPitch = 0;
 		tremorYaw = 0;
 		tremorPitch = 0;
+		trackYaw = 0;
+		trackPitch = 0;
 	}
 	
 	/** Sends {@link #aimYaw}/{@link #aimPitch} the way Face target asks for. */
@@ -1688,7 +1771,12 @@ public final class AimAssistHack extends Hack
 		Vec3 aimPoint = aimAt.getAimPoint(target).add(offset);
 		AABB box = getTargetBox(target.getBoundingBox().move(offset));
 		
-		applyAim(aimPoint, box, frameAimForceClient);
+		// ...and from where your eyes are drawn in this frame. Mixing in the
+		// tick position here made the aim wobble every tick while moving.
+		Vec3 eyes = EntityUtils.getLerpedPos(MC.player, partialTicks).add(0,
+			MC.player.getEyeHeight(MC.player.getPose()), 0);
+		
+		applyAim(aimPoint, box, eyes, frameAimForceClient);
 	}
 	
 	private boolean isValidTarget(Entity e)

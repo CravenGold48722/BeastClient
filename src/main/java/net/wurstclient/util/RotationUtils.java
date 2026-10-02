@@ -43,8 +43,15 @@ public enum RotationUtils
 	
 	public static Rotation getNeededRotations(Vec3 vec)
 	{
-		Vec3 eyes = getEyesPos();
-		
+		return getNeededRotations(getEyesPos(), vec);
+	}
+	
+	/**
+	 * The rotation needed to look at {@code vec} from {@code eyes}, e.g. from
+	 * the interpolated eye position the camera is rendered at.
+	 */
+	public static Rotation getNeededRotations(Vec3 eyes, Vec3 vec)
+	{
 		double diffX = vec.x - eyes.x;
 		double diffZ = vec.z - eyes.z;
 		double yaw = Math.toDegrees(Math.atan2(diffZ, diffX)) - 90F;

@@ -94,18 +94,31 @@ public enum ChatUtils
 	 */
 	public static void sendAsPlayer(String message)
 	{
-		// ChatScreen.normalizeChatMessage()
-		message = StringUtil
-			.trimChatMessage(StringUtils.normalizeSpace(message.trim()));
-		if(message.isEmpty())
+		// ChatTranslator and ForceOp call this from their own threads. The
+		// chat history and the chat signing chain belong to the game thread,
+		// so hand it over instead of touching them from here.
+		if(!MC.isSameThread())
+		{
+			MC.execute(() -> sendAsPlayer(message));
+			return;
+		}
+		
+		// left the server in the meantime
+		if(MC.player == null)
 			return;
 		
-		MC.gui.getChat().addRecentChat(message);
+		// ChatScreen.normalizeChatMessage()
+		String normalized = StringUtil
+			.trimChatMessage(StringUtils.normalizeSpace(message.trim()));
+		if(normalized.isEmpty())
+			return;
 		
-		if(message.startsWith("/"))
-			MC.player.connection.sendCommand(message.substring(1));
+		MC.gui.getChat().addRecentChat(normalized);
+		
+		if(normalized.startsWith("/"))
+			MC.player.connection.sendCommand(normalized.substring(1));
 		else
-			MC.player.connection.sendChat(message);
+			MC.player.connection.sendChat(normalized);
 	}
 	
 	public static void component(Component component)

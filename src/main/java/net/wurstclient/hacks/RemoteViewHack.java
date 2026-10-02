@@ -40,6 +40,12 @@ public final class RemoteViewHack extends Hack
 	
 	private FakePlayerEntity fakePlayer;
 	
+	/** Where you really are while the camera is somewhere else. */
+	private Vec3 realPos;
+	private boolean realOnGround;
+	private int ticksSinceReminder;
+	private boolean sendingReminder;
+	
 	public RemoteViewHack()
 	{
 		super("RemoteView");
@@ -79,6 +85,9 @@ public final class RemoteViewHack extends Hack
 		
 		// save old data
 		wasInvisible = entity.isInvisible();
+		realPos = MC.player.position();
+		realOnGround = MC.player.onGround();
+		ticksSinceReminder = 0;
 		
 		// enable NoClip
 		MC.player.noPhysics = true;
@@ -173,12 +182,42 @@ public final class RemoteViewHack extends Hack
 		
 		// set entity invisible
 		entity.setInvisible(true);
+		
+		sendPositionReminder();
+	}
+	
+	/**
+	 * A vanilla client standing still still sends its position once every 20
+	 * ticks (LocalPlayer.positionReminder). Going completely silent for as
+	 * long as RemoteView is on, then suddenly sending again, is what "blink"
+	 * checks look for - so keep sending that reminder, with your real,
+	 * unchanged position.
+	 */
+	private void sendPositionReminder()
+	{
+		if(++ticksSinceReminder < 20)
+			return;
+		
+		ticksSinceReminder = 0;
+		sendingReminder = true;
+		try
+		{
+			MC.player.connection.send(new ServerboundMovePlayerPacket.Pos(
+				realPos, realOnGround, false));
+			
+		}finally
+		{
+			sendingReminder = false;
+		}
 	}
 	
 	@Override
 	public void onSentPacket(PacketOutputEvent event)
 	{
-		if(event.getPacket() instanceof ServerboundMovePlayerPacket)
+		// The player's own movement packets would report the remote camera
+		// position, so they stay blocked - except for our reminder.
+		if(event.getPacket() instanceof ServerboundMovePlayerPacket
+			&& !sendingReminder)
 			event.cancel();
 	}
 }

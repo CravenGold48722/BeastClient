@@ -41,6 +41,7 @@ import net.wurstclient.util.BlockPlacer;
 import net.wurstclient.util.BlockPlacer.BlockPlacingParams;
 import net.wurstclient.util.InteractionSimulator;
 import net.wurstclient.util.InventoryUtils;
+import net.wurstclient.util.Rotation;
 
 /**
  * Cart PvP insta-carting: press use while holding a Flame bow (or a loaded
@@ -245,7 +246,7 @@ public final class InstacartHack extends Hack implements UpdateListener
 			float current = MC.player.getXRot();
 			float target = (float)(int)targetPitch;
 			float smoothed = current + (target - current) * pitchSpeed;
-			MC.player.setXRot(smoothed);
+			new Rotation(MC.player.getYRot(), smoothed).applyToClientPlayer();
 		}
 		
 		// ── BowItemMixin equivalent: post-fire
@@ -361,7 +362,7 @@ public final class InstacartHack extends Hack implements UpdateListener
 				pos = MC.player.blockPosition();
 			pendingPos = pos;
 			
-			IMC.getInteractionManager().rightClickItem();
+			InteractionSimulator.rightClickItem(InteractionHand.MAIN_HAND);
 			shotBow = true;
 			phase = Phase.PLACING;
 			jump();

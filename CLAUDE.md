@@ -321,6 +321,9 @@ does it. When writing or touching a hack:
   from non-mod packs by `VanillaLanguage`, fallback `ModTranslationKeys`; mod keybinds raw;
   covered by gametest `VanillaSpoofTest`); "Sign chat like vanilla" suspends NoChatReports.
   Packet rewrites skip singleplayer. New fingerprint fixes go here.
+- **Never go silent:** a hack that blocks the player's movement packets (RemoteView) must still
+  send vanilla's once-per-20-ticks position reminder with the real position — a long silence
+  then a burst is what blink checks flag.
 - **Background traffic:** Plausible analytics is off by default (config v3) and the upstream
   `WurstUpdater` is not registered — both only phoned upstream Wurst's servers.
 - **Rotations:** `FaceTargetSetting` defaults to `CLIENT` everywhere; hard-coded

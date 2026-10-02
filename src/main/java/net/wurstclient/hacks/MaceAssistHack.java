@@ -456,7 +456,8 @@ public final class MaceAssistHack extends Hack
 		tickTargeting();
 		
 		if(cameraLocked)
-			MC.player.setXRot(-90);
+			// straight up, in whole mouse counts like a real flick
+			new Rotation(MC.player.getYRot(), -90).applyToClientPlayer();
 		
 		if(windActionCooldown > 0)
 			windActionCooldown--;
@@ -1023,10 +1024,12 @@ public final class MaceAssistHack extends Hack
 		{
 			slamFollowUpPending = false;
 			
+			// Back to the item you started with even if the target is gone -
+			// otherwise you'd be left holding the axe or mace.
+			selectSlot(slamFollowUpSlot);
+			
 			if(slamFollowUpTarget != null)
 			{
-				selectSlot(slamFollowUpSlot);
-				
 				if(!slamAttacking)
 				{
 					slamAttacking = true;
@@ -1159,7 +1162,8 @@ public final class MaceAssistHack extends Hack
 		if(hasWindCharge
 			&& MC.player.getXRot() <= -(float)pearlCatchAngle.getValue())
 		{
-			MC.player.setXRot(-90);
+			// straight up, in whole mouse counts like a real flick
+			new Rotation(MC.player.getYRot(), -90).applyToClientPlayer();
 			cameraLocked = true;
 		}
 	}

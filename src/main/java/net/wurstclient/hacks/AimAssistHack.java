@@ -351,10 +351,9 @@ public final class AimAssistHack extends Hack
 	 */
 	private int dodgeTicksLeft;
 	
-	// Music state — musicRunning and musicLine are volatile because the music
-	// thread reads/writes them while the game thread writes/reads them.
-	private Thread musicThread;
-	private volatile boolean musicRunning;
+	// Music state - volatile because the music thread reads/writes these while
+	// the game thread writes/reads them.
+	private volatile Thread musicThread;
 	private volatile SourceDataLine musicLine;
 	
 	/** The track that last ended on its own, so it isn't restarted. */
@@ -444,6 +443,8 @@ public final class AimAssistHack extends Hack
 		EVENTS.add(UpdateListener.class, this);
 		EVENTS.add(RenderListener.class, this);
 		
+		// a track that finished last time may play again
+		musicEndedFile = null;
 		updateMusicPlayback();
 	}
 	
@@ -1572,11 +1573,10 @@ public final class AimAssistHack extends Hack
 	
 	private void startMusic(Path file)
 	{
-		musicRunning = true;
 		musicEndedFile = null;
 		float vol = (float)musicVolume.getValue() / 100F;
 		
-		musicThread = new Thread(() -> {
+		Thread thread = new Thread(() -> {
 			do
 			{
 				if(!Files.exists(file))
@@ -1603,44 +1603,62 @@ public final class AimAssistHack extends Hack
 						line.start();
 						byte[] buf = new byte[4096];
 						int n;
-						while(musicRunning && (n = pcmIn.read(buf)) != -1)
+						while(isCurrentMusicThread()
+							&& (n = pcmIn.read(buf)) != -1)
 							line.write(buf, 0, n);
-						if(musicRunning)
+						if(isCurrentMusicThread())
 							line.drain();
 						line.stop();
-						musicLine = null;
+						
+						// only clear our own line, never a newer thread's
+						if(musicLine == line)
+							musicLine = null;
 					}
 				}catch(UnsupportedAudioFileException | LineUnavailableException
 					| IOException | IllegalArgumentException e)
 				{
 					break;
 				}
-			}while(musicRunning && loopMusic.isChecked());
+			}while(isCurrentMusicThread() && loopMusic.isChecked());
 			
 			// ended by itself rather than by stopMusic()
-			if(musicRunning)
+			if(isCurrentMusicThread())
 				musicEndedFile = file;
 		}, "wurst-aimassist-music");
-		musicThread.setDaemon(true);
-		musicThread.start();
+		thread.setDaemon(true);
+		musicThread = thread;
+		thread.start();
+	}
+	
+	/**
+	 * Each music thread checks whether it is still the one that should be
+	 * playing. A single shared "running" flag let an old thread that hadn't
+	 * finished stopping yet see the flag set again by its replacement and
+	 * keep playing alongside it.
+	 */
+	private boolean isCurrentMusicThread()
+	{
+		return musicThread == Thread.currentThread();
 	}
 	
 	private void stopMusic()
 	{
-		musicRunning = false;
-		// Stopping the line unblocks any in-progress write() on the music
-		// thread so it sees !musicRunning and exits cleanly.
+		// From here on the old thread is no longer current, so it stops at its
+		// next check.
+		Thread thread = musicThread;
+		musicThread = null;
+		
+		// Stopping and flushing the line makes an in-progress write() return,
+		// so the thread gets to that check right away.
 		SourceDataLine line = musicLine;
 		if(line != null)
 		{
 			line.stop();
+			line.flush();
 			musicLine = null;
 		}
-		if(musicThread != null)
-		{
-			musicThread.interrupt();
-			musicThread = null;
-		}
+		if(thread != null)
+			thread.interrupt();
 	}
 	
 	private static void applyVolume(SourceDataLine line, float volume)

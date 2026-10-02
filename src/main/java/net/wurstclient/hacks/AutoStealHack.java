@@ -8,6 +8,7 @@
 package net.wurstclient.hacks;
 
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.IntStream;
 
 import net.minecraft.util.Util;
@@ -27,7 +28,8 @@ import net.wurstclient.settings.SliderSetting.ValueDisplay;
 public final class AutoStealHack extends Hack
 {
 	private final SliderSetting delay = new SliderSetting("Delay",
-		"Delay between moving stacks of items.\n"
+		"Delay between moving stacks of items, varied by up to a quarter"
+			+ " either way so the clicks don't come at a machine-even rhythm.\n"
 			+ "Should be at least 70ms for NoCheat+ servers.",
 		100, 0, 500, 10, ValueDisplay.INTEGER.withSuffix("ms"));
 	
@@ -101,7 +103,7 @@ public final class AutoStealHack extends Hack
 					.join())
 					continue;
 				
-				Thread.sleep(delay.getValueI());
+				Thread.sleep(randomizedDelay());
 				
 				boolean clicked = MC.submit(() -> {
 					// closed or replaced while we were waiting
@@ -122,6 +124,21 @@ public final class AutoStealHack extends Hack
 				Thread.currentThread().interrupt();
 				break;
 			}
+	}
+	
+	/**
+	 * The delay setting, give or take a quarter. Nobody shift-clicks at a
+	 * perfectly even rhythm, and clicks spaced exactly the same are an easy
+	 * pattern to spot.
+	 */
+	private long randomizedDelay()
+	{
+		int base = delay.getValueI();
+		if(base <= 0)
+			return 0;
+		
+		double factor = 0.75 + ThreadLocalRandom.current().nextDouble() * 0.5;
+		return Math.round(base * factor);
 	}
 	
 	private boolean isStillOpen(AbstractContainerScreen<?> screen)

@@ -39,6 +39,9 @@
     "vulkanmod": "*"
   },
   "custom": {
+    "badoptimizations:cache_hooks": {
+      "lightmap": "net.wurstclient.hacks.fullbright.BadOptimizationsLightmapHook"
+    },
     "modmenu": {
       "links": {
         "modmenu.donate": "https://www.wurstclient.net/modmenu-donate/",

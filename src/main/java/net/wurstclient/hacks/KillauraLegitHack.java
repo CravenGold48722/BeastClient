@@ -167,24 +167,22 @@ public final class KillauraLegitHack extends Hack
 	@Override
 	public void onUpdate()
 	{
+		Entity previous = target;
 		target = null;
 		
 		// don't attack when a container/inventory screen is open
 		if(MC.screen instanceof AbstractContainerScreen)
 			return;
-		
-		Stream<Entity> stream = EntityUtils.getAttackableEntities();
-		double rangeSq = range.getValueSq();
-		stream =
-			stream.filter(e -> EntityUtils.distanceToHitboxSq(e) <= rangeSq);
-		
-		if(fov.getValue() < 360.0)
-			stream = stream.filter(e -> RotationUtils.getAngleToLookVec(
-				e.getBoundingBox().getCenter()) <= fov.getValue() / 2.0);
-		
-		stream = entityFilters.applyTo(stream);
-		
-		target = stream.min(priority.getSelected().comparator).orElse(null);
+			
+		// Stick with the current target while it's still valid. Picking
+		// afresh every tick made the smooth aim restart (reaction delay and
+		// all) whenever two targets swapped places in the priority, e.g. by
+		// angle while the camera turned - so it could stutter and never land.
+		if(previous != null && isValid(previous))
+			target = previous;
+		else
+			target = EntityUtils.getAttackableEntities().filter(this::isValid)
+				.min(priority.getSelected().comparator).orElse(null);
 		if(target == null)
 			return;
 		
@@ -197,6 +195,21 @@ public final class KillauraLegitHack extends Hack
 		
 		// (the camera turns toward it every frame, in onRender)
 		WURST.getHax().autoSwordHack.setSlot(target);
+	}
+	
+	private boolean isValid(Entity e)
+	{
+		if(!EntityUtils.IS_ATTACKABLE.test(e) || e.level() != MC.level)
+			return false;
+		
+		if(EntityUtils.distanceToHitboxSq(e) > range.getValueSq())
+			return false;
+		
+		if(fov.getValue() < 360.0 && RotationUtils.getAngleToLookVec(
+			e.getBoundingBox().getCenter()) > fov.getValue() / 2.0)
+			return false;
+		
+		return entityFilters.applyTo(Stream.of(e)).findAny().isPresent();
 	}
 	
 	@Override

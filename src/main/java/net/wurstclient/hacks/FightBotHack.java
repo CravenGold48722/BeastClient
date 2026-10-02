@@ -54,6 +54,9 @@ public final class FightBotHack extends Hack
 	/** What the camera turns toward this tick (close range only). */
 	private Entity frameAimTarget;
 	
+	/** The previous target, kept unless something is clearly closer. */
+	private Entity lastEntity;
+	
 	private final SliderSetting range = new SliderSetting("Range",
 		"Attack range (like Killaura)", 4.25, 1, 6, 0.05, ValueDisplay.DECIMAL);
 	
@@ -149,6 +152,8 @@ public final class FightBotHack extends Hack
 		Entity entity = stream
 			.min(Comparator.comparingDouble(EntityUtils::distanceToHitboxSq))
 			.orElse(null);
+		entity = stickToTarget(lastEntity, entity);
+		lastEntity = entity;
 		if(entity == null)
 			return;
 		
@@ -238,6 +243,27 @@ public final class FightBotHack extends Hack
 		MC.gameMode.attack(MC.player, entity);
 		swingHand.swing(InteractionHand.MAIN_HAND);
 		speed.resetTimer();
+	}
+	
+	/**
+	 * Keeps the previous target unless the closest one is clearly closer (by
+	 * about 2 blocks). Re-picking the closest every tick flipped between two
+	 * targets at a similar distance, and every flip restarted the smooth
+	 * aim's turn, reaction delay and all.
+	 */
+	private Entity stickToTarget(Entity previous, Entity closest)
+	{
+		if(previous == null || closest == null || previous == closest)
+			return closest;
+		
+		if(!EntityUtils.IS_ATTACKABLE.test(previous)
+			|| previous.level() != MC.level
+			|| entityFilters.applyTo(Stream.of(previous)).findAny().isEmpty())
+			return closest;
+		
+		double keep = Math.sqrt(EntityUtils.distanceToHitboxSq(previous));
+		double best = Math.sqrt(EntityUtils.distanceToHitboxSq(closest));
+		return keep <= best + 2 ? previous : closest;
 	}
 	
 	@Override

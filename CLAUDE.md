@@ -19,7 +19,7 @@ you which files are fork-custom**. Don't try; judge from content.
 | Mappings | **Mojang official (mojmap)** — `Minecraft`, `LocalPlayer`, `ItemStack.is()`, `Mth`, `AABB`. Not Yarn. |
 | Loader | Fabric, loader `0.19.3`, Fabric API `0.155.2+26.1.2`, Loom `1.16-SNAPSHOT` |
 | Java | **25** (source, target, and mixin `compatibilityLevel`) |
-| Version string | `WurstClient.VERSION = "7.56.8"`, jar `Beast-Client`, `mod_version=v7.5X.X-MC26.1.2` |
+| Version string | `WurstClient.VERSION` is read from the mod metadata (`mod_version` in `gradle.properties`, minus the `-MC…` suffix); jar `Beast-Client` |
 | Mod id / name | `wurst` / "Beast Client" (`src/main/resources/fabric.mod.json`) |
 
 `fabric.mod.json` breaks on `wi_zoom` and `vulkanmod`, suggests `mo_glass`, and declares
@@ -200,7 +200,7 @@ friends as `WURST.getFriends().isFriend(entity)`.
 
 Descriptions resolve through `WURST.translate("description.wurst.hack." + name.toLowerCase())`
 against `src/main/resources/assets/wurst/translations/*.json`. A missing key falls back to the key
-itself, so fork-added hacks (AttributeSwap, MaceAssist, …) simply have no translated description —
+itself, so fork-added hacks (MaceAssist, MaceDmg, …) simply have no translated description —
 that's fine, not a bug. Setting descriptions can be either a translation key or literal English
 text; both constructors take a `String` and most fork code passes literal text.
 
@@ -354,6 +354,87 @@ does it. When writing or touching a hack:
   `settings/LegitDefaultsMigration` (add a new `Batch` with its own marker name). It only moves settings
   still on the old default.
 
+## Auditing: finding bugs, inefficiencies and extra packets without being told
+
+The user periodically asks for "check everything" with planted or unknown issues and expects them
+found unprompted. Two earlier passes reported "everything is fine" and were wrong (a join crash in
+`KeyPresser` was sitting in plain sight). What went wrong was **reading for plausibility instead of
+checking against rules**. Treat every pass as: assume there are bugs, sweep the **whole tree**
+(not just files touched this session — `git status` / `git diff` only shows recent work, and
+history is squashed), and for each rule below grep for every site rather than sampling.
+
+**Order of work:** run the mechanical sweeps (1–8) across the whole tree first, then the semantic
+checks (9–11) on the fork-heavy hacks (AimAssist, MaceAssist, Killaura*, FightBot, Protect,
+BowAimbot, AutoSprint, Tunneller, AutoLibrarian, Instacart, everything in `util/` that's
+fork-only), then **measure** (12–13). Don't stop at the first finding in a file.
+
+1. **Listener balance.** Every `EVENTS.add(X.class, this)` needs the matching `remove` in
+   `onDisable`. Only always-on OTFs may keep listeners. Also check `onDisable` resets every bit of
+   state `onEnable` doesn't (targets, phases, `CameraAim.reset()`), or the next enable starts stale.
+2. **Stuck keys.** grep `setDown(true)`, `KeyPresser.press`, `keyUse`/`keyShift`/`keyUp`: any key a
+   hack holds must be released in `onDisable` (`IKeyMapping.get(key).resetPressedState()`) for
+   **every** phase it can be disabled in. *Found:* Tunneller (walk/sneak), AutoLibrarian (sneak
+   while placing), Instacart (use while charging) all left keys held.
+3. **Direct packet sends.** grep `getConnection().send(`, `sendPacket`, `new Serverbound`. Each must
+   be inherently fake (Blink, MaceDmg, RemoteView reminder…) or behind a user option; everything
+   else goes through vanilla (`syncSelectedSlot`, `InteractionSimulator`, `KeyPresser`, real
+   inventory clicks). Then the **indirect** sources, which grep for sends won't show: rotations
+   written every tick (float noise → a Rot packet every tick), slot changes and back in one tick,
+   `swing` without an attack, `useItem` re-sent while already using, inventory clicks that open and
+   close the screen repeatedly, `setSprinting`/`setShiftKeyDown` (→ PlayerCommand), key flapping
+   (→ PlayerInput).
+4. **Hacks fighting each other / the user.** A hack must not `setEnabled(true)` another hack as a
+   side effect (it's saved to `enabled-hacks.json` and changes the user's setup). *Found:*
+   AimAssist's auto-combo force-enabled AutoSprint, and AutoSprint then re-pressed sprint during
+   AimAssist's s-tap / crit fall, cancelling both. Fix pattern: the owner exposes a query
+   (`isHoldingSprintOff()`) and the other hack yields.
+5. **Vanilla rules, verified not remembered.** When a hack claims a vanilla effect (crit, sweep,
+   shield disable, keypair, projectile physics), `javap` the deobf jar and read the real check.
+   *Found:* the "crit" combo hit while sprinting — `Player.canCriticalAttack` requires
+   `!isSprinting()`, so it never crit. Duplicate `prepareKeyPair` looked like a bug but
+   `ClientPacketListener.setKeyPair` returns early on the same keys — verify both ways.
+6. **Threads.** Everything off the render thread (netty `PacketInputListener`s, `new Thread`,
+   executors, `CompletableFuture`) must not touch `MC.player`/`level`/`gameMode`/screens/chat
+   except via `MC.execute`/`MC.submit(...).join()`. Collections shared with another thread need
+   copies or concurrent types; never call `entry.getKey()` after removing it from an
+   `IdentityHashMap` (the `KeyPresser` crash). Also count threads: *found* NewChunks started one
+   thread per loaded chunk (thousands on join) → one shared `MinPriorityThreadFactory` executor.
+7. **Parallel streams.** `EntityUtils.getAttackableEntities()` and friends are parallel, so every
+   filter/comparator they call must be read-only. *Found:* `EntitySpeedTracker.getTopSpeed`
+   pruned its map from inside a filter (data race) → reads filter, only `record()` prunes.
+8. **Hot paths.** Per-tick/per-frame code: no disk writes (setting setters and `setEnabled` save
+   files — guard with "only if changed"), no `System.out` (*found:* `MessageCompleter` logged every
+   AutoComplete request and response — spam and a privacy leak), no new threads, no streams over
+   all entities more than once per tick, no allocation-heavy work in `onRender` that could be
+   per tick.
+9. **Target churn.** Picking the "best" target afresh every tick makes the smooth aim restart
+   (reaction delay and all) whenever two candidates swap rank, so the crosshair never lands and it
+   keeps sending rotations. Any aiming hack needs stickiness: keep the previous target while it's
+   still valid (KillauraLegit, Killaura client mode), or hysteresis (FightBot/Protect switch only
+   if the new one is >2 blocks closer).
+10. **Stale references.** Any field holding an `Entity` across ticks must re-check `isRemoved()`,
+    `level() == MC.level` and the filters before use (dimension change, death, respawn).
+11. **Math, by simulation not by eye.** Aim/physics code gets a JUnit test against the real
+    classes (fabric-loader-junit makes MC classes available): `HumanAimTest`,
+    `BallisticSolverTest`. A temporary trace test that prints the trajectory found the 4°
+    overshoot (underdamped `HAND_RESPONSE`) that reading the code missed. Delete trace tests
+    afterwards; keep the assertions.
+12. **Packet budget gametest** (`gametest/tests/PacketBudgetTest`). Counts every outgoing packet
+    by class via `ConnectionPacketOutputListener`. Idle: with the always-running hacks on and
+    nothing to do, the counts must equal plain vanilla's (60 TickEnd + 3 Pos per 60 ticks).
+    Engaged: with a still husk off to the side, a hack may send rotations while turning onto it
+    but ≤3 once on target, exactly one swing per attack, and no slot/container/use packets. **When
+    you add or change a hack that runs every tick or aims, add it to this test.** Read the
+    per-type breakdown in `build/run/clientGameTest/logs/latest.log` even when it passes — a
+    surprising zero (e.g. a hack that never acquired the target) is a finding too.
+13. **Diff against upstream** for anything that looks off: fork code is where most bugs are, and
+    upstream may already have fixed a shared bug since the fork point (NoFog, Fullbright,
+    stale-entity checks were all ported that way).
+
+Report findings honestly: say what was found, what was fixed, and what was checked and found fine
+(with the reason, e.g. "duplicate keypair is harmless because…"). Never claim "no issues" for a
+category you didn't sweep.
+
 ## Beast-specific parts of the fork
 
 - **`util/BeastColors.java`** — the palette. Accent borders/letters are a dark-red→light-red
@@ -368,8 +449,7 @@ does it. When writing or touching a hack:
   (`FaceTargetSetting`), auto-attack, auto-combo (sprint-reset hits), "Aura-Farming" 360 spin,
   dodging (random A/D strafes with min/max distance sliders), a switch-target key, and a **music
   player** (WAV files from `.minecraft/wurst/music/` via `FileSetting`, volume/loop/play-when).
-- Extra combat hacks not in upstream: **`AttributeSwapHack`** (Simple/Smart slot swapping, breach
-  swapping, shield breaker, lunge swapping, item saver), **`MaceDmgHack`** (fake-Y packet burst for
+- Extra combat hacks not in upstream: **`MaceDmgHack`** (fake-Y packet burst for
   mace damage), **`MaceAssistHack`** (below). Also present: Instacart, MassTpa, KillPotion,
   MileyCyrus, HeadRoll, ItemGenerator, BuildRandom, ForceOp, CrashChest, AutoLibrarian.
 - `build.gradle` is modified vs. upstream: `withSourcesJar()` removed.
@@ -384,8 +464,8 @@ became a checkbox, every config value a slider or dropdown. Implements `UpdateLi
 Features: attribute swapping (best Density/Breach mace, smart switch, swap-back delay, swap scope),
 stun slam (axe shield break + queued mace slam + follow-up), pearl catching (pitch lock + wind
 charge, return slot Previous/Sword/Axe/Elytra/**Pearl**), wind-on-right-click, air pots, lunge
-swapping (spear flick), mace aim assist (humanized rotation ported 1:1 from the mod — warm-up,
-jitter, GCD rounding, 35% skip, all behind a "Humanize aim" checkbox), mace trigger bot, auto
+swapping (spear flick), mace aim assist (now the shared per-frame `CameraAim` / `HumanAim` engine, the
+same one AimAssist uses; "Humanize aim" switches the human-like curve on), mace trigger bot, auto
 chestplate.
 
 Design points that were deliberate, don't "fix" them blindly:
@@ -406,8 +486,9 @@ Design points that were deliberate, don't "fix" them blindly:
 - `Swap scope` (All / Weapons only) gates **both** the mace swap and the stun slam's axe swap.
 - Auto chestplate records the slot, uses the chestplate, and switches back inline in the same call
   (packet order: SetCarriedItem → UseItem → SetCarriedItem).
-- `selectSlot()` sets `inventory.setSelectedSlot(slot)` **and** sends
-  `ServerboundSetCarriedItemPacket` immediately rather than waiting for the client's end-of-tick sync.
+- `selectSlot()` sets `inventory.setSelectedSlot(slot)` and then calls
+  `IMC.getInteractionManager().syncSelectedSlot()` (vanilla's own sync), so the slot is sent once,
+  immediately, and vanilla doesn't send it again on the next attack or tick.
 - Aim-assist sliders step 0.5; `Min fall distance` defaults to 1.5 and gates on `player.fallDistance`
   (the mod only checked downward velocity).
 
@@ -418,8 +499,8 @@ Design points that were deliberate, don't "fix" them blindly:
   (BetterMaceSwap needed one for `Inventory.selected`).
 - `Entity.fallDistance` is a public **double** field.
 - Enchantment checks: `stack.get(DataComponents.ENCHANTMENTS)` → `ItemEnchantments.keySet()` of
-  `Holder<Enchantment>`, then `holder.is(Enchantments.DENSITY)`. `AttributeSwapHack` instead looks up
-  `MC.level.registryAccess().lookup(Registries.ENCHANTMENT)` for levels.
+  `Holder<Enchantment>`, then `holder.is(Enchantments.DENSITY)`. `AutoArmor`, `AutoTool`, `EnchantCmd`
+  etc. instead look up `registryAccess().lookup(Registries.ENCHANTMENT)` for levels.
 - `ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, entity)` then
   `MC.level.clip(ctx)` — or just use `BlockUtils.hasLineOfSight`.
 - Spears exist as items (`Items.WOODEN_SPEAR` … `NETHERITE_SPEAR`, tag `ItemTags.SPEARS`), but there
@@ -435,7 +516,15 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
 
 ## Tests
 
-- `src/test/java/net/wurstclient/util/` — JUnit tests for `Rotation` / `RotationUtils` only.
-- `src/gametest/` — in-game tests (`AltManagerTest`, `AutoMineHackTest`, `FreecamHackTest`,
-  `NoFallHackTest`, `XRayHackTest`, …) run via `runClientGameTest` / `runClientGameTestWithMods`.
-  There is no test coverage for combat hacks; verify those by launching the client.
+- `src/test/java/net/wurstclient/util/` — JUnit tests for `Rotation`, `RotationUtils`, `HumanAim`
+  (settling, no overshoot, tracking lag) and `BallisticSolver` (hits at range, moving targets).
+- `src/gametest/` — in-game tests (`AltManagerTest`, `VanillaSpoofTest`, `KeyPresserTest`,
+  `PacketBudgetTest`, `AutoMineHackTest`, `FreecamHackTest`, `NoFallHackTest`, `XRayHackTest`, …)
+  run via `runClientGameTest` / `runClientGameTestWithMods`; the whole suite passes (exit 0,
+  "Test complete" in `build/run/clientGameTest/logs/latest.log`). Every `SingleplayerTest` ends
+  with a screenshot compared to one clean-world template, so a test must leave nothing behind:
+  clear chat, the action bar (toggle announcements), particles, dropped items / XP, wait ~25 ticks
+  for death animations and ~7 ticks after a `tp` rotation. Failed runs keep their PNGs in
+  `build/run/clientGameTest/screenshots/` — look at them before guessing.
+- `PacketBudgetTest` is the only automated check of combat-hack behaviour (packets, swings per
+  attack, aim settling); feel and accuracy still need a launch of the client.

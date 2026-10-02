@@ -36,13 +36,13 @@ public abstract class MessageCompleter
 		// build prompt and parameters
 		String prompt = buildPrompt(draftMessage);
 		JsonObject params = buildParams(prompt, maxSuggestions);
-		System.out.println(params);
+		// (The prompt and the response used to be printed here on every
+		// request - your whole chat history, into latest.log.)
 		
 		try
 		{
 			// send request
 			WsonObject response = requestCompletions(params);
-			System.out.println(response);
 			
 			// read response
 			return extractCompletions(response);

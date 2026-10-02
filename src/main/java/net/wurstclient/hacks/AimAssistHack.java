@@ -864,19 +864,12 @@ public final class AimAssistHack extends Hack
 		switch(comboPhase)
 		{
 			case IDLE:
-			WURST.getHax().autoSprintHack.setEnabled(true);
+			// (This used to switch AutoSprint on every tick, which kept it on
+			// - saved - after AimAssist was turned off and made it impossible
+			// to turn off meanwhile. The combo presses sprint itself.)
 			adjustSpacing(distSq, inComboRange);
-			if(!auraFarming.isChecked())
-			{
-				if(MC.player.fallDistance >= 0.15F)
-				{
-					comboPhase = ComboPhase.STAPPING;
-				}
-				
-			}
 			if(cooldown >= 1.0F && inComboRange)
 			{
-				KeyPresser.press(MC.options.keySprint);
 				holdForward();
 				KeyPresser.press(MC.options.keySprint);
 				if(auraFarming.isChecked())
@@ -908,18 +901,27 @@ public final class AimAssistHack extends Hack
 				comboPhase = ComboPhase.IDLE;
 				break;
 			}
-			// Stay sprinting forward through the whole airborne phase.
-			KeyPresser.press(MC.options.keySprint);
-			holdForward();
-			KeyPresser.press(MC.options.keySprint);
+			// A critical hit needs you falling AND not sprinting (vanilla
+			// Player.canCriticalAttack). This used to hit while still rising
+			// (fallDistance == 0) with sprint held the whole time, so it never
+			// crit. Now: sprint forward on the way up for momentum; once
+			// falling, let go of forward, which makes vanilla stop the sprint
+			// by itself, and hit as soon as it has.
+			boolean falling = isFallingForCrit();
+			if(!falling)
+			{
+				holdForward();
+				KeyPresser.press(MC.options.keySprint);
+			}else
+				releaseForward();
+			
 			if(cooldown >= 1.0F && !MC.player.onGround()
 				&& !MC.player.isInWater() && !MC.player.isInLava())
 			{
-				boolean readyToHit = MC.player.fallDistance == 0F;
+				boolean readyToHit = falling && !MC.player.isSprinting();
 				
 				if(readyToHit)
 				{
-					KeyPresser.press(MC.options.keySprint);
 					if(attackTarget())
 					{
 						comboHitCount++;
@@ -1331,29 +1333,44 @@ public final class AimAssistHack extends Hack
 		dodgeCooldown = 0;
 	}
 	
+	/** Walks into combo range: forward if too far, back if too close. */
 	private void adjustSpacing(double distSq, boolean inComboRange)
 	{
-		while(!inComboRange)
-		{
-			if(distSq > FAR_THRESHOLD_SQ)
-			{
-				releaseBackward();
-				KeyPresser.press(MC.options.keySprint);
-				holdForward();
-				KeyPresser.press(MC.options.keySprint);
-			}else if(distSq < CLOSE_THRESHOLD_SQ)
-			{
-				releaseForward();
-				holdBackward();
-			}else
-			{
-				releaseForward();
-				releaseBackward();
-				KeyPresser.press(MC.options.keySprint);
-				return;
-			}
+		if(inComboRange)
 			return;
+		
+		if(distSq > FAR_THRESHOLD_SQ)
+		{
+			releaseBackward();
+			holdForward();
+			KeyPresser.press(MC.options.keySprint);
+			
+		}else if(distSq < CLOSE_THRESHOLD_SQ)
+		{
+			releaseForward();
+			holdBackward();
 		}
+	}
+	
+	/** Falling, the way a critical hit needs (Player.canCriticalAttack). */
+	private boolean isFallingForCrit()
+	{
+		return MC.player.fallDistance > 0 && !MC.player.onGround()
+			&& MC.player.getDeltaMovement().y < 0;
+	}
+	
+	/**
+	 * Whether AimAssist needs the sprint key let go right now - during the
+	 * s-tap and while falling into a critical hit. AutoSprint checks this, so
+	 * it doesn't press sprint again in the same tick and undo the reset.
+	 */
+	public boolean isHoldingSprintOff()
+	{
+		if(!isEnabled() || !autoAttack.isChecked() || !autoCombo.isChecked())
+			return false;
+		
+		return comboPhase == ComboPhase.STAPPING
+			|| comboPhase == ComboPhase.JUMPED && isFallingForCrit();
 	}
 	
 	private boolean isCrosshairOnTarget()

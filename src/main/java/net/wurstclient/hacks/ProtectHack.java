@@ -54,6 +54,9 @@ public final class ProtectHack extends Hack
 	/** What the camera turns toward this tick (close range only). */
 	private Entity frameAimTarget;
 	
+	/** The previous target, kept unless something is clearly closer. */
+	private Entity lastEnemy;
+	
 	private final AttackSpeedSliderSetting speed =
 		new AttackSpeedSliderSetting();
 	
@@ -222,6 +225,10 @@ public final class ProtectHack extends Hack
 		enemy = stream
 			.min(Comparator.comparingDouble(EntityUtils::distanceToHitboxSq))
 			.orElse(null);
+		if(lastEnemy != null && lastEnemy != friend
+			&& EntityUtils.distanceToHitboxSq(lastEnemy) <= 36)
+			enemy = stickToTarget(lastEnemy, enemy);
+		lastEnemy = enemy;
 		
 		Entity target =
 			enemy == null || EntityUtils.distanceToHitboxSq(friend) >= 24 * 24
@@ -314,6 +321,27 @@ public final class ProtectHack extends Hack
 			swingHand.swing(InteractionHand.MAIN_HAND);
 			speed.resetTimer();
 		}
+	}
+	
+	/**
+	 * Keeps the previous target unless the closest one is clearly closer (by
+	 * about 2 blocks). Re-picking the closest every tick flipped between two
+	 * targets at a similar distance, and every flip restarted the smooth
+	 * aim's turn, reaction delay and all.
+	 */
+	private Entity stickToTarget(Entity previous, Entity closest)
+	{
+		if(previous == null || closest == null || previous == closest)
+			return closest;
+		
+		if(!EntityUtils.IS_ATTACKABLE.test(previous)
+			|| previous.level() != MC.level
+			|| entityFilters.applyTo(Stream.of(previous)).findAny().isEmpty())
+			return closest;
+		
+		double keep = Math.sqrt(EntityUtils.distanceToHitboxSq(previous));
+		double best = Math.sqrt(EntityUtils.distanceToHitboxSq(closest));
+		return keep <= best + 2 ? previous : closest;
 	}
 	
 	@Override

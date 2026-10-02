@@ -152,6 +152,10 @@ public final class AutoLibrarianHack extends Hack
 			breakingJobSite = false;
 		}
 		
+		// placing holds sneak; don't leave it held
+		if(placingJobSite)
+			IKeyMapping.get(MC.options.keyShift).resetPressedState();
+		
 		overlay.resetProgress();
 		villager = null;
 		jobSite = null;

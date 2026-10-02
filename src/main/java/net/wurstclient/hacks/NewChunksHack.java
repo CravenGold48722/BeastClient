@@ -11,6 +11,8 @@ import java.awt.Color;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 
@@ -34,6 +36,7 @@ import net.wurstclient.settings.ColorSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.util.BlockUtils;
+import net.wurstclient.util.MinPriorityThreadFactory;
 import net.wurstclient.util.RegionPos;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.chunk.ChunkUtils;
@@ -71,6 +74,14 @@ public final class NewChunksHack extends Hack
 	
 	private final CheckboxSetting logChunks = new CheckboxSetting("Log chunks",
 		"Writes to the log file when a new/old chunk is found.", false);
+	
+	/**
+	 * One low-priority background thread for all chunk checks. Starting a new
+	 * thread per loaded chunk meant thousands of threads at once on joining a
+	 * world or flying fast with a high render distance.
+	 */
+	private static final ExecutorService CHUNK_CHECKER =
+		Executors.newSingleThreadExecutor(new MinPriorityThreadFactory());
 	
 	private final Set<ChunkPos> newChunks = ConcurrentHashMap.newKeySet();
 	private final Set<ChunkPos> oldChunks = ConcurrentHashMap.newKeySet();
@@ -179,12 +190,15 @@ public final class NewChunksHack extends Hack
 			return;
 		
 		LevelChunk chunk = MC.level.getChunk(x, z);
-		new Thread(() -> checkLoadedChunk(chunk), "NewChunks " + chunk.getPos())
-			.start();
+		CHUNK_CHECKER.execute(() -> checkLoadedChunk(chunk));
 	}
 	
 	private void checkLoadedChunk(LevelChunk chunk)
 	{
+		// queued before a disable or dimension change - stale now
+		if(!isEnabled() || chunk.getLevel() != MC.level)
+			return;
+		
 		ChunkPos chunkPos = chunk.getPos();
 		if(newChunks.contains(chunkPos) || oldChunks.contains(chunkPos)
 			|| dontCheckAgain.contains(chunkPos))

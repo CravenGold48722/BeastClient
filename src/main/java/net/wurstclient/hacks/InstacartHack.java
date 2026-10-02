@@ -33,6 +33,7 @@ import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.util.KeyPresser;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.SliderSetting;
@@ -206,6 +207,11 @@ public final class InstacartHack extends Hack implements UpdateListener
 	protected void onDisable()
 	{
 		EVENTS.remove(UpdateListener.class, this);
+		
+		// the charging phase holds right-click; don't leave it held
+		if(phase == Phase.CHARGING)
+			IKeyMapping.get(MC.options.keyUse).resetPressedState();
+		
 		targetPitch = null;
 		cartPos = null;
 		pendingPos = null;

@@ -53,6 +53,11 @@ public final class AutoSprintHack extends Hack implements UpdateListener
 		// the matching input), instead of us forcing setSprinting(true).
 		// Omnidirectional and Hungry Sprint work by loosening those vanilla
 		// checks in LocalPlayerMixin, so they still apply.
+		// AimAssist's auto-combo lets go of sprint for its s-tap and for
+		// critical hits; pressing it again here would undo that.
+		if(WURST.getHax().aimAssistHack.isHoldingSprintOff())
+			return;
+		
 		KeyPresser.press(MC.options.keySprint);
 	}
 	

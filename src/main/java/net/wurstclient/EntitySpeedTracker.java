@@ -164,12 +164,18 @@ public final class EntitySpeedTracker implements UpdateListener
 			prune(tick);
 		}
 		
+		/**
+		 * Read-only: the entity filters call this from parallel streams
+		 * (EntityUtils.getAttackableEntities() runs on several threads), so
+		 * it must not change anything. Old entries are pruned in record(),
+		 * on the game thread.
+		 */
 		private double getTopSpeed(long tick)
 		{
-			prune(tick);
 			double top = 0;
 			for(double[] s : speeds)
-				top = Math.max(top, s[1]);
+				if(tick - (long)s[0] <= MEMORY_TICKS)
+					top = Math.max(top, s[1]);
 			return top;
 		}
 		

@@ -145,6 +145,13 @@ public final class TunnellerHack extends Hack
 			currentBlock = null;
 		}
 		
+		// Let go of the keys the tasks hold (walking forward, sneaking to
+		// stop or place torches), or they stay held after Tunneller is off.
+		for(KeyMapping key : new KeyMapping[]{MC.options.keyUp,
+			MC.options.keyDown, MC.options.keyLeft, MC.options.keyRight,
+			MC.options.keyShift})
+			IKeyMapping.get(key).resetPressedState();
+		
 		for(int i = 0; i < vertexBuffers.length; i++)
 		{
 			if(vertexBuffers[i] == null)

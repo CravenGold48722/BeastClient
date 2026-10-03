@@ -7,6 +7,8 @@
  */
 package net.wurstclient.hacks;
 
+import java.util.Optional;
+
 import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.minecraft.core.Holder;
@@ -14,7 +16,6 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.tags.TagKey;
-import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
@@ -259,20 +260,12 @@ public final class MaceAssistHack extends Hack
 				+ " §lMin fall distance§r long.",
 			false);
 	
-	private final SliderSetting triggerChecksPerTick = new SliderSetting(
-		"Trigger checks per tick",
-		"How many times per tick the trigger bot checks whether the target is"
-			+ " close enough.\n\n"
-			+ "Each check steps your position and the target's position a"
-			+ " fraction of a tick forward, so a fast mace drop gets caught at"
-			+ " the exact moment it enters range instead of a tick late.\n\n"
-			+ "Every rendered frame adds another check on top of these.",
-		10, 1, 40, 1, ValueDisplay.INTEGER.withSuffix("/tick"));
-	
-	private final SliderSetting triggerRange =
-		new SliderSetting("Trigger range",
-			"How close the target has to be for the trigger bot to attack.", 3,
-			0.5, 6, 0.5, ValueDisplay.DECIMAL.withSuffix(" blocks"));
+	private final SliderSetting triggerRange = new SliderSetting(
+		"Trigger range",
+		"How close the target has to be for the trigger bot to attack.\n\n"
+			+ "Never more than your real reach (3 blocks in survival) - a hit"
+			+ " from further away is one the server rejects and flags.",
+		3, 0.5, 6, 0.5, ValueDisplay.DECIMAL.withSuffix(" blocks"));
 	
 	private final SliderSetting triggerHitsPerFall = new SliderSetting(
 		"Trigger hits per fall",
@@ -400,7 +393,6 @@ public final class MaceAssistHack extends Hack
 		
 		addSetting(maceTriggerBot);
 		addSetting(triggerFallingOnly);
-		addSetting(triggerChecksPerTick);
 		addSetting(triggerRange);
 		addSetting(triggerHitsPerFall);
 		addSetting(triggerCooldown);
@@ -520,13 +512,13 @@ public final class MaceAssistHack extends Hack
 		if(!triggerActive)
 			return;
 			
-		// The whole point of this hack: instead of looking once per tick, walk
-		// through the tick in slices and check each one, so a mace drop gets
-		// hit at the exact moment it enters range.
-		int checks = triggerChecksPerTick.getValueI();
-		for(int i = 0; i <= checks; i++)
-			if(tryTriggerAttack(i / (double)checks))
-				break;
+		// Once per tick, here in the tick - right before the movement packet
+		// that carries the rotation this hit was aimed with, like a vanilla
+		// click. (It used to also check slices of the tick with your and the
+		// target's positions moved ahead, and every rendered frame - hits on
+		// positions the server never saw, which Grim flags as "HITBOX: hit
+		// without any intersection".)
+		tryTriggerAttack();
 	}
 	
 	@Override
@@ -540,11 +532,7 @@ public final class MaceAssistHack extends Hack
 		if(isAimActive())
 			cameraAim.aimAtEntity(lockedTarget, getAimPoint(lockedTarget),
 				partialTicks, humanizeAim.isChecked(), aimSpeed.getValue());
-			
-		// Every rendered frame is another chance to notice that the target got
-		// close enough, on top of the checks the tick already did.
-		if(isTriggerActive())
-			tryTriggerAttack(Mth.clamp(partialTicks, 0F, 1F));
+		
 	}
 	
 	/**
@@ -716,7 +704,7 @@ public final class MaceAssistHack extends Hack
 	 *            how far into the tick to look ahead, from 0 to 1.
 	 * @return true if an attack was sent.
 	 */
-	private boolean tryTriggerAttack(double progress)
+	private boolean tryTriggerAttack()
 	{
 		if(lockedTarget == null || !isValidTarget(lockedTarget))
 			return false;
@@ -734,7 +722,7 @@ public final class MaceAssistHack extends Hack
 			&& MC.player.getAttackStrengthScale(0) < 0.9F)
 			return false;
 		
-		if(!isInTriggerRange(lockedTarget, progress))
+		if(!isCrosshairOnTarget(lockedTarget))
 			return false;
 		
 		attackTarget(lockedTarget);
@@ -742,23 +730,25 @@ public final class MaceAssistHack extends Hack
 	}
 	
 	/**
-	 * Steps the player and the target forward by a fraction of a tick and
-	 * raycasts the target's hitbox from there. This is what lets the trigger
-	 * bot catch "close enough" moments that a once-per-tick check would sleep
-	 * right through.
+	 * Whether the crosshair is on the target right now, checked the way the
+	 * server checks a hit: from where your eyes are, along the rotation going
+	 * out with this tick's movement packet, no further than your real reach
+	 * (and Trigger range), against the target's hitbox as you see it, with
+	 * no block in between.
 	 */
-	private boolean isInTriggerRange(Entity target, double progress)
+	private boolean isCrosshairOnTarget(Entity target)
 	{
-		Vec3 eyes = MC.player.getEyePosition()
-			.add(MC.player.getDeltaMovement().scale(progress));
-		Vec3 look = MC.player.getLookAngle();
-		Vec3 end = eyes.add(look.scale(triggerRange.getValue()));
+		Vec3 eyes = MC.player.getEyePosition();
+		double reach = Math.min(triggerRange.getValue(),
+			MC.player.entityInteractionRange());
+		Vec3 end = eyes.add(MC.player.getLookAngle().scale(reach));
 		
-		AABB box = target.getBoundingBox()
-			.move(target.getDeltaMovement().scale(progress))
-			.inflate(target.getPickRadius());
+		AABB box = target.getBoundingBox().inflate(target.getPickRadius());
+		if(box.contains(eyes))
+			return true;
 		
-		return box.clip(eyes, end).isPresent();
+		Optional<Vec3> hit = box.clip(eyes, end);
+		return hit.isPresent() && BlockUtils.hasLineOfSight(eyes, hit.get());
 	}
 	
 	private void attackTarget(Entity target)

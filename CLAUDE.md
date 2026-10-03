@@ -367,6 +367,11 @@ does it. When writing or touching a hack:
   those with the inventory open.
 - **Hotbar slot:** after `setSelectedSlot`, sync with `IMC.getInteractionManager().syncSelectedSlot()`
   (vanilla's `ensureHasSentCarriedItem`), never a hand-built `ServerboundSetCarriedItemPacket`.
+- **Attacks (Grim HITBOX / Reach):** only attack inside the tick (UpdateEvent, HandleInput, the
+  attack event) - never from `onRender`, the movement packet after it must carry the rotation the
+  hit was aimed with - and only when a ray from the current eye position along the current look
+  hits the target's current hitbox (+ pick radius) within `player.entityInteractionRange()`, with no
+  block in between. No predicted positions, no extra range.
 - **Packet order (Grim PacketOrderE):** a slot change must never go out after an attack, interact,
   use, use-on-block, release, PlayerCommand or sneak/sprint input change in the same tick (tick =
   up to `ServerboundClientTickEndPacket`). `util/PacketOrder` tracks that from the sent packets and
@@ -503,9 +508,11 @@ same one AimAssist uses; "Humanize aim" switches the human-like curve on), mace 
 chestplate.
 
 Design points that were deliberate, don't "fix" them blindly:
-- **Sub-tick trigger bot.** `triggerChecksPerTick` (default 10) — each check advances the player and
-  the target along their velocities by `i/checks` of a tick and raycasts the target's hitbox, so an
-  in-range moment inside a tick isn't missed. `onRender` adds one more check per frame.
+- **Trigger bot = real geometry, once per tick, in the tick.** It used to check sub-tick slices with
+  both positions moved ahead along their velocities, plus once per rendered frame - hits on positions
+  the server never saw (Grim "HITBOX: hit without any intersection", user report 2026-10-02). Now
+  `isCrosshairOnTarget`: current eyes, current look, min(Trigger range, `entityInteractionRange()`),
+  hitbox + pick radius, block line of sight. Don't bring the prediction back.
 - Item detection uses `ItemTags.SWORDS/AXES/SPEARS/CHEST_ARMOR` (the mod used
   `item.toString().contains("sword")`).
 - **Mannequins**: `net.minecraft.world.entity.decoration.Mannequin extends Avatar`, and in 26.1.2

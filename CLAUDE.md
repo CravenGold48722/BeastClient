@@ -3,6 +3,26 @@
 Written for future sessions so the folder doesn't have to be re-scraped. Everything below was
 verified against the source in this repo, not recalled from upstream Wurst docs.
 
+## Effort budget (all agents and subagents)
+
+A high or max effort setting is a **ceiling, not a target**. Spend thinking where it changes the
+result: being thorough means covering everything the task actually needs, checked properly - not
+using up the budget. Match the depth to what the task has in it:
+
+- **Simple / mechanical** (find a file, grep for usages, read and summarise one class, rename,
+  move a jar, run a build, a one-line fix whose cause is already known): the work is in doing it
+  and checking the result, so put the effort there rather than into deliberating first.
+- **Medium** (a bug with a known symptom in a few files, a small feature that follows an existing
+  pattern): plan up front, then carry the plan out; revisit it when a result contradicts it.
+- **Hard** (anticheat behaviour, aim/prediction math, threading, packet order, a symptom with no
+  obvious cause): this is what the budget is for. Work it through fully and verify the answer.
+
+Thinking that adds nothing is what to skip: re-deriving what this file or the prompt already
+says, weighing options you won't pick, re-reading files you just read or edited, and restating
+the same reasoning twice. Reports cover what changed, what was verified and what wasn't, without
+padding. A subagent asked for a specific answer returns that answer in full, not a survey of the
+codebase.
+
 ## What this repo is
 
 **Beast Client** — a personal fork of [Wurst 7](https://github.com/Wurst-Imperium/Wurst7) by

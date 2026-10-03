@@ -1,8 +1,8 @@
 {
   "env": {
-    "MAX_THINKING_TOKENS": "40000",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-opus-5-5",
-    "CLAUDE_CODE_SUBAGENT_EFFORT": "medium"
+    "MAX_THINKING_TOKENS": "60000",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5-5",
+    "CLAUDE_CODE_SUBAGENT_EFFORT": "max"
   },
   "effort": "high",
   "defaultMode": "auto",

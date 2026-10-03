@@ -78,7 +78,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 * Targets this much closer than the closest one count as equally close,
 	 * so the one with the least health is picked among them. Blocks.
 	 */
-	private static final double DISTANCE_TIE = 0.5;
+	private static final double DISTANCE_TIE = 0.4;
 	
 	private final SliderSetting range =
 		new SliderSetting("Range", 4.5, 1, 20, 0.05, ValueDisplay.DECIMAL);
@@ -682,17 +682,19 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return;
 		}
 		
-		// Reset the hit timer when the player manually clicks or the
-		// crosshair leaves the target. During an aura-farming spin with
-		// server-side aim the crosshair is intentionally off-target while the
-		// server still sees you facing it, so skip that half of the check
-		// there. Without silent aim the server sees the spin too, so only
-		// hit when the crosshair actually sweeps over the target.
+		// No hit while the player clicks themselves or the crosshair is off
+		// the target. During an aura-farming spin with server-side aim the
+		// crosshair is intentionally off-target while the server still sees
+		// you facing it, so skip that half of the check there. Without silent
+		// aim the server sees the spin too, so only hit when the crosshair
+		// actually sweeps over the target.
+		// (This used to also reset the attack cooldown - every tick the
+		// crosshair slipped off a strafing target cost a full cooldown, so
+		// clear chances to hit went by and you had to click yourself.)
 		boolean silentSpin =
 			spinRemaining > 0F && faceTarget.getSelected() == FaceTarget.SERVER;
 		if(attackClicked || (!silentSpin && !isCrosshairOnTarget()))
 		{
-			MC.player.resetAttackStrengthTicker();
 			resetCombo();
 			return;
 		}
@@ -970,14 +972,12 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			: Double.MAX_VALUE;
 		boolean inComboRange =
 			distSq > CLOSE_THRESHOLD_SQ && distSq < FAR_THRESHOLD_SQ;
-		if(!auraFarming.isChecked())
-		{
-			if(MC.player.fallDistance >= 0.15F)
-			{
-				comboPhase = ComboPhase.STAPPING;
-			}
-			
-		}
+		// (Falling used to force the s-tap phase every tick, so no hit went
+		// out from a jump or a drop until you landed - the best moment for
+		// a crit. Too close used to block hits as well; spacing backs off,
+		// but a ready hit goes out meanwhile.)
+		boolean inReach = distSq < FAR_THRESHOLD_SQ;
+		boolean airborne = !MC.player.onGround() && MC.player.fallDistance > 0;
 		switch(comboPhase)
 		{
 			case IDLE:
@@ -985,10 +985,17 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			// - saved - after AimAssist was turned off and made it impossible
 			// to turn off meanwhile. The combo presses sprint itself.)
 			adjustSpacing(distSq, inComboRange);
-			if(cooldown >= 1.0F && inComboRange)
+			if(cooldown >= 1.0F && inReach)
 			{
-				holdForward();
-				KeyPresser.press(MC.options.keySprint);
+				// Sprinting into the hit gives knockback - except from a
+				// fall, where not sprinting makes it a crit
+				// (Player.canCriticalAttack), and from too close, where
+				// spacing is backing off.
+				if(inComboRange && !airborne)
+				{
+					holdForward();
+					KeyPresser.press(MC.options.keySprint);
+				}
 				if(auraFarming.isChecked())
 				{
 					if(MC.player.onGround() && !MC.player.isInWater()

@@ -185,9 +185,11 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ " then whoever is closest, then whoever has the least health"
 			+ " (when the distances are within half a block).\n\n"
 			+ "Once locked, AimAssist only switches when the target dies,"
-			+ " leaves the range or line of sight, or when a different entity"
-			+ " attacks you while the target isn't. A closer entity alone"
-			+ " never steals the lock.",
+			+ " leaves the range or line of sight, when a different entity"
+			+ " attacks you while the target isn't, or when another entity"
+			+ " that's attacking you gets more than half a block closer than"
+			+ " the target. A closer entity that isn't attacking you never"
+			+ " steals the lock.",
 		4, 1, 15, 0.5, ValueDisplay.DECIMAL.withSuffix("s"));
 	
 	private final CheckboxSetting checkLOS =
@@ -599,15 +601,19 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		forgetOldAttackers(now);
 		
 		// The lock only changes when the target is gone (dead, out of range,
-		// out of sight), on the switch key, or when something else attacks
-		// you while the target doesn't. A closer entity alone never takes
+		// out of sight), on the switch key, when something else attacks you
+		// while the target doesn't, or when another attacker gets clearly
+		// closer than an attacking target. A closer non-attacker never takes
 		// the lock - that kept restarting the aim between two targets.
 		if(switchRequested || !isValidTarget(target))
 			target = pickTarget(switchRequested ? target : null, false, now);
-		else if(!lastHurtBy.isEmpty() && !isAttackingYou(target, now))
+		else if(!lastHurtBy.isEmpty())
 		{
 			Entity attacker = pickTarget(target, true, now);
-			if(attacker != null)
+			// DISTANCE_TIE: two attackers side by side don't trade the lock
+			// back and forth every few ticks
+			if(attacker != null && (!isAttackingYou(target, now)
+				|| distanceTo(attacker) < distanceTo(target) - DISTANCE_TIE))
 				target = attacker;
 		}
 		

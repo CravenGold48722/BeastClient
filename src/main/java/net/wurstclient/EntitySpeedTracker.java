@@ -116,7 +116,7 @@ public final class EntitySpeedTracker implements UpdateListener
 	 * and teleport packets alike (teleports skip the position codec, so
 	 * {@code getPositionCodec().getBase()} would miss them).
 	 */
-	private static Vec3 getLatestServerPos(Entity e)
+	public static Vec3 getLatestServerPos(Entity e)
 	{
 		InterpolationHandler interpolation = e.getInterpolation();
 		if(interpolation != null && interpolation.hasActiveInterpolation())

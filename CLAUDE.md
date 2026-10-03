@@ -314,7 +314,16 @@ does it. When writing or touching a hack:
   frame from `onRender` (or per tick for silent aim). Used by AimAssist, MaceAssist, BowAimbot,
   Killaura (Client-side), KillauraLegit, FightBot, Protect. Gate attacks on the crosshair actually
   being on the target while turning. BowAimbot's lead comes from `util/BallisticSolver`
-  (vanilla projectile physics, tested in `BallisticSolverTest`).
+  (vanilla projectile physics, tested in `BallisticSolverTest`) plus `util/TargetPredictor`:
+  Robocode-style pattern matching (replays the most similar past moments of the target's
+  movement, relative to the shooter), aims at the densest spot of those replays within the hit
+  width rather than their average, and runs virtual guns (pattern / averaged / linear / still)
+  scored on practice shots. It starts from the server position (`EntitySpeedTracker
+  .getLatestServerPos`), fills in the ticks between the server's every-2nd-tick updates, and looks
+  ahead by flight + 0.5 tick (the hit is checked on whole ticks) + ping. `TargetPredictorTest`
+  shoots simulated vanilla arrows at simulated A/D strafers: steady rhythms 93-100% hits (linear
+  lead: 0-50%); random 5-15-tick rhythms about 50% at 30 blocks, where perfect knowledge of the
+  random rule would get 52%. Never go back to plain velocity lead for strafers.
 - **MaceAssist aim** also rounds to the real mouse step (both Humanize and snappy); humanize jitter is
   whole mouse counts. KillauraLegit moves via MouseUpdateEvent deltas, so vanilla applies sensitivity.
 - **Mouse-step rotations:** every Wurst-made rotation (client via `Rotation.applyToClientPlayer`,
@@ -517,7 +526,8 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
 ## Tests
 
 - `src/test/java/net/wurstclient/util/` — JUnit tests for `Rotation`, `RotationUtils`, `HumanAim`
-  (settling, no overshoot, tracking lag) and `BallisticSolver` (hits at range, moving targets).
+  (settling, no overshoot, tracking lag), `BallisticSolver` (hits at range, moving targets) and
+  `TargetPredictor` (hit rates against simulated strafers, < 1 ms per tick).
 - `src/gametest/` — in-game tests (`AltManagerTest`, `VanillaSpoofTest`, `KeyPresserTest`,
   `PacketBudgetTest`, `AutoMineHackTest`, `FreecamHackTest`, `NoFallHackTest`, `XRayHackTest`, …)
   run via `runClientGameTest` / `runClientGameTestWithMods`; the whole suite passes (exit 0,

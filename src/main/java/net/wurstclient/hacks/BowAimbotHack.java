@@ -8,7 +8,7 @@
 package net.wurstclient.hacks;
 
 import java.awt.Color;
-import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.function.ToDoubleFunction;
 import java.util.stream.Stream;
@@ -18,6 +18,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.util.Mth;
@@ -37,6 +38,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
+import net.wurstclient.EntitySpeedTracker;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.GUIRenderListener;
 import net.wurstclient.events.RenderListener;
@@ -57,6 +59,7 @@ import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
+import net.wurstclient.util.TargetPredictor;
 
 @SearchTags({"bow aimbot", "crossbow aimbot", "trident aimbot"})
 public final class BowAimbotHack extends Hack
@@ -72,12 +75,13 @@ public final class BowAimbotHack extends Hack
 	
 	private final SliderSetting predictMovement = new SliderSetting(
 		"Predict movement",
-		"How much of the target's movement to lead the shot by.\n\n"
-			+ "BowAimbot works out exactly where the target will be when the"
-			+ " projectile gets there - running, strafing, jumping or"
-			+ " falling - by simulating the projectile's real flight (drag,"
-			+ " gravity, your own movement). 100% leads by exactly that; less"
-			+ " leads by less, more by more.",
+		"How much of the predicted movement to lead the shot by.\n\n"
+			+ "BowAimbot learns how the target moves - including strafing back"
+			+ " and forth, on a steady or an irregular rhythm - and aims where"
+			+ " it's most likely to be when the projectile arrives, counting"
+			+ " the projectile's real flight (drag, gravity, your own movement)"
+			+ " and your ping. 100% leads by exactly that; less leads by less,"
+			+ " more by more.",
 		1, 0, 2, 0.01, ValueDisplay.PERCENTAGE);
 	
 	private final SliderSetting aimSpeed = new SliderSetting("Aim speed",
@@ -120,11 +124,11 @@ public final class BowAimbotHack extends Hack
 		BLOCKED
 	}
 	
-	/** Ticks of target positions kept for measuring its velocity. */
-	private static final int HISTORY = 4;
-	
 	private final CameraAim cameraAim = new CameraAim();
-	private final ArrayDeque<Vec3> targetHistory = new ArrayDeque<>();
+	/** Learns how the target moves - see {@link TargetPredictor}. */
+	private final TargetPredictor predictor = new TargetPredictor();
+	/** The target's server position on the last three ticks, newest first. */
+	private final double[] serverY = new double[3];
 	
 	private Entity target;
 	private float velocity;
@@ -181,7 +185,7 @@ public final class BowAimbotHack extends Hack
 		target = null;
 		solution = null;
 		aimInFrames = false;
-		targetHistory.clear();
+		predictor.reset();
 		cameraAim.reset();
 	}
 	
@@ -209,22 +213,31 @@ public final class BowAimbotHack extends Hack
 			return;
 		}
 		
+		Vec3 serverPos = EntitySpeedTracker.getLatestServerPos(target);
 		if(target != previous)
 		{
-			targetHistory.clear();
+			predictor.reset();
 			solution = null;
+			Arrays.fill(serverY, serverPos.y);
 		}
 		
-		targetHistory.addLast(target.position());
-		while(targetHistory.size() > HISTORY)
-			targetHistory.removeFirst();
-			
+		// learn how it moves, from where the server has it
+		System.arraycopy(serverY, 0, serverY, 1, serverY.length - 1);
+		serverY[0] = serverPos.y;
+		double latency = getLatencyTicks();
+		predictor.record(serverPos, player.position());
+		predictor.prepare(
+			solution != null ? solution.ticks()
+				: serverPos.distanceTo(player.position())
+					/ shot.projectile().speed(),
+			latency, target.getBbWidth() / 2);
+		
 		// Solve the shot: spawn point, what your own movement adds to the
 		// projectile, and where the target is headed.
 		Vec3 start = RotationUtils.getEyesPos().add(0, -shot.spawnDrop(), 0);
 		Vec3 inherited = getInheritedVelocity(player);
 		Solution next = BallisticSolver.solve(start, inherited,
-			shot.projectile(), predictPath(target));
+			shot.projectile(), predictPath(target, serverPos, latency));
 		
 		// how fast the solution itself is moving, so the aim keeps up
 		if(solution != null)
@@ -323,70 +336,84 @@ public final class BowAimbotHack extends Hack
 	}
 	
 	/**
-	 * Where the target's hitbox center will be, some ticks from now: keeps
-	 * running the way it's been running (averaged over the last few ticks),
-	 * and if it's in the air, falls the way players and mobs fall, landing on
-	 * the ground below it.
+	 * Where the target's hitbox center will be when a projectile flying
+	 * {@code t} ticks reaches it.
+	 *
+	 * <p>
+	 * Sideways and toward/away: {@link TargetPredictor} - it learns the
+	 * target's movement (strafing rhythm and all) and picks the spot it's
+	 * most likely to be in. Up and down: on the ground it stays at its height;
+	 * flying (elytra, creative) carries on in a straight line; falling follows
+	 * vanilla gravity and drag (LivingEntity.travel) until the ground below.
+	 * Everything starts from where the server has the target, not the
+	 * client's smoothed position, and looks ahead by the ping as well.
 	 */
-	private TargetPath predictPath(Entity e)
+	private TargetPath predictPath(Entity e, Vec3 serverPos, double latency)
 	{
 		double predict = predictMovement.getValue();
-		Vec3 center = e.getBoundingBox().getCenter();
-		double centerOffset = center.y - e.getY();
-		
-		// horizontal velocity, averaged to smooth out the network's steps
-		Vec3 oldest = targetHistory.peekFirst();
-		Vec3 newest = targetHistory.peekLast();
-		int span = targetHistory.size() - 1;
-		Vec3 velocity =
-			span > 0 ? newest.subtract(oldest).scale(1.0 / span).scale(predict)
-				: e.position().subtract(e.xo, e.yo, e.zo).scale(predict);
+		double halfHeight = e.getBbHeight() / 2;
+		// the server sends most positions every second tick
+		double vy = (serverY[0] - serverY[2]) / 2 * predict;
 		
 		boolean flying = e instanceof LivingEntity le && le.isFallFlying()
 			|| e instanceof Player p && p.getAbilities().flying
 			|| e.isNoGravity();
 		boolean falling = !flying && !e.onGround() && !e.isInWater();
+		double groundY = falling ? findGroundBelow(e, serverPos) : 0;
 		
-		// on the ground or swimming: stays at its height
-		if(!flying && !falling)
-			return t -> new Vec3(center.x + velocity.x * t, center.y,
-				center.z + velocity.z * t);
-		
-		// flying (elytra, creative): carries on in a straight line
-		if(flying)
-			return t -> center.add(velocity.scale(t));
-			
-		// falling: vanilla gravity and drag (LivingEntity.travel), stopping
-		// on the ground below
-		double feetY = e.getY();
-		double groundY = findGroundBelow(e);
-		double vy = (e.getY() - e.yo) * predict;
 		return t -> {
-			double y = feetY;
-			double v = vy;
-			int whole = (int)t;
-			for(int i = 0; i < whole && y > groundY; i++)
-			{
-				y += v;
-				v = (v - 0.08) * 0.98;
-			}
-			if(y > groundY)
-				y += v * (t - whole);
-			y = Math.max(y, groundY);
-			return new Vec3(center.x + velocity.x * t, y + centerOffset,
-				center.z + velocity.z * t);
+			double[] xz = predictor.predict(t);
+			double x = serverPos.x + (xz[0] - serverPos.x) * predict;
+			double z = serverPos.z + (xz[1] - serverPos.z) * predict;
+			double ahead = TargetPredictor.lookAhead(t, latency);
+			
+			double y = serverPos.y;
+			if(flying)
+				y += vy * ahead;
+			else if(falling)
+				y = fall(serverPos.y, vy, groundY, ahead);
+			
+			return new Vec3(x, y + halfHeight, z);
 		};
 	}
 	
-	/** Height of the ground under the entity, or far below if there's none. */
-	private static double findGroundBelow(Entity e)
+	/** Vanilla falling (LivingEntity.travel), stopping on the ground. */
+	private static double fall(double y, double vy, double groundY,
+		double ticks)
 	{
-		Vec3 from = e.position();
+		int whole = (int)ticks;
+		for(int i = 0; i < whole && y > groundY; i++)
+		{
+			y += vy;
+			vy = (vy - 0.08) * 0.98;
+		}
+		if(y > groundY)
+			y += vy * (ticks - whole);
+		return Math.max(y, groundY);
+	}
+	
+	/** Height of the ground under the entity, or far below if there's none. */
+	private static double findGroundBelow(Entity e, Vec3 from)
+	{
 		Vec3 to = from.add(0, -64, 0);
 		BlockHitResult hit = MC.level.clip(new ClipContext(from, to,
 			ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, e));
 		return hit.getType() == HitResult.Type.MISS ? to.y
 			: hit.getLocation().y;
+	}
+	
+	/**
+	 * Your round trip to the server, in ticks: what you see of the target is
+	 * half of it old, and your shot reaches the server half of it later.
+	 */
+	private static double getLatencyTicks()
+	{
+		PlayerInfo info = MC.getConnection() == null ? null
+			: MC.getConnection().getPlayerInfo(MC.player.getUUID());
+		if(info == null)
+			return 0;
+		
+		return Math.clamp(info.getLatency() / 50.0, 0, 20);
 	}
 	
 	/** Whether a block is in the way of the solved shot. */

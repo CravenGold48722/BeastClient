@@ -412,6 +412,20 @@ does it. When writing or touching a hack:
   `PacketOrder.canChangeSlotNow()` and wait a tick if false (MaceAssist does), or the action goes
   out with the old item. `PacketBudgetTest` counts violations independently (MaceAssist swap-back
   scenario: 9/9 violations without the guard, 0 with it).
+- **ScaffoldWalk Client-side = a real godbridge** (user, 2026-10-03; Hypixel bridging guide):
+  face back along the bridge at 45° (yaw = bridge + 180 ± 45), pitch ~75.4 (players: 75.0-75.8),
+  walk backward with S + A/D, no sneak, click the last block's side face when the crosshair is on
+  it. `KeyboardInputMixin` → `ScaffoldWalkHack.modifyInput` remaps the keys, so your W keeps
+  meaning the direction you faced and the server's input packet shows S+D like a player's; the
+  camera is turned per frame with `CameraAim` and turned back when you stop. Clicks are on the
+  real crosshair hit, only when the sent rotation (`yRotLast/xRotLast`) hits the same face too.
+  The window is ~1 tick per block (the crosshair clears the top edge at ~0.3 past it, where you
+  start to fall; feet stay level one tick past that) - a fixed pitch falls within 30 blocks,
+  which is why humans jump every 8-10. `util/Godbridge.Planner` nudges the pitch ~±1.5° per
+  block and commits to a click tick 3 ticks ahead (re-planning late left the sent rotation
+  stale: fell every ~15 blocks). `GodbridgeTest` simulates it, `ScaffoldWalkHackTest` (gametest)
+  bridges 25 blocks north from a ledge in the air. The per-tick step comes from our own last
+  position: in `onUpdate`, `xo` is already reset to the current position.
 - **Chat / server commands:** `ChatUtils.sendAsPlayer("/cmd …")` — same normalisation and chat
   history as typing it; doesn't fire `ChatOutputEvent`, so it can't loop.
 - **Changing a default:** `settings.json` stores defaults too, so add an entry to

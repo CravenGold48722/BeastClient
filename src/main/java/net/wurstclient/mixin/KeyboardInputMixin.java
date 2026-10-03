@@ -17,6 +17,7 @@ import net.minecraft.client.player.KeyboardInput;
 import net.minecraft.world.entity.player.Input;
 import net.minecraft.world.phys.Vec2;
 import net.wurstclient.WurstClient;
+import net.wurstclient.hacks.ScaffoldWalkHack;
 import net.wurstclient.util.KeyPresser;
 
 @Mixin(KeyboardInput.class)
@@ -32,6 +33,21 @@ public class KeyboardInputMixin extends ClientInput
 	private void onTickTail(CallbackInfo ci)
 	{
 		KeyPresser.afterInputRead();
+		
+		// ScaffoldWalk's godbridge: your keys keep meaning the direction you
+		// were facing, turned into the keys that walk that way now (S plus
+		// A or D) - also what the server sees in the input packet.
+		WurstClient wurstClient = WurstClient.INSTANCE;
+		if(wurstClient.isEnabled() && wurstClient.getHax() != null)
+		{
+			Input remapped =
+				wurstClient.getHax().scaffoldWalkHack.modifyInput(keyPresses);
+			if(remapped != null)
+			{
+				keyPresses = remapped;
+				moveVector = ScaffoldWalkHack.moveVectorOf(remapped);
+			}
+		}
 		
 		// While the inventory that InventoryOpener opened for a hack's clicks
 		// is up, there is no movement input at all - just like after pressing

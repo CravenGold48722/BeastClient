@@ -107,7 +107,7 @@ public final class HumanAim
 	 * toward the aim point that keeps it on the hitbox without chasing every
 	 * tiny change.
 	 */
-	public static final double KP_ON = 3;
+	public static final double KP_ON = 6;
 	
 	/** Derivative gain, seconds - damps the approach. */
 	public static final double KD = 0.04;
@@ -127,6 +127,9 @@ public final class HumanAim
 	 * aim point): no correction, only following the target's motion.
 	 */
 	public static final double REST_DEPTH = 0.3;
+	
+	/** ...and closer to the aim point than this, degrees. */
+	public static final double REST_ANGLE = 0.5;
 	
 	/** How fast the gains blend between on and off target, seconds. */
 	private static final double SCHEDULE_TAU = 0.08;
@@ -511,7 +514,12 @@ public final class HumanAim
 		
 		double wantYaw;
 		double wantPitch;
-		if(depth < REST_DEPTH)
+		// Rest (no correction) only when deep inside the hitbox AND right on
+		// the aim point - resting anywhere inside left the crosshair sitting
+		// visibly off-center at close range, where the hitbox is many degrees
+		// wide.
+		boolean resting = depth < REST_DEPTH && distance < REST_ANGLE;
+		if(resting)
 		{
 			// deep inside the hitbox: just follow the target (the integral
 			// keeps whatever lag it has learned)
@@ -576,7 +584,7 @@ public final class HumanAim
 			
 			updateTremor(depth < 1 ? 0 : distance, Math.hypot(velYaw, velPitch),
 				dt, now);
-			if(depth < REST_DEPTH && Math.hypot(tremorYaw, tremorPitch) < 0.5)
+			if(resting && Math.hypot(tremorYaw, tremorPitch) < 0.5)
 				tremorYaw = tremorPitch = 0;
 			
 		}else

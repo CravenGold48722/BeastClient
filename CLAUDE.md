@@ -319,7 +319,10 @@ does it. When writing or touching a hack:
   while closing fast (no windup overshoot), filtered D, and setpoint feed-forward (the wanted
   angle's own rate, measured per frame) - that last part is what keeps it on A/D strafers;
   the per-tick tracking estimate alone lags each reversal. `PidAimTest` compares it with the old
-  aim (strafer 40°/s: 96% vs 81% on target). The old "Smooth aim distance" snap gate is gone. Gate attacks on the crosshair actually
+  aim (strafer 40°/s: 96% vs 81% on target). Within "Smooth aim distance" (once caught up) it snaps; "Smooth aim speed" 360-2000 overrides
+  the PID with a fixed top speed (old humanStep/linearStep), its top end "auto" (blue knob) = PID.
+  While AimAssist has a target and turns the camera, `onMouseUpdate` zeroes your mouse input
+  (the old "you moved the mouse >1.5° = steering" release made it let go of targets). Gate attacks on the crosshair actually
   being on the target while turning. BowAimbot's lead comes from `util/BallisticSolver`
   (vanilla projectile physics, tested in `BallisticSolverTest`) plus `util/TargetPredictor`:
   Robocode-style pattern matching (replays the most similar past moments of the target's

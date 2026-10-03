@@ -199,10 +199,15 @@ public final class AimAssistHack extends Hack
 				+ " going through the spin.",
 			false);
 	
+	/**
+	 * Only decides which target to pick - see {@link #isValidTarget}.
+	 */
+	private final FilterFlyingSetting filterFlying =
+		FilterFlyingSetting.genericCombat(0);
+	
 	private final EntityFilterList entityFilters =
 		new EntityFilterList(FilterPlayersSetting.genericCombat(false),
-			FilterSleepingSetting.genericCombat(false),
-			FilterFlyingSetting.genericCombat(0),
+			FilterSleepingSetting.genericCombat(false), filterFlying,
 			FilterSpeedSetting.genericCombat(100),
 			FilterHostileSetting.genericCombat(false),
 			FilterNeutralSetting
@@ -823,7 +828,10 @@ public final class AimAssistHack extends Hack
 	private boolean isPlayerSteering()
 	{
 		absorbMouseMovement();
-		boolean steering = isSteerAccumHigh();
+		// While the mouse is locked (see onMouseUpdate), a camera change can't
+		// be yours - it's another hack turning it (MaceAssist, BowAimbot...),
+		// which used to make AimAssist let go of its target.
+		boolean steering = !isLockingMouse() && isSteerAccumHigh();
 		
 		steerAccumYaw = 0;
 		steerAccumPitch = 0;
@@ -1543,7 +1551,7 @@ public final class AimAssistHack extends Hack
 		// The player grabbing the mouse in the middle of a tick stops the aim
 		// right away, not only at the next tick.
 		absorbMouseMovement();
-		if(steeringNow || isSteerAccumHigh())
+		if(!isLockingMouse() && (steeringNow || isSteerAccumHigh()))
 		{
 			steeringNow = true;
 			aim.invalidate();
@@ -1605,7 +1613,13 @@ public final class AimAssistHack extends Hack
 		if(checkLOS.isChecked()
 			&& !BlockUtils.hasLineOfSight(aimAt.getAimPoint(e)))
 			return false;
-		return entityFilters.applyTo(Stream.of(e)).findAny().isPresent();
+			
+		// The flying filter only decides which target to pick. A target that
+		// was locked on the ground stays locked while it jumps, gets knocked
+		// up (by your own hits, too) or steps off a ledge - with "Filter
+		// flying" set, AimAssist used to let go of it the moment it left
+		// the ground.
+		return entityFilters.testOneIgnoring(e, filterFlying);
 	}
 	
 	private Entity pickTarget(Entity exclude)

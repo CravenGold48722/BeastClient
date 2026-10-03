@@ -450,6 +450,13 @@ fork-only), then **measure** (12–13). Don't stop at the first finding in a fil
     upstream may already have fixed a shared bug since the fork point (NoFog, Fullbright,
     stale-entity checks were all ported that way).
 
+14. **Read the user's real config** (`.minecraft/wurst/settings.json`, `enabled-hacks.json`)
+    when a reported symptom doesn't follow from the defaults. *Found:* "AimAssist stops aiming when
+    the target moves a bit" was the user's saved AimAssist "Filter flying" 0.4 (default 0) being
+    re-checked on the locked target every tick - any jump or knockback dropped it. Also check
+    which other always-on hacks touch the same thing (MaceAssist and BowAimbot also turn the
+    camera, which AimAssist's steering detector took for the mouse). Read-only: never edit them.
+
 Report findings honestly: say what was found, what was fixed, and what was checked and found fine
 (with the reason, e.g. "duplicate keypair is harmless because…"). Never claim "no issues" for a
 category you didn't sweep.

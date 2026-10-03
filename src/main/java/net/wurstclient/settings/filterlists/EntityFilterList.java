@@ -59,6 +59,17 @@ public class EntityFilterList
 		return true;
 	}
 	
+	/** Like {@link #testOne}, but without the given filter. */
+	public final boolean testOneIgnoring(Entity entity, EntityFilter ignored)
+	{
+		for(EntityFilter filter : entityFilters)
+			if(filter != ignored && filter.isFilterEnabled()
+				&& !filter.test(entity))
+				return false;
+			
+		return true;
+	}
+	
 	public static EntityFilterList genericCombat()
 	{
 		return new EntityFilterList(FilterPlayersSetting.genericCombat(false),

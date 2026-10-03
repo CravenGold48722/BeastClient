@@ -12,8 +12,10 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 import javax.sound.sampled.AudioFormat;
@@ -31,15 +33,20 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.protocol.game.ClientboundDamageEventPacket;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
 import net.wurstclient.events.MouseUpdateListener;
 import net.wurstclient.events.MouseUpdateListener.MouseUpdateEvent;
+import net.wurstclient.events.PacketInputListener;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
@@ -64,9 +71,15 @@ import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
 import net.wurstclient.util.text.WText;
 
-public final class AimAssistHack extends Hack
-	implements UpdateListener, RenderListener, MouseUpdateListener
+public final class AimAssistHack extends Hack implements UpdateListener,
+	RenderListener, MouseUpdateListener, PacketInputListener
 {
+	/**
+	 * Targets this much closer than the closest one count as equally close,
+	 * so the one with the least health is picked among them. Blocks.
+	 */
+	private static final double DISTANCE_TIE = 0.5;
+	
 	private final SliderSetting range =
 		new SliderSetting("Range", 4.5, 1, 20, 0.05, ValueDisplay.DECIMAL);
 	
@@ -164,6 +177,18 @@ public final class AimAssistHack extends Hack
 			"Key that cycles to a different target. Uses Minecraft key"
 				+ " translation keys (e.g. key.keyboard.tab, key.keyboard.r).",
 			"key.keyboard.tab", this::isValidKeybind);
+	
+	private final SliderSetting attackerMemory = new SliderSetting(
+		"Attacker memory",
+		"How long an entity counts as attacking you after it last hurt you.\n\n"
+			+ "Targets are picked in this order: whoever is attacking you,"
+			+ " then whoever is closest, then whoever has the least health"
+			+ " (when the distances are within half a block).\n\n"
+			+ "Once locked, AimAssist only switches when the target dies,"
+			+ " leaves the range or line of sight, or when a different entity"
+			+ " attacks you while the target isn't. A closer entity alone"
+			+ " never steals the lock.",
+		4, 1, 15, 0.5, ValueDisplay.DECIMAL.withSuffix("s"));
 	
 	private final CheckboxSetting checkLOS =
 		new CheckboxSetting("Check line of sight",
@@ -288,6 +313,14 @@ public final class AimAssistHack extends Hack
 	
 	private Entity target;
 	private boolean switchKeyDownLastTick;
+	
+	/**
+	 * Entity ID -> System.nanoTime() of when it last hurt you, from the
+	 * server's damage events. Written on the network thread.
+	 */
+	private final ConcurrentHashMap<Integer, Long> lastHurtBy =
+		new ConcurrentHashMap<>();
+	private ClientLevel attackersLevel;
 	private long lastFrameTime;
 	
 	// ── Aim state
@@ -439,6 +472,7 @@ public final class AimAssistHack extends Hack
 		addSetting(smoothAimSpeed);
 		addSetting(smoothAimDistance);
 		addSetting(switchTargetKey);
+		addSetting(attackerMemory);
 		addSetting(checkLOS);
 		addSetting(aimWhileBlocking);
 		addSetting(autoAttack);
@@ -474,6 +508,7 @@ public final class AimAssistHack extends Hack
 		
 		target = null;
 		switchKeyDownLastTick = false;
+		lastHurtBy.clear();
 		lastFrameTime = System.nanoTime();
 		resetAimState();
 		comboPhase = ComboPhase.IDLE;
@@ -490,6 +525,7 @@ public final class AimAssistHack extends Hack
 		EVENTS.add(UpdateListener.class, this);
 		EVENTS.add(RenderListener.class, this);
 		EVENTS.add(MouseUpdateListener.class, this);
+		EVENTS.add(PacketInputListener.class, this);
 		
 		// a track that finished last time may play again
 		musicEndedFile = null;
@@ -502,6 +538,8 @@ public final class AimAssistHack extends Hack
 		EVENTS.remove(UpdateListener.class, this);
 		EVENTS.remove(RenderListener.class, this);
 		EVENTS.remove(MouseUpdateListener.class, this);
+		EVENTS.remove(PacketInputListener.class, this);
+		lastHurtBy.clear();
 		target = null;
 		resetAimState();
 		resetCombo();
@@ -557,18 +595,20 @@ public final class AimAssistHack extends Hack
 		boolean switchRequested = switchKeyDown && !switchKeyDownLastTick;
 		switchKeyDownLastTick = switchKeyDown;
 		
+		long now = System.nanoTime();
+		forgetOldAttackers(now);
+		
+		// The lock only changes when the target is gone (dead, out of range,
+		// out of sight), on the switch key, or when something else attacks
+		// you while the target doesn't. A closer entity alone never takes
+		// the lock - that kept restarting the aim between two targets.
 		if(switchRequested || !isValidTarget(target))
-			target = pickTarget(switchRequested ? target : null);
-		else if(steering)
+			target = pickTarget(switchRequested ? target : null, false, now);
+		else if(!lastHurtBy.isEmpty() && !isAttackingYou(target, now))
 		{
-			// The player is turning toward something else. Follow their
-			// crosshair instead of clinging to the old target: whatever is
-			// closest to it now becomes the target. Without this, AimAssist
-			// pulled the camera back every tick and the player could never
-			// get it onto a target 20-40 degrees away.
-			Entity closest = pickTarget(null);
-			if(closest != null)
-				target = closest;
+			Entity attacker = pickTarget(target, true, now);
+			if(attacker != null)
+				target = attacker;
 		}
 		
 		// A different entity here means the target was switched or the old one
@@ -1630,7 +1670,119 @@ public final class AimAssistHack extends Hack
 		return entityFilters.testOneIgnoring(e, filterFlying);
 	}
 	
-	private Entity pickTarget(Entity exclude)
+	/**
+	 * Picks the best target: anyone who's attacking you before anyone who
+	 * isn't, then the closest, then - among those within
+	 * {@link #DISTANCE_TIE} of the closest - the one with the least health.
+	 *
+	 * @param attackersOnly
+	 *            only consider entities that are attacking you
+	 */
+	private Entity pickTarget(Entity exclude, boolean attackersOnly, long now)
+	{
+		List<Entity> candidates = findCandidates(exclude);
+		
+		List<Entity> attackers = new ArrayList<>();
+		for(Entity e : candidates)
+			if(isAttackingYou(e, now))
+				attackers.add(e);
+			
+		if(!attackers.isEmpty())
+			candidates = attackers;
+		else if(attackersOnly)
+			return null;
+		
+		double closest = Double.MAX_VALUE;
+		for(Entity e : candidates)
+			closest = Math.min(closest, distanceTo(e));
+		
+		Entity best = null;
+		float bestHealth = Float.MAX_VALUE;
+		for(Entity e : candidates)
+		{
+			if(distanceTo(e) > closest + DISTANCE_TIE)
+				continue;
+			
+			float health = getHealth(e);
+			if(best == null || health < bestHealth)
+			{
+				best = e;
+				bestHealth = health;
+			}
+		}
+		
+		return best;
+	}
+	
+	private static double distanceTo(Entity e)
+	{
+		return Math.sqrt(EntityUtils.distanceToHitboxSq(e));
+	}
+	
+	private static float getHealth(Entity e)
+	{
+		if(e instanceof LivingEntity living)
+			return living.getHealth() + living.getAbsorptionAmount();
+		
+		// end crystals, shulker bullets: one hit anyway
+		return 0;
+	}
+	
+	private boolean isAttackingYou(Entity e, long now)
+	{
+		Long hurtAt = lastHurtBy.get(e.getId());
+		return hurtAt != null && now - hurtAt <= getAttackerMemoryNanos();
+	}
+	
+	private long getAttackerMemoryNanos()
+	{
+		return (long)(attackerMemory.getValue() * 1e9);
+	}
+	
+	/**
+	 * Drops attackers that haven't hurt you for longer than
+	 * §lAttacker memory§r, and everyone after a world or dimension change
+	 * (entity IDs start over).
+	 */
+	private void forgetOldAttackers(long now)
+	{
+		if(MC.level != attackersLevel)
+		{
+			attackersLevel = MC.level;
+			lastHurtBy.clear();
+			return;
+		}
+		
+		long memory = getAttackerMemoryNanos();
+		lastHurtBy.values().removeIf(hurtAt -> now - hurtAt > memory);
+	}
+	
+	/**
+	 * Remembers who hurt you. Damage events name the entity responsible (the
+	 * shooter for arrows, the thrower for potions), and the server sends
+	 * them for every hit, also the ones a shield or armor fully absorbs.
+	 */
+	@Override
+	public void onReceivedPacket(PacketInputEvent event)
+	{
+		if(!(event.getPacket() instanceof ClientboundDamageEventPacket packet))
+			return;
+		
+		// Network thread: compare IDs only, don't look entities up.
+		LocalPlayer player = MC.player;
+		if(player == null || packet.entityId() != player.getId())
+			return;
+		
+		int attacker = packet.sourceCauseId();
+		if(attacker < 0)
+			attacker = packet.sourceDirectId();
+		if(attacker < 0 || attacker == player.getId())
+			return;
+		
+		lastHurtBy.put(attacker, System.nanoTime());
+	}
+	
+	private List<Entity> findCandidates(Entity exclude)
 	{
 		Stream<Entity> stream = EntityUtils.getAttackableEntities();
 		
@@ -1651,10 +1803,7 @@ public final class AimAssistHack extends Hack
 			stream = stream
 				.filter(e -> BlockUtils.hasLineOfSight(aimAt.getAimPoint(e)));
 		
-		return stream
-			.min(Comparator.comparingDouble(
-				e -> RotationUtils.getAngleToLookVec(aimAt.getAimPoint(e))))
-			.orElse(null);
+		return stream.toList();
 	}
 	
 	private boolean isSwitchKeyDown()

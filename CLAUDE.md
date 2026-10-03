@@ -447,7 +447,11 @@ fork-only), then **measure** (12–13). Don't stop at the first finding in a fil
    (reaction delay and all) whenever two candidates swap rank, so the crosshair never lands and it
    keeps sending rotations. Any aiming hack needs stickiness: keep the previous target while it's
    still valid (KillauraLegit, Killaura client mode), or hysteresis (FightBot/Protect switch only
-   if the new one is >2 blocks closer).
+   if the new one is >2 blocks closer). AimAssist (user spec, 2026-10-03): attackers first
+   (hurt you within "Attacker memory", from `ClientboundDamageEventPacket` cause/direct IDs),
+   then closest, then least health within 0.5 blocks of the closest; switches only on death,
+   out of range/sight, the switch key, or another entity attacking while the target isn't.
+   A closer entity or the mouse never takes the lock.
 10. **Stale references.** Any field holding an `Entity` across ticks must re-check `isRemoved()`,
     `level() == MC.level` and the filters before use (dimension change, death, respawn).
 11. **Math, by simulation not by eye.** Aim/physics code gets a JUnit test against the real

@@ -91,20 +91,19 @@ public final class AimAssistHack extends Hack
 	private final CheckboxSetting smoothAim = new CheckboxSetting("Smooth aim",
 		"Turns toward the target in continuous steps instead of snapping"
 			+ " straight to the needed angle.\n\n"
-			+ "Used when the target is further away than"
-			+ " §lSmooth aim distance§r, and every time the aim picks up"
-			+ " a target - starting, switching, after a kill, after you steered"
-			+ " away, after an Aura-Farming spin - until your crosshair is on"
-			+ " it. Once it is, the aim snaps within that distance like"
-			+ " before, so close-range tracking stays exact.\n\n"
+			+ "The speed adjusts itself (a PID controller) to where your"
+			+ " crosshair is: a fast pull while it's off the target or about to"
+			+ " slip off its edge, a gentle one once it's on, and no correction"
+			+ " at all while it's well inside the hitbox - it just follows the"
+			+ " target there, like a hand that's already on it.\n\n"
+			+ "It also moves as fast as the target is moving across your"
+			+ " view, picking up a change of direction within a frame, so the"
+			+ " crosshair stays on a strafing target instead of sliding off at"
+			+ " every turn.\n\n"
 			+ "With §lFace target§r on Client-side the camera turns every"
 			+ " frame, like a mouse, instead of 20 times a second.\n\n"
-			+ "It also moves as fast as the target is moving across your"
-			+ " view - from how fast you move and how fast it moves - so the"
-			+ " crosshair stays on a moving target instead of trailing"
-			+ " behind it.\n\n"
-			+ "The turn toward the target tops out at 720°/s (a 180 in about"
-			+ " a quarter of a second), on top of that tracking speed. See"
+			+ "The pull tops out at 720°/s (a 180 in about a quarter of a"
+			+ " second), on top of that tracking speed. See"
 			+ " §lHumanize smooth aim§r for how the turn moves.",
 		true);
 	
@@ -114,17 +113,11 @@ public final class AimAssistHack extends Hack
 			+ " delay before turning to a new target, speeding up at the start"
 			+ " and slowing down as it closes in, a speed that drifts a little"
 			+ " over time, a slightly curved path, horizontal before vertical,"
-			+ " and a slight hand tremor while still far off.\n\n"
-			+ "Only affects the smooth part. Inside §lSmooth aim distance§r"
-			+ " the aim still snaps.\n\n"
-			+ "Off: turns at a constant speed in a straight line.",
+			+ " a slight hand tremor while still far off, and a moment's lag"
+			+ " picking up the target's changes of direction, like an eye"
+			+ " following it.\n\n"
+			+ "Off: a straight, snappier pull with none of those.",
 		true);
-	
-	private final SliderSetting smoothAimDistance =
-		new SliderSetting("Smooth aim distance",
-			"Hitbox distance below which the aim snaps instead of smoothing."
-				+ " Measured the same way as §lRange§r.",
-			4, 0, 20, 0.25, ValueDisplay.DECIMAL.withSuffix(" blocks"));
 	
 	private final TextFieldSetting switchTargetKey =
 		new TextFieldSetting("Switch target key",
@@ -265,13 +258,6 @@ public final class AimAssistHack extends Hack
 	private final HumanAim aim = new HumanAim();
 	
 	/**
-	 * Forces the smooth aim regardless of distance, so a target switch or a
-	 * fresh target after a kill is caught up to by turning rather than by
-	 * teleporting the angle. Cleared once the aim reaches the target.
-	 */
-	private boolean smoothCatchUp;
-	
-	/**
 	 * Set by onUpdate when the camera should be aimed this tick. The actual
 	 * turning then happens every frame in onRender, the way a mouse moves the
 	 * camera, instead of in 20 jumps per second.
@@ -398,7 +384,6 @@ public final class AimAssistHack extends Hack
 		addSetting(faceTarget);
 		addSetting(smoothAim);
 		addSetting(humanizeSmoothAim);
-		addSetting(smoothAimDistance);
 		addSetting(switchTargetKey);
 		addSetting(checkLOS);
 		addSetting(aimWhileBlocking);
@@ -535,8 +520,7 @@ public final class AimAssistHack extends Hack
 		if(target != lastAimedTarget)
 		{
 			lastAimedTarget = target;
-			smoothCatchUp = target != null;
-			if(smoothCatchUp)
+			if(target != null)
 				aim.startTurn(System.nanoTime());
 		}
 		
@@ -636,14 +620,11 @@ public final class AimAssistHack extends Hack
 	}
 	
 	/**
-	 * Aims at the given point, either by snapping straight to it or by turning
-	 * toward it at {@link #SMOOTH_AIM_SPEED} degrees per second.
-	 *
-	 * <p>
-	 * Snapping is what tracks best in melee range, where the needed angle
-	 * swings wildly from tick to tick. Further out the angle barely moves, so
-	 * the snap buys nothing and a continuous turn is used instead - as it is
-	 * while catching up to a new target, no matter the distance.
+	 * Aims at the given point: with Smooth aim, one step of the PID aim (see
+	 * {@link HumanAim#pidStep}), whose speed adjusts itself to where the
+	 * crosshair is - full pull while off the target or near its edge, gentle
+	 * once on it, resting deep inside it - capped at
+	 * {@link #SMOOTH_AIM_SPEED}. Without Smooth aim, a snap.
 	 *
 	 * @param forceClient
 	 *            ignore §lFace target§r and steer the camera. The
@@ -656,80 +637,50 @@ public final class AimAssistHack extends Hack
 		Rotation needed = RotationUtils.getNeededRotations(eyes, aimPoint);
 		long now = System.nanoTime();
 		
+		// Picking the aim up again - after the player steered, after an
+		// Aura-Farming spin, after a screen - starts a fresh turn from
+		// wherever the camera is.
 		if(!aim.isValid())
 		{
 			aim.seed(MC.player.getYRot(), MC.player.getXRot(), now);
-			
-			// Picking the aim up again - on a new target, after the player
-			// steered, after an Aura-Farming spin - always turns smoothly
-			// until the crosshair is on the target, instead of snapping there
-			// just because the target happens to be close.
-			if(!smoothCatchUp)
-			{
-				smoothCatchUp = true;
-				aim.startTurn(now);
-			}
+			aim.startTurn(now);
 		}
 		
 		// Real elapsed time rather than a flat tick, so the turn keeps the same
 		// degrees-per-second under a laggy or sped-up tick loop.
 		float dt = aim.takeDt(now);
 		
-		// kept up to date while snapping too, so it's ready when smoothing
-		// takes over
+		// what the target's movement looks like across the view - the
+		// starting point for the PID's feed-forward
 		double[] track = HumanAim.trackingRate(eyes, aimPoint,
 			HumanAim.relativeVelocity(target, MC.player));
 		aim.updateTracking(track[0], track[1], dt);
 		
-		boolean smooth = smoothAim.isChecked() && (smoothCatchUp || EntityUtils
-			.distanceToHitboxSq(target) > smoothAimDistance.getValueSq());
-		
-		if(smooth)
-		{
-			if(humanizeSmoothAim.isChecked())
-				aim.humanStep(needed.yaw(), needed.pitch(), dt, now,
-					SMOOTH_AIM_SPEED);
-			else
-				aim.linearStep(needed.yaw(), needed.pitch(), dt,
-					SMOOTH_AIM_SPEED);
-				
-			// Caught up: the crosshair is on the target and has settled on the
-			// aim point, so switching to snapping (within Smooth aim distance)
-			// doesn't jump. Until then the turn stays smooth.
-			// (Being right on the aim point counts too, for aim points that sit
-			// exactly on the hitbox's edge.)
-			double left = aim.angleTo(needed.yaw(), needed.pitch());
-			if(smoothCatchUp && (left <= 0.5
-				|| left <= CATCH_UP_SETTLED && isAimOnTarget(targetBox, eyes)))
-				smoothCatchUp = false;
-			
-		}else
-		{
+		if(smoothAim.isChecked())
+			aim.pidStep(needed.yaw(), needed.pitch(), dt, now, SMOOTH_AIM_SPEED,
+				getAimTolerance(aimPoint, targetBox, eyes),
+				humanizeSmoothAim.isChecked());
+		else
 			aim.snap(needed.yaw(), needed.pitch());
-			smoothCatchUp = false;
-		}
 		
 		applyAimRotation(forceClient);
 	}
 	
 	/**
-	 * How far from the aim point, in degrees, the catch-up turn counts as
-	 * settled once the crosshair is on the target.
+	 * How far, in degrees, the aim can be from the aim point and still be on
+	 * the hitbox: the distance from the aim point to the hitbox's nearest
+	 * edge, as seen from the eyes.
 	 */
-	private static final double CATCH_UP_SETTLED = 2;
-	
-	/**
-	 * Whether a ray along the current aim rotation hits the target's hitbox,
-	 * i.e. where the crosshair would be on it.
-	 */
-	private boolean isAimOnTarget(AABB targetBox, Vec3 eyes)
+	private static double getAimTolerance(Vec3 aimPoint, AABB box, Vec3 eyes)
 	{
-		if(targetBox.contains(eyes))
-			return true;
-		
-		Vec3 look = new Rotation(aim.getYaw(), aim.getPitch()).toLookVec();
-		Vec3 end = eyes.add(look.scale(range.getValue() + 2));
-		return targetBox.clip(eyes, end).isPresent();
+		Vec3 center = box.getCenter();
+		double side = Math.min(box.getXsize(), box.getZsize()) / 2
+			- Math.hypot(aimPoint.x - center.x, aimPoint.z - center.z);
+		double vertical =
+			Math.min(aimPoint.y - box.minY, box.maxY - aimPoint.y);
+		double margin = Math.max(Math.min(side, vertical), 0.05);
+		double distance = Math.max(eyes.distanceTo(aimPoint), 0.1);
+		return Math.toDegrees(Math.atan(margin / distance));
 	}
 	
 	/** Sends the aim rotation the way Face target asks for. */
@@ -815,7 +766,6 @@ public final class AimAssistHack extends Hack
 	private void resetAimState()
 	{
 		aim.invalidate();
-		smoothCatchUp = false;
 		lastAimedTarget = null;
 		lastCameraValid = false;
 		steerAccumYaw = 0;

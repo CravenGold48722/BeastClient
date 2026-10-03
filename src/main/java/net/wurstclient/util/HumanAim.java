@@ -93,6 +93,73 @@ public final class HumanAim
 	private double trackYaw;
 	private double trackPitch;
 	
+	// ── PID aim (pidStep)
+	
+	/**
+	 * Proportional gain while the crosshair is off the target, per second:
+	 * closes about 45% of the gap every tick, the same pull as the ease-out
+	 * of {@link #humanStep}.
+	 */
+	public static final double KP_OFF = 12;
+	
+	/**
+	 * Proportional gain while the crosshair is on the target: a gentle pull
+	 * toward the aim point that keeps it on the hitbox without chasing every
+	 * tiny change.
+	 */
+	public static final double KP_ON = 3;
+	
+	/** Derivative gain, seconds - damps the approach. */
+	public static final double KD = 0.04;
+	
+	/**
+	 * The integral only builds up within this many hitbox half-sizes of the
+	 * aim point, so it corrects a steady lag behind a moving target but can't
+	 * wind up during a big turn.
+	 */
+	public static final double I_DEPTH = 2;
+	
+	/** The most the integral can add, degrees per second. */
+	public static final double I_LIMIT = 120;
+	
+	/**
+	 * Deeper inside the hitbox than this (a share of its half-size around the
+	 * aim point): no correction, only following the target's motion.
+	 */
+	public static final double REST_DEPTH = 0.3;
+	
+	/** How fast the gains blend between on and off target, seconds. */
+	private static final double SCHEDULE_TAU = 0.08;
+	
+	/** Low-pass for the derivative, seconds. */
+	private static final double DERIVATIVE_TAU = 0.03;
+	
+	/**
+	 * How far behind the wanted rotation the humanized feed-forward follows,
+	 * seconds - the eye takes a moment to pick up a change of direction.
+	 */
+	private static final double PURSUIT_LAG = 0.05;
+	
+	/** Gain multiplier without humanizing - snappier, there's no hand. */
+	private static final double PLAIN_GAIN = 2;
+	
+	private double integYaw;
+	private double integPitch;
+	private double lastErrYaw;
+	private double lastErrPitch;
+	private boolean hasLastErr;
+	private double derivYaw;
+	private double derivPitch;
+	/** 0 = gains for on target, 1 = gains for off target. */
+	private double offTarget = 1;
+	
+	// setpoint feed-forward
+	private float lastNeedYaw;
+	private float lastNeedPitch;
+	private boolean hasLastNeed;
+	private double ffYaw;
+	private double ffPitch;
+	
 	public HumanAim()
 	{
 		this(new Random());
@@ -136,6 +203,8 @@ public final class HumanAim
 		valid = true;
 		// one frame back, so the first step actually turns
 		lastStepNs = now - 16_000_000L;
+		hasLastErr = false;
+		hasLastNeed = false;
 	}
 	
 	/**
@@ -153,6 +222,19 @@ public final class HumanAim
 		tremorPitch = 0;
 		trackYaw = 0;
 		trackPitch = 0;
+		resetPid();
+	}
+	
+	/** Forgets the PID's memory (integral, derivative, gain schedule). */
+	private void resetPid()
+	{
+		integYaw = 0;
+		integPitch = 0;
+		hasLastErr = false;
+		derivYaw = 0;
+		derivPitch = 0;
+		offTarget = 1;
+		hasLastNeed = false;
 	}
 	
 	/**
@@ -327,6 +409,227 @@ public final class HumanAim
 		// On top of the correction, follow the target's own motion across
 		// the view, so the aim keeps up instead of trailing behind.
 		moveBy(moveYaw + trackYaw * dt, movePitch + trackPitch * dt);
+	}
+	
+	/**
+	 * One step of the PID aim: the speed adjusts itself to where the
+	 * crosshair is relative to the target's hitbox, instead of being set by
+	 * distance.
+	 *
+	 * <ul>
+	 * <li><b>Gain schedule:</b> how hard it pulls depends on how deep inside
+	 * the hitbox the aim is - the aim error divided by {@code tolerance}
+	 * (the hitbox's angular half-size around the aim point). Off the target
+	 * and near its edge: full pull ({@link #KP_OFF}), so it catches up fast
+	 * and reacts before slipping off. Deep inside: a gentle pull
+	 * ({@link #KP_ON}). Very deep inside ({@link #REST_DEPTH}): no
+	 * correction at all, only following the target - nobody re-centers on a
+	 * hitbox they're already on, and it saves rotation packets. The blend is
+	 * smoothed over ~80ms.</li>
+	 * <li><b>P</b> pulls toward the aim point.</li>
+	 * <li><b>I</b> removes a steady lag behind a moving target that the
+	 * tracking doesn't fully cover. It only builds up near the hitbox, never
+	 * at full speed, and never while the gap is already closing fast - so an
+	 * approach can't wind it up and carry the aim past the target.</li>
+	 * <li><b>D</b> damps the approach and reacts within a frame when the
+	 * target changes direction, low-pass filtered.</li>
+	 * <li>On top: the target's own motion across the view (tracking), as
+	 * feed-forward.</li>
+	 * </ul>
+	 * With {@code humanize}, the correction also gets the hand's traits from
+	 * {@link #humanStep}: reaction delay, drifting speed, curved path,
+	 * horizontal first, the hand easing into its speed, tremor while far off.
+	 *
+	 * @param tolerance
+	 *            how far (degrees) the aim can be from the aim point and
+	 *            still be on the hitbox
+	 */
+	public void pidStep(float needYaw, float needPitch, double dt, long now,
+		double maxSpeed, double tolerance, boolean humanize)
+	{
+		if(dt <= 0)
+			return;
+		
+		// still reacting - the hand hasn't started moving yet
+		if(humanize && now < reactionEndNs)
+			return;
+		
+		double errYaw = Mth.wrapDegrees(needYaw - yaw);
+		double errPitch = Mth.wrapDegrees(needPitch - pitch);
+		double distance = Math.hypot(errYaw, errPitch);
+		double depth = distance / Math.max(tolerance, 0.3);
+		
+		// Feed-forward: how fast the wanted rotation itself is moving, measured
+		// every step. It is worked out from where the target is drawn, so a
+		// change of direction shows up within a frame - the per-tick tracking
+		// estimate only catches it a tick later, by which time a strafing
+		// target has slid off the crosshair. Humanized: a short pursuit lag,
+		// like the eye following a moving target.
+		if(hasLastNeed)
+		{
+			double e = ease(dt, humanize ? PURSUIT_LAG : 0.02);
+			double rateYaw =
+				Mth.clamp(Mth.wrapDegrees(needYaw - lastNeedYaw) / dt,
+					-MAX_TRACKING, MAX_TRACKING);
+			double ratePitch = Mth.clamp((needPitch - lastNeedPitch) / dt,
+				-MAX_TRACKING, MAX_TRACKING);
+			ffYaw += (rateYaw - ffYaw) * e;
+			ffPitch += (ratePitch - ffPitch) * e;
+		}else
+		{
+			// start from the tick-measured tracking
+			ffYaw = trackYaw;
+			ffPitch = trackPitch;
+		}
+		lastNeedYaw = needYaw;
+		lastNeedPitch = needPitch;
+		hasLastNeed = true;
+		
+		// gain schedule: full pull at the hitbox's edge and beyond, gentle
+		// deep inside
+		double scheduled = smoothstep(REST_DEPTH, 1, depth);
+		offTarget += (scheduled - offTarget) * ease(dt, SCHEDULE_TAU);
+		double kp = KP_ON + (KP_OFF - KP_ON) * offTarget;
+		// no hand to slow it down: twice the pull
+		kp *= humanize ? driftSpeedFactor(dt, now) : PLAIN_GAIN;
+		// critically damped together with P for a pure turn (the camera
+		// integrates speed into angle): s^2 (1 + KD) + kp s + ki
+		double ki = kp * kp / (4 * (1 + KD));
+		
+		// D: error rate, low-pass filtered against the per-tick steps in the
+		// target's measured position
+		if(hasLastErr)
+		{
+			double e = ease(dt, DERIVATIVE_TAU);
+			derivYaw +=
+				(Mth.wrapDegrees(errYaw - lastErrYaw) / dt - derivYaw) * e;
+			derivPitch += ((errPitch - lastErrPitch) / dt - derivPitch) * e;
+		}
+		lastErrYaw = errYaw;
+		lastErrPitch = errPitch;
+		hasLastErr = true;
+		
+		double wantYaw;
+		double wantPitch;
+		if(depth < REST_DEPTH)
+		{
+			// deep inside the hitbox: just follow the target (the integral
+			// keeps whatever lag it has learned)
+			wantYaw = Math.abs(integYaw) < 2 ? 0 : integYaw;
+			wantPitch = Math.abs(integPitch) < 2 ? 0 : integPitch;
+			
+		}else
+		{
+			double dYaw = Mth.clamp(KD * derivYaw, -maxSpeed / 2, maxSpeed / 2);
+			double dPitch =
+				Mth.clamp(KD * derivPitch, -maxSpeed / 2, maxSpeed / 2);
+			wantYaw = kp * errYaw + integYaw + dYaw;
+			wantPitch = kp * errPitch + integPitch + dPitch;
+			
+			// I: near the hitbox, not at full speed, and not while the gap is
+			// already closing at more than half the P pull (an approach)
+			boolean saturated = Math.hypot(wantYaw, wantPitch) >= maxSpeed;
+			double closing = distance < 1e-6 ? 0
+				: -(errYaw * derivYaw + errPitch * derivPitch) / distance;
+			if(depth < I_DEPTH && !saturated && closing < kp * distance / 2)
+			{
+				integYaw =
+					Mth.clamp(integYaw + ki * errYaw * dt, -I_LIMIT, I_LIMIT);
+				integPitch = Mth.clamp(integPitch + ki * errPitch * dt,
+					-I_LIMIT, I_LIMIT);
+			}
+		}
+		
+		if(humanize && distance > 1e-3)
+		{
+			// curved path that straightens out near the target
+			double bend = curve * Math.min(1, distance / 30);
+			double bentYaw = wantYaw - wantPitch * bend;
+			double bentPitch = wantPitch + wantYaw * bend;
+			wantYaw = bentYaw;
+			wantPitch = bentPitch;
+			
+			// people line up horizontally first
+			if(Math.abs(errYaw) > 20)
+				wantPitch *= 0.6;
+		}
+		
+		// never faster than the top speed
+		double want = Math.hypot(wantYaw, wantPitch);
+		if(want > maxSpeed)
+		{
+			wantYaw *= maxSpeed / want;
+			wantPitch *= maxSpeed / want;
+		}
+		
+		if(humanize)
+		{
+			// the hand eases into the speed instead of jumping to it
+			double response = ease(dt, HAND_RESPONSE);
+			velYaw += (wantYaw - velYaw) * response;
+			velPitch += (wantPitch - velPitch) * response;
+			
+			// a hand at rest is at rest, not creeping
+			if(wantYaw == 0 && wantPitch == 0
+				&& Math.hypot(velYaw, velPitch) < 0.5)
+				velYaw = velPitch = 0;
+			
+			updateTremor(depth < 1 ? 0 : distance, Math.hypot(velYaw, velPitch),
+				dt, now);
+			if(depth < REST_DEPTH && Math.hypot(tremorYaw, tremorPitch) < 0.5)
+				tremorYaw = tremorPitch = 0;
+			
+		}else
+		{
+			velYaw = wantYaw;
+			velPitch = wantPitch;
+			tremorYaw = 0;
+			tremorPitch = 0;
+		}
+		
+		double moveYaw = (velYaw + tremorYaw) * dt;
+		double movePitch = (velPitch + tremorPitch) * dt;
+		
+		// The correction never carries past the aim point in one step - also
+		// not sideways, along a curved path (see humanStep).
+		double move = Math.hypot(moveYaw, movePitch);
+		if(move > distance && move > 0)
+		{
+			moveYaw *= distance / move;
+			movePitch *= distance / move;
+		}
+		if((errYaw - moveYaw) * errYaw + (errPitch - movePitch) * errPitch < 0)
+		{
+			moveYaw = errYaw;
+			movePitch = errPitch;
+			velYaw = 0;
+			velPitch = 0;
+		}
+		
+		// plus the target's own motion across the view (feed-forward)
+		moveBy(moveYaw + ffYaw * dt, movePitch + ffPitch * dt);
+	}
+	
+	/** 0 below {@code edge0}, 1 above {@code edge1}, smooth in between. */
+	private static double smoothstep(double edge0, double edge1, double x)
+	{
+		double t = Mth.clamp((x - edge0) / (edge1 - edge0), 0, 1);
+		return t * t * (3 - 2 * t);
+	}
+	
+	/**
+	 * Speed variation that drifts instead of jumping: every 120-280ms a new
+	 * target speed (80-120%), eased toward over ~120ms.
+	 */
+	private double driftSpeedFactor(double dt, long now)
+	{
+		if(now >= nextSpeedChangeNs)
+		{
+			speedFactorTarget = 0.8 + random.nextDouble() * 0.4;
+			nextSpeedChangeNs = now + (120 + random.nextInt(161)) * 1_000_000L;
+		}
+		speedFactor += (speedFactorTarget - speedFactor) * ease(dt, 0.12);
+		return speedFactor;
 	}
 	
 	private void moveBy(double dYaw, double dPitch)

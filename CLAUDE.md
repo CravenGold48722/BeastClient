@@ -312,7 +312,14 @@ does it. When writing or touching a hack:
   the math (reaction delay, critically damped ease-in/out, drifting speed, curve, tremor,
   tracking a moving target; unit-tested in `HumanAimTest`), `util/CameraAim` drives it per
   frame from `onRender` (or per tick for silent aim). Used by AimAssist, MaceAssist, BowAimbot,
-  Killaura (Client-side), KillauraLegit, FightBot, Protect. Gate attacks on the crosshair actually
+  Killaura (Client-side), KillauraLegit, FightBot, Protect. AimAssist's smooth aim uses `HumanAim.pidStep`
+  instead of `humanStep`: a PID with gain scheduling on how deep inside the hitbox the aim is
+  (error / angular tolerance from `getAimTolerance`; full pull at the edge and beyond, gentle
+  inside, no correction deep inside), an integral that only builds near the hitbox and never
+  while closing fast (no windup overshoot), filtered D, and setpoint feed-forward (the wanted
+  angle's own rate, measured per frame) - that last part is what keeps it on A/D strafers;
+  the per-tick tracking estimate alone lags each reversal. `PidAimTest` compares it with the old
+  aim (strafer 40°/s: 96% vs 81% on target). The old "Smooth aim distance" snap gate is gone. Gate attacks on the crosshair actually
   being on the target while turning. BowAimbot's lead comes from `util/BallisticSolver`
   (vanilla projectile physics, tested in `BallisticSolverTest`) plus `util/TargetPredictor`:
   Robocode-style pattern matching (replays the most similar past moments of the target's
@@ -527,7 +534,8 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
 
 - `src/test/java/net/wurstclient/util/` — JUnit tests for `Rotation`, `RotationUtils`, `HumanAim`
   (settling, no overshoot, tracking lag), `BallisticSolver` (hits at range, moving targets) and
-  `TargetPredictor` (hit rates against simulated strafers, < 1 ms per tick).
+  `TargetPredictor` (hit rates against simulated strafers, < 1 ms per tick) and `PidAimTest`
+  (PID aim vs the old ease-out: landing, overshoot, resting, strafers).
 - `src/gametest/` — in-game tests (`AltManagerTest`, `VanillaSpoofTest`, `KeyPresserTest`,
   `PacketBudgetTest`, `AutoMineHackTest`, `FreecamHackTest`, `NoFallHackTest`, `XRayHackTest`, …)
   run via `runClientGameTest` / `runClientGameTestWithMods`; the whole suite passes (exit 0,

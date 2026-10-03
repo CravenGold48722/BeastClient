@@ -37,6 +37,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.protocol.game.ClientboundDamageEventPacket;
 import net.minecraft.util.Mth;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -207,11 +208,12 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			true);
 	
 	private final CheckboxSetting autoCombo = new CheckboxSetting("Auto combo",
-		"Sprints forward and attacks with a sprint-knockback hit, resetting"
+		"Sprints forward and attacks with a sprint-knockback hit (every hit"
+			+ " waits until the server sees you sprinting), resetting"
 			+ " sprint between hits. Catches the target whether they are on"
 			+ " the ground or in the air.\n\n"
 			+ "When §lAura-Farming§r is enabled, jumps and attacks"
-			+ " while falling for a critical hit instead.\n\n"
+			+ " on the way down - still a sprint hit.\n\n"
 			+ "Requires §lAuto attack§r to be enabled.\n\n"
 			+ "The combo is reset whenever your crosshair leaves the target"
 			+ " or you click the attack button manually.",
@@ -947,6 +949,32 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 *
 	 * @return whether this call was the one that landed the attack
 	 */
+	/**
+	 * Whether the server sees you sprinting (the last sprint state the
+	 * client sent, {@code wasSprinting}) - or sprinting isn't possible right
+	 * now at all, so waiting for it would mean never hitting: low hunger,
+	 * blindness, using an item, sneaking, riding, gliding, in water without
+	 * swimming. Without Auto combo you steer, so a hit while you aren't
+	 * walking forward goes out unsprinted too.
+	 */
+	private boolean isSprintHitReady()
+	{
+		LocalPlayer player = MC.player;
+		if(player.isSprinting() && player.wasSprinting)
+			return true;
+		
+		boolean canSprint = (player.getFoodData().getFoodLevel() > 6
+			|| player.getAbilities().mayfly) && !player.isUsingItem()
+			&& !player.hasEffect(MobEffects.BLINDNESS)
+			&& !player.isMovingSlowly() && !player.isPassenger()
+			&& !player.isFallFlying()
+			&& (!player.isInWater() || player.isUnderWater());
+		if(!autoCombo.isChecked())
+			canSprint &= player.input.hasForwardImpulse();
+		
+		return !canSprint;
+	}
+	
 	private boolean attackTarget()
 	{
 		if(attackedThisTick || target == null)
@@ -958,6 +986,16 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// to Matrix's and Grim's HITBOX checks. See HitCheck.
 		if(!HitCheck.isVerifiable(target))
 			return false;
+			
+		// Every hit is a sprint hit (more knockback than a crit does
+		// damage, and it keeps combos going). The server decides that from
+		// the sprint state it already has - the attack packet goes out
+		// before this tick's sprint update - so wait until it has it.
+		if(!isSprintHitReady())
+		{
+			KeyPresser.press(MC.options.keySprint);
+			return false;
+		}
 		
 		attackedThisTick = true;
 		MC.gameMode.attack(MC.player, target);
@@ -973,11 +1011,10 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		boolean inComboRange =
 			distSq > CLOSE_THRESHOLD_SQ && distSq < FAR_THRESHOLD_SQ;
 		// (Falling used to force the s-tap phase every tick, so no hit went
-		// out from a jump or a drop until you landed - the best moment for
-		// a crit. Too close used to block hits as well; spacing backs off,
-		// but a ready hit goes out meanwhile.)
+		// out from a jump or a drop until you landed. Too close used to block
+		// hits as well; spacing backs off between hits, but a ready hit
+		// sprints in and goes out.)
 		boolean inReach = distSq < FAR_THRESHOLD_SQ;
-		boolean airborne = !MC.player.onGround() && MC.player.fallDistance > 0;
 		switch(comboPhase)
 		{
 			case IDLE:
@@ -987,15 +1024,10 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			adjustSpacing(distSq, inComboRange);
 			if(cooldown >= 1.0F && inReach)
 			{
-				// Sprinting into the hit gives knockback - except from a
-				// fall, where not sprinting makes it a crit
-				// (Player.canCriticalAttack), and from too close, where
-				// spacing is backing off.
-				if(inComboRange && !airborne)
-				{
-					holdForward();
-					KeyPresser.press(MC.options.keySprint);
-				}
+				// every hit is a sprint hit - see attackTarget()
+				releaseBackward();
+				holdForward();
+				KeyPresser.press(MC.options.keySprint);
 				if(auraFarming.isChecked())
 				{
 					if(MC.player.onGround() && !MC.player.isInWater()
@@ -1025,34 +1057,21 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 				comboPhase = ComboPhase.IDLE;
 				break;
 			}
-			// A critical hit needs you falling AND not sprinting (vanilla
-			// Player.canCriticalAttack). This used to hit while still rising
-			// (fallDistance == 0) with sprint held the whole time, so it never
-			// crit. Now: sprint forward on the way up for momentum; once
-			// falling, let go of forward, which makes vanilla stop the sprint
-			// by itself, and hit as soon as it has.
-			boolean falling = isFallingForCrit();
-			if(!falling)
-			{
-				holdForward();
-				KeyPresser.press(MC.options.keySprint);
-			}else
-				releaseForward();
+			// Sprint hit on the way down: sprint forward the whole jump and
+			// hit once falling. (This used to let go of sprint for a crit;
+			// every hit is a sprint hit now - see attackTarget().)
+			holdForward();
+			KeyPresser.press(MC.options.keySprint);
 			
 			if(cooldown >= 1.0F && !MC.player.onGround()
 				&& !MC.player.isInWater() && !MC.player.isInLava())
 			{
-				boolean readyToHit = falling && !MC.player.isSprinting();
-				
-				if(readyToHit)
+				if(isFalling() && attackTarget())
 				{
-					if(attackTarget())
-					{
-						comboHitCount++;
-						releaseForward();
-						stapTicksLeft = 0.1F;
-						comboPhase = ComboPhase.STAPPING;
-					}
+					comboHitCount++;
+					releaseForward();
+					stapTicksLeft = 0.1F;
+					comboPhase = ComboPhase.STAPPING;
 				}
 			}
 			// Safety net: if we landed without getting the hit (e.g. we were
@@ -1476,8 +1495,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		}
 	}
 	
-	/** Falling, the way a critical hit needs (Player.canCriticalAttack). */
-	private boolean isFallingForCrit()
+	/** On the way down from a jump. */
+	private boolean isFalling()
 	{
 		return MC.player.fallDistance > 0 && !MC.player.onGround()
 			&& MC.player.getDeltaMovement().y < 0;
@@ -1485,16 +1504,15 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	/**
 	 * Whether AimAssist needs the sprint key let go right now - during the
-	 * s-tap and while falling into a critical hit. AutoSprint checks this, so
-	 * it doesn't press sprint again in the same tick and undo the reset.
+	 * s-tap. AutoSprint checks this, so it doesn't press sprint again in the
+	 * same tick and undo the reset.
 	 */
 	public boolean isHoldingSprintOff()
 	{
 		if(!isEnabled() || !autoAttack.isChecked() || !autoCombo.isChecked())
 			return false;
 		
-		return comboPhase == ComboPhase.STAPPING
-			|| comboPhase == ComboPhase.JUMPED && isFallingForCrit();
+		return comboPhase == ComboPhase.STAPPING;
 	}
 	
 	private boolean isCrosshairOnTarget()
@@ -1650,6 +1668,16 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		
 		event.setDeltaX(0);
 		event.setDeltaY(0);
+	}
+	
+	/**
+	 * Whether AimAssist is turning the camera toward a target right now.
+	 * Other aiming hacks (MaceAssist) leave the camera alone meanwhile - two
+	 * aims pulling toward different points jerked the view around.
+	 */
+	public boolean isTurningCamera()
+	{
+		return isEnabled() && isLockingMouse();
 	}
 	
 	private boolean isLockingMouse()

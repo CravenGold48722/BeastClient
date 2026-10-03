@@ -163,6 +163,9 @@ public final class HumanAim
 	private double ffYaw;
 	private double ffPitch;
 	
+	/** The previous step's dt, seconds; 0 = none yet. */
+	private double lastDt;
+	
 	public HumanAim()
 	{
 		this(new Random());
@@ -206,6 +209,7 @@ public final class HumanAim
 		valid = true;
 		// one frame back, so the first step actually turns
 		lastStepNs = now - 16_000_000L;
+		lastDt = 0;
 		hasLastErr = false;
 		hasLastNeed = false;
 	}
@@ -301,13 +305,14 @@ public final class HumanAim
 		double maxSpeed)
 	{
 		float maxChange = (float)(maxSpeed * dt);
+		double lead = leadDt(dt);
 		float yawDiff = Mth.wrapDegrees(needYaw - yaw);
 		float pitchDiff = Mth.wrapDegrees(needPitch - pitch);
 		
 		yaw = Mth.wrapDegrees(yaw + Mth.clamp(yawDiff, -maxChange, maxChange)
-			+ (float)(trackYaw * dt));
+			+ (float)(trackYaw * lead));
 		pitch = Mth.clamp(pitch + Mth.clamp(pitchDiff, -maxChange, maxChange)
-			+ (float)(trackPitch * dt), -90F, 90F);
+			+ (float)(trackPitch * lead), -90F, 90F);
 	}
 	
 	/**
@@ -333,7 +338,8 @@ public final class HumanAim
 		{
 			velYaw = 0;
 			velPitch = 0;
-			moveBy(trackYaw * dt, trackPitch * dt);
+			double lead = leadDt(dt);
+			moveBy(trackYaw * lead, trackPitch * lead);
 			return;
 		}
 		
@@ -411,7 +417,8 @@ public final class HumanAim
 		
 		// On top of the correction, follow the target's own motion across
 		// the view, so the aim keeps up instead of trailing behind.
-		moveBy(moveYaw + trackYaw * dt, movePitch + trackPitch * dt);
+		double lead = leadDt(dt);
+		moveBy(moveYaw + trackYaw * lead, movePitch + trackPitch * lead);
 	}
 	
 	/**
@@ -612,10 +619,37 @@ public final class HumanAim
 			movePitch = errPitch;
 			velYaw = 0;
 			velPitch = 0;
+		}else if(moveYaw * errYaw + movePitch * errPitch < 0 && !resting
+			&& velYaw * errYaw + velPitch * errPitch < 0)
+		{
+			// Already past the aim point and the hand still moving away from
+			// it: it stops there. The check above only caught a step that
+			// crosses the aim point - after a fast catch-up the hand's
+			// leftover speed then coasted the aim ~4 degrees past a moving
+			// target, a visible flick.
+			moveYaw = 0;
+			movePitch = 0;
+			velYaw = 0;
+			velPitch = 0;
 		}
 		
 		// plus the target's own motion across the view (feed-forward)
-		moveBy(moveYaw + ffYaw * dt, movePitch + ffPitch * dt);
+		double lead = leadDt(dt);
+		moveBy(moveYaw + ffYaw * lead, movePitch + ffPitch * lead);
+	}
+	
+	/**
+	 * How far ahead to follow the target's motion this step: until the next
+	 * step, which is about one normal frame away - not this step's dt.
+	 * After a lag spike, leading by the whole spike put the aim that far
+	 * ahead of a fast target, a flick in its direction (23 degrees after
+	 * 150ms at 150 degrees/s).
+	 */
+	private double leadDt(double dt)
+	{
+		double lead = Math.min(dt, lastDt > 0 ? lastDt : 1 / 60.0);
+		lastDt = dt;
+		return lead;
 	}
 	
 	/** 0 below {@code edge0}, 1 above {@code edge1}, smooth in between. */

@@ -202,4 +202,47 @@ class PidAimTest
 				+ pid.onTargetShare() + " vs old " + old.onTargetShare());
 		}
 	}
+	
+	@Test
+	void noFlickAfterFrameHitch()
+	{
+		// A target moving fast across the view (knocked up close by), 144
+		// fps, and one 150ms frame (a lag spike). The aim must not jump far
+		// ahead of the target right after - it used to lead by the motion of
+		// the whole hitch, a flick in the target's direction.
+		for(int mode = 0; mode < 3; mode++)
+		{
+			double frame = 1 / 144.0;
+			double rate = 150;
+			HumanAim aim = new HumanAim(new Random(1));
+			long now = 1_000_000_000L;
+			aim.seed(0, 0, now);
+			aim.startTurn(now);
+			
+			double t = 0;
+			double maxLead = 0;
+			for(int f = 1; t < 1.5; f++)
+			{
+				double dt = f == 144 ? 0.15 : frame;
+				t += dt;
+				now += (long)(dt * 1e9);
+				aim.updateTracking(rate, 0, dt);
+				
+				float want = (float)(rate * t);
+				switch(mode)
+				{
+					case 0 -> aim.pidStep(want, 0, dt, now, SPEED, 2, true);
+					case 1 -> aim.humanStep(want, 0, dt, now, SPEED);
+					default -> aim.linearStep(want, 0, dt, SPEED);
+				}
+				
+				if(f >= 144)
+					maxLead =
+						Math.max(maxLead, Mth.wrapDegrees(aim.getYaw() - want));
+			}
+			
+			assertTrue(maxLead < 3,
+				"mode " + mode + " led the target by " + maxLead + "°");
+		}
+	}
 }

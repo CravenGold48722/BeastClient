@@ -343,7 +343,15 @@ does it. When writing or touching a hack:
   the PID with a fixed top speed (old humanStep/linearStep), its top end "auto" (blue knob) = PID.
   While AimAssist has a target and turns the camera, `onMouseUpdate` zeroes your mouse input
   (the old "you moved the mouse >1.5° = steering" release made it let go of targets). Gate attacks on the crosshair actually
-  being on the target while turning. BowAimbot's lead comes from `util/BallisticSolver`
+  being on the target while turning. All three steps lead the target's motion by one frame
+  (`leadDt`: the previous step's dt), never by the current dt - after a 150 ms lag spike that
+  put the aim 23° ahead of a fast target (`noFlickAfterFrameHitch`); and the hand stops once
+  past the aim point while still moving away. Only one hack turns the camera at a time:
+  MaceAssist's mace aim yields while `AimAssist.isTurningCamera()` (both at once flicked the view
+  up and sideways while falling). AimAssist hits are all sprint hits (user, 2026-10-03):
+  `attackTarget` waits for `isSprinting() && wasSprinting` (what the server has - the attack goes
+  out before this tick's sprint update) unless sprinting is impossible right now (hunger,
+  blindness, item use, sneaking, riding, gliding, water). BowAimbot's lead comes from `util/BallisticSolver`
   (vanilla projectile physics, tested in `BallisticSolverTest`) plus `util/TargetPredictor`:
   Robocode-style pattern matching (replays the most similar past moments of the target's
   movement, relative to the shooter), aims at the densest spot of those replays within the hit

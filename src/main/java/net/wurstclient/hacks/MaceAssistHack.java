@@ -528,6 +528,16 @@ public final class MaceAssistHack extends Hack
 		if(MC.player == null || MC.level == null || lockedTarget == null)
 			return;
 			
+		// While AimAssist turns the camera, it owns it. Both aiming at once -
+		// MaceAssist at its target's chest, AimAssist at its own target's
+		// center - flicked the view up and sideways whenever you fell far
+		// enough for the mace aim to start.
+		if(WURST.getHax().aimAssistHack.isTurningCamera())
+		{
+			cameraAim.reset();
+			return;
+		}
+		
 		// Turned every frame, like a mouse, with the same smooth, human-like
 		// aim as AimAssist - including keeping up with a moving target.
 		if(isAimActive())

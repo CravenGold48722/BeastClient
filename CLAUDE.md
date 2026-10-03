@@ -367,6 +367,14 @@ does it. When writing or touching a hack:
   those with the inventory open.
 - **Hotbar slot:** after `setSelectedSlot`, sync with `IMC.getInteractionManager().syncSelectedSlot()`
   (vanilla's `ensureHasSentCarriedItem`), never a hand-built `ServerboundSetCarriedItemPacket`.
+- **Packet order (Grim PacketOrderE):** a slot change must never go out after an attack, interact,
+  use, use-on-block, release, PlayerCommand or sneak/sprint input change in the same tick (tick =
+  up to `ServerboundClientTickEndPacket`). `util/PacketOrder` tracks that from the sent packets and
+  `MultiPlayerGameModeMixin` holds `ensureHasSentCarriedItem` back; vanilla's `tick()` sends it at
+  the start of the next tick. Code that switches and then attacks/uses must check
+  `PacketOrder.canChangeSlotNow()` and wait a tick if false (MaceAssist does), or the action goes
+  out with the old item. `PacketBudgetTest` counts violations independently (MaceAssist swap-back
+  scenario: 9/9 violations without the guard, 0 with it).
 - **Chat / server commands:** `ChatUtils.sendAsPlayer("/cmd …")` — same normalisation and chat
   history as typing it; doesn't fire `ChatOutputEvent`, so it can't loop.
 - **Changing a default:** `settings.json` stores defaults too, so add an entry to

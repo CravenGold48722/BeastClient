@@ -48,6 +48,7 @@ import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.settings.filters.FilterSpeedSetting;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.CameraAim;
+import net.wurstclient.util.PacketOrder;
 import net.wurstclient.util.Rotation;
 
 /**
@@ -787,6 +788,10 @@ public final class MaceAssistHack extends Hack
 		if(!autoChestplate.isChecked() || chestplateEquipped)
 			return;
 		
+		// the chestplate has to be in hand on the server before the use
+		if(!PacketOrder.canChangeSlotNow())
+			return;
+		
 		if(MC.player.distanceTo(lockedTarget) > chestplateDistance.getValue())
 			return;
 		
@@ -814,6 +819,13 @@ public final class MaceAssistHack extends Hack
 	public void onPlayerAttacksEntity(Entity target)
 	{
 		if(MC.player == null || target == null || slamAttacking)
+			return;
+			
+		// Something already went out this tick (an earlier hit, a use...), so a
+		// swap now would only reach the server next tick - after this hit,
+		// which then wouldn't get the mace anyway. Grim flags slot changes
+		// after a hit in the same tick (PacketOrderE). See PacketOrder.
+		if(!PacketOrder.canChangeSlotNow())
 			return;
 		
 		if(lungeSwapPending && lungeReturnSlot != -1)
@@ -942,7 +954,8 @@ public final class MaceAssistHack extends Hack
 		if(slamFollowUpTarget != null && !isStillAttackable(slamFollowUpTarget))
 			slamFollowUpTarget = null;
 		
-		if(slamPending && slamTarget != null)
+		// (waits for a tick where the mace can go out before the hit)
+		if(slamPending && slamTarget != null && PacketOrder.canChangeSlotNow())
 		{
 			slamPending = false;
 			int prev = MC.player.getInventory().getSelectedSlot();
@@ -963,6 +976,13 @@ public final class MaceAssistHack extends Hack
 		if(slamFollowUpPending && slamFollowUpDelay > 0
 			&& --slamFollowUpDelay == 0)
 		{
+			if(!PacketOrder.canChangeSlotNow())
+			{
+				// the slam just went out - follow up next tick
+				slamFollowUpDelay = 1;
+				return;
+			}
+			
 			slamFollowUpPending = false;
 			
 			// Back to the item you started with even if the target is gone -
@@ -1013,6 +1033,10 @@ public final class MaceAssistHack extends Hack
 	private void tryLungeSwap()
 	{
 		if(MC.player == null || !lungeSwapping.isChecked() || lungeSwapPending)
+			return;
+		
+		// the spear would only reach the server after this click
+		if(!PacketOrder.canChangeSlotNow())
 			return;
 		
 		ItemStack held = MC.player.getMainHandItem();
@@ -1205,6 +1229,14 @@ public final class MaceAssistHack extends Hack
 		int slot = findItem(Items.WIND_CHARGE);
 		if(slot == -1)
 			return;
+		
+		// the wind charge has to be in hand on the server before the use
+		if(!PacketOrder.canChangeSlotNow())
+		{
+			airPotThrown = true;
+			airPotWindDelay = 1;
+			return;
+		}
 		
 		int returnSlot = MC.player.getInventory().getSelectedSlot();
 		selectSlot(slot);

@@ -42,6 +42,7 @@ import net.wurstclient.WurstClient;
 import net.wurstclient.InventoryOpener;
 import net.wurstclient.hacks.AutoTotemHack;
 import net.wurstclient.mixinterface.IMultiPlayerGameMode;
+import net.wurstclient.util.PacketOrder;
 
 @Mixin(MultiPlayerGameMode.class)
 public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
@@ -59,6 +60,22 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 		CallbackInfoReturnable<Boolean> cir)
 	{
 		EventManager.fire(new BlockBreakingProgressEvent(pos, direction));
+	}
+	
+	/**
+	 * Holds a slot change back while an attack, use, release, sprint/sneak
+	 * change etc. has already gone out this tick - vanilla never changes
+	 * slots after those within a tick, and Grim's PacketOrderE flags it.
+	 * This method runs again at the start of the next tick
+	 * (MultiPlayerGameMode.tick()), which then sends it. See PacketOrder.
+	 */
+	@Inject(method = "ensureHasSentCarriedItem()V",
+		at = @At("HEAD"),
+		cancellable = true)
+	private void onEnsureHasSentCarriedItem(CallbackInfo ci)
+	{
+		if(!PacketOrder.canChangeSlotNow())
+			ci.cancel();
 	}
 	
 	@Inject(

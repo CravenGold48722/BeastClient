@@ -11,10 +11,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ServerboundAttackPacket;
+import net.minecraft.network.protocol.game.ServerboundClientTickEndPacket;
+import net.minecraft.network.protocol.game.ServerboundInteractPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
+import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
 import net.wurstclient.WurstClient;
 import net.wurstclient.events.ConnectionPacketOutputListener;
 import net.wurstclient.gametest.SingleplayerTest;
@@ -43,8 +54,22 @@ public final class PacketBudgetTest extends SingleplayerTest
 	
 	private final Map<String, Integer> counts = new ConcurrentHashMap<>();
 	
-	private final ConnectionPacketOutputListener counter = event -> counts
-		.merge(event.getPacket().getClass().getSimpleName(), 1, Integer::sum);
+	/**
+	 * Hotbar slot changes sent after an attack, use, release, sprint or
+	 * sneak change in the same tick - never happens in vanilla, and Grim's
+	 * PacketOrderE flags it. Counted independently of the client's own
+	 * guard (util/PacketOrder), so the guard itself is tested.
+	 */
+	private final AtomicInteger orderViolations = new AtomicInteger();
+	private volatile boolean actedThisTick;
+	private volatile boolean lastShift;
+	private volatile boolean lastSprint;
+	
+	private final ConnectionPacketOutputListener counter = event -> {
+		Packet<?> p = event.getPacket();
+		counts.merge(p.getClass().getSimpleName(), 1, Integer::sum);
+		checkOrder(p);
+	};
 	
 	public PacketBudgetTest(ClientGameTestContext context,
 		TestSingleplayerContext spContext)
@@ -86,6 +111,7 @@ public final class PacketBudgetTest extends SingleplayerTest
 			checkEngaged("KillauraLegit");
 			checkEngaged("Killaura");
 			checkEngaged("AimAssist");
+			checkMaceSwapOrder();
 			
 		}finally
 		{
@@ -100,6 +126,7 @@ public final class PacketBudgetTest extends SingleplayerTest
 			// toggle announcements (chat + action bar)
 			clearChat();
 			clearParticles();
+			clearToasts(); // the mace scenario earns an advancement
 			context.runOnClient(
 				mc -> mc.gui.setOverlayMessage(Component.empty(), false));
 			context.waitTicks(7); // for the teleport rotation to arrive
@@ -178,6 +205,70 @@ public final class PacketBudgetTest extends SingleplayerTest
 				throw new RuntimeException(hack + " sent " + swings
 					+ " swings for " + attacks + " attacks");
 		}
+	}
+	
+	private void checkOrder(Packet<?> p)
+	{
+		if(p instanceof ServerboundClientTickEndPacket)
+			actedThisTick = false;
+		else if(p instanceof ServerboundSetCarriedItemPacket)
+		{
+			if(actedThisTick)
+				orderViolations.incrementAndGet();
+		}else if(p instanceof ServerboundAttackPacket
+			|| p instanceof ServerboundInteractPacket
+			|| p instanceof ServerboundUseItemPacket
+			|| p instanceof ServerboundUseItemOnPacket
+			|| p instanceof ServerboundPlayerCommandPacket)
+			actedThisTick = true;
+		else if(p instanceof ServerboundPlayerActionPacket a && a
+			.getAction() == ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM)
+			actedThisTick = true;
+		else if(p instanceof ServerboundPlayerInputPacket in)
+		{
+			if(in.input().shift() != lastShift
+				|| in.input().sprint() != lastSprint)
+				actedThisTick = true;
+			lastShift = in.input().shift();
+			lastSprint = in.input().sprint();
+		}
+	}
+	
+	/**
+	 * MaceAssist attribute swapping with the shortest swap-back delay, while
+	 * KillauraLegit hits: swap to the mace before each hit, back afterwards -
+	 * the swap back must never go out in the same tick as the hit.
+	 */
+	private void checkMaceSwapOrder()
+	{
+		clearInventory();
+		runCommand("item replace entity @s hotbar.0 with diamond_sword");
+		runCommand("item replace entity @s hotbar.1 with mace");
+		context.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
+		runWurstCommand("setcheckbox MaceAssist Attribute_swapping on");
+		runWurstCommand("setslider MaceAssist Swap-back_delay 1");
+		runCommand("tp @s ~ ~ ~ 0 0");
+		context.waitTicks(7);
+		
+		orderViolations.set(0);
+		runWurstCommand("t MaceAssist on");
+		runWurstCommand("t KillauraLegit on");
+		Map<String, Integer> m = measure();
+		measure().forEach((k, v) -> m.merge(k, v, Integer::sum));
+		runWurstCommand("t KillauraLegit off");
+		runWurstCommand("t MaceAssist off");
+		runWurstCommand("setslider MaceAssist Swap-back_delay 3");
+		context.waitTicks(5);
+		clearInventory();
+		
+		int violations = orderViolations.get();
+		logger.info("MaceAssist swaps while attacking: {} - {} slot changes"
+			+ " after a hit in the same tick", m, violations);
+		if(m.getOrDefault("ServerboundSetCarriedItemPacket", 0) == 0)
+			throw new RuntimeException("MaceAssist never swapped");
+		if(violations > 0)
+			throw new RuntimeException(violations + " slot changes went out"
+				+ " after a hit in the same tick (Grim PacketOrderE)");
 	}
 	
 	private Map<String, Integer> measure()

@@ -22,6 +22,7 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.Packet;
 import net.wurstclient.WurstClient;
+import net.wurstclient.util.PacketOrder;
 import net.wurstclient.event.EventManager;
 import net.wurstclient.events.ConnectionPacketOutputListener.ConnectionPacketOutputEvent;
 import net.wurstclient.events.PacketInputListener.PacketInputEvent;
@@ -67,6 +68,9 @@ public abstract class ConnectionMixin
 		WurstClient wurst = WurstClient.INSTANCE;
 		if(!wurst.isEnabled() && wurst.getOtfs() != null)
 			wurst.getOtfs().vanillaSpoofOtf.onSentConnectionPacket(event);
+		
+		// always, so slot changes stay in vanilla order (see PacketOrder)
+		PacketOrder.onSent(event.getPacket());
 		
 		return event.getPacket();
 	}

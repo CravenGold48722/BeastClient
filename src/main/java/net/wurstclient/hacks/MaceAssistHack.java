@@ -49,6 +49,7 @@ import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.settings.filters.FilterSpeedSetting;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.CameraAim;
+import net.wurstclient.util.HitCheck;
 import net.wurstclient.util.PacketOrder;
 import net.wurstclient.util.Rotation;
 
@@ -722,7 +723,8 @@ public final class MaceAssistHack extends Hack
 			&& MC.player.getAttackStrengthScale(0) < 0.9F)
 			return false;
 		
-		if(!isCrosshairOnTarget(lockedTarget))
+		if(!isCrosshairOnTarget(lockedTarget)
+			|| !HitCheck.isVerifiable(lockedTarget))
 			return false;
 		
 		attackTarget(lockedTarget);

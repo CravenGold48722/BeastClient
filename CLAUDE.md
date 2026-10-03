@@ -371,7 +371,11 @@ does it. When writing or touching a hack:
   attack event) - never from `onRender`, the movement packet after it must carry the rotation the
   hit was aimed with - and only when a ray from the current eye position along the current look
   hits the target's current hitbox (+ pick radius) within `player.entityInteractionRange()`, with no
-  block in between. No predicted positions, no extra range.
+  block in between. No predicted positions, no extra range. Gate the attack on `util/HitCheck.isVerifiable`:
+  the last-sent rotation (`yRotLast`/`xRotLast`) and the current one must both hit, from the current
+  and the post-move eye position, 0.1 inside the hitbox sides - the attack packet precedes this
+  tick's movement packet, so hitting the moment a per-frame turn lands flagged Matrix HITBOX
+  ("hit without any intersection", AimAssist, 2026-10-02). AimAssist and MaceAssist use it.
 - **Packet order (Grim PacketOrderE):** a slot change must never go out after an attack, interact,
   use, use-on-block, release, PlayerCommand or sneak/sprint input change in the same tick (tick =
   up to `ServerboundClientTickEndPacket`). `util/PacketOrder` tracks that from the sent packets and

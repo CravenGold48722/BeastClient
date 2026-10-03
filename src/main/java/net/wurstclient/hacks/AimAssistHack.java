@@ -58,6 +58,7 @@ import net.wurstclient.settings.filterlists.EntityFilterList;
 import net.wurstclient.settings.filters.*;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.EntityUtils;
+import net.wurstclient.util.HitCheck;
 import net.wurstclient.util.HumanAim;
 import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
@@ -901,6 +902,13 @@ public final class AimAssistHack extends Hack
 	private boolean attackTarget()
 	{
 		if(attackedThisTick || target == null)
+			return false;
+			
+		// Only a hit the server can verify - with the rotation it already has
+		// as well as the current one, within reach, nothing in the way.
+		// Hitting the moment a fast turn landed was a hit through thin air
+		// to Matrix's and Grim's HITBOX checks. See HitCheck.
+		if(!HitCheck.isVerifiable(target))
 			return false;
 		
 		attackedThisTick = true;

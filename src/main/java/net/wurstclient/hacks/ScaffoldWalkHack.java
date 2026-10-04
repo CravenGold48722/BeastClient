@@ -9,6 +9,7 @@ package net.wurstclient.hacks;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Random;
 import java.util.Set;
 
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -18,6 +19,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Input;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
@@ -66,7 +68,9 @@ public final class ScaffoldWalkHack extends Hack
 				+ " degrees with §lS§r plus §lA§r or §lD§r, diagonals"
 				+ " straight back with §lS§r, other angles as a staircase -"
 				+ " looking down at about 75 degrees and clicking the side of"
-				+ " a block the moment the crosshair is on it. Your keys keep"
+				+ " a block the moment the crosshair is on it. Every 8-10 blocks it"
+				+ " jumps and places the next ones in the air, like players do."
+				+ " Your keys keep"
 				+ " meaning the direction you were facing, and it turns back"
 				+ " when you stop. Where no click works in time it sneaks to"
 				+ " the edge (or looks straight at the block) instead of"
@@ -113,6 +117,23 @@ public final class ScaffoldWalkHack extends Hack
 	private boolean sneaking;
 	/** Whether the turn-around at the start is done. */
 	private boolean walking;
+	/** Jump this tick (a godbridger's rhythm jump). */
+	private boolean jumpNow;
+	private int blocksSinceJump;
+	/** Ticks without sneaking or looking straight at a block: in rhythm. */
+	private int ticksSinceSneak;
+	/** Jump once this many blocks are placed: 8-10, like players. */
+	private int jumpAfter = 9;
+	private static final Random RANDOM = new Random();
+	
+	// the smooth aim (spring) state
+	private boolean springing;
+	private double aimYaw;
+	private double aimPitch;
+	private double aimYawVel;
+	private double aimPitchVel;
+	private double aimOmegaFactor = 1;
+	private long lastFrameNs;
 	private int idleTicks;
 	private long tick;
 	private float targetYaw;
@@ -230,8 +251,27 @@ public final class ScaffoldWalkHack extends Hack
 		moving = walking ? wanted : 0;
 		
 		// click first (with the aim from before), then aim for the next one
-		if(ensureBlockSlot())
-			tryPlace();
+		boolean placed = ensureBlockSlot() && tryPlace();
+		if(placed)
+			blocksSinceJump++;
+			
+		// A godbridger's jump every 8-10 blocks, right after one - the
+		// next blocks go in while in the air. Only when a short simulation
+		// from here says it lands on them. Pressed like the jump key, so the
+		// server sees the same input a player's jump makes.
+		ticksSinceSneak =
+			sneaking || planner.isRescuing() ? 0 : ticksSinceSneak + 1;
+		jumpNow = placed && moving > 0 && !sneaking && player.onGround()
+			&& ticksSinceSneak > 6 && blocksSinceJump >= jumpAfter
+			&& Godbridge.jumpSafe(snapshot(laneY, player.position()), bridgeYaw,
+				stanceYaw, planner.anchorX(), planner.anchorZ(), bodyOf(laneY),
+				player.getYRot(), player.getXRot(),
+				player.blockInteractionRange());
+		if(jumpNow)
+		{
+			blocksSinceJump = 0;
+			jumpAfter = 8 + RANDOM.nextInt(3);
+		}
 		updateAim();
 	}
 	
@@ -261,11 +301,9 @@ public final class ScaffoldWalkHack extends Hack
 		if(!edgeAhead(bridge, pos, yaw, 2.5) || findBlockSlot() == -1)
 			return false;
 		
-		Vec3 velocity = player.getDeltaMovement().scale(1 / Godbridge.FRICTION);
-		double eyeAboveTop = player.getEyeY() - (lane + 1);
 		stanceYaw = Godbridge.chooseStance(snapshot(lane, pos), yaw, anchor[0],
-			anchor[1], pos.x, pos.z, velocity.x, velocity.z, eyeAboveTop,
-			player.blockInteractionRange(), player.getYRot());
+			anchor[1], bodyOf(lane), player.blockInteractionRange(),
+			player.getYRot());
 		if(Double.isNaN(stanceYaw))
 			return false;
 		
@@ -277,6 +315,9 @@ public final class ScaffoldWalkHack extends Hack
 		moving = 0;
 		sneaking = false;
 		walking = false;
+		jumpNow = false;
+		blocksSinceJump = 0;
+		jumpAfter = 8 + RANDOM.nextInt(3);
 		if(!returning)
 		{
 			origYaw = player.getYRot();
@@ -296,6 +337,28 @@ public final class ScaffoldWalkHack extends Hack
 			if(!bridge.supported(pos.x + dir.x * d, pos.z + dir.z * d))
 				return true;
 		return false;
+	}
+	
+	/**
+	 * The camera for the planner: the smooth aim's exact angles and speed
+	 * while it's on, else where the camera points, still.
+	 */
+	private Godbridge.Cam camNow()
+	{
+		if(springing)
+			return new Godbridge.Cam(aimYaw, aimPitch, aimYawVel, aimPitchVel);
+		return new Godbridge.Cam(MC.player.getYRot(), MC.player.getXRot(), 0,
+			0);
+	}
+	
+	/** Your movement state for the planner, relative to the lane. */
+	private Godbridge.Body bodyOf(int lane)
+	{
+		LocalPlayer player = MC.player;
+		Vec3 v = player.getDeltaMovement();
+		return new Godbridge.Body(player.getX(), player.getZ(),
+			player.getY() - (lane + 1), v.x, v.y, v.z, player.onGround(),
+			player.getPose() == Pose.CROUCHING);
 	}
 	
 	private Godbridge.Lane laneOf(int lane)
@@ -325,6 +388,8 @@ public final class ScaffoldWalkHack extends Hack
 		
 		bridging = false;
 		planner = null;
+		jumpNow = false;
+		springing = false;
 		moving = 0;
 		sneaking = false;
 		returning = true;
@@ -348,9 +413,7 @@ public final class ScaffoldWalkHack extends Hack
 		// (kept when you let go: a yaw change spoils a click that's due)
 		double planYaw = stanceYaw + correction;
 		
-		// the real velocity, not the step: sneaking at an edge cuts the step
-		// short but keeps the momentum
-		Vec3 velocity = player.getDeltaMovement().scale(1 / Godbridge.FRICTION);
+		Vec3 velocity = player.getDeltaMovement();
 		
 		// Stopped and not sliding any more (or walking back along the
 		// bridge): nothing to plan. Still sliding after letting go, though,
@@ -372,12 +435,20 @@ public final class ScaffoldWalkHack extends Hack
 			+ Math.round(Mth.wrapDegrees(bridgeYaw - cameraYaw) / 45) * 45;
 		Vec3 move =
 			sliding ? Vec3.ZERO : Vec3.directionFromRotation(0, (float)moveYaw);
-		double eyeAboveTop = player.getEyeY() - (laneY + 1);
-		
-		double pitch =
-			planner.plan(tick, pos.x, pos.z, velocity.x, velocity.z, move.x,
-				move.z, eyeAboveTop, planYaw, player.blockInteractionRange());
+		Godbridge.Body body = bodyOf(laneY);
+		double reach = player.blockInteractionRange();
+		double pitch = planner.plan(tick, body, camNow(), move.x, move.z,
+			jumpNow, planYaw, reach);
 		sneaking = planner.shouldSneak();
+		if(jumpNow && (sneaking || !planner.hasPlan()))
+		{
+			// no jumping off a sneak plan, nor without a click that catches
+			// the landing
+			jumpNow = false;
+			pitch = planner.plan(tick, body, camNow(), move.x, move.z, false,
+				planYaw, reach);
+			sneaking = planner.shouldSneak();
+		}
 		double override = planner.yawOverride();
 		targetYaw = (float)(Double.isNaN(override) ? planYaw : override);
 		targetPitch = (float)pitch;
@@ -390,7 +461,7 @@ public final class ScaffoldWalkHack extends Hack
 	 * bridge, and the rotation the server already has hits the same face
 	 * (the click goes out before this tick's movement packet).
 	 */
-	private void tryPlace()
+	private boolean tryPlace()
 	{
 		LocalPlayer player = MC.player;
 		BlockHitResult now =
@@ -401,26 +472,27 @@ public final class ScaffoldWalkHack extends Hack
 			|| sent.getType() != HitResult.Type.BLOCK
 			|| !now.getBlockPos().equals(sent.getBlockPos())
 			|| now.getDirection() != sent.getDirection())
-			return;
+			return false;
 		
 		Direction face = now.getDirection();
 		BlockPos clicked = now.getBlockPos();
 		if(face.getAxis() == Direction.Axis.Y || clicked.getY() != laneY)
-			return;
+			return false;
 		
 		BlockPos target = clicked.relative(face);
 		Vec3 pos = player.position();
 		if(!BlockUtils.getState(target).canBeReplaced() || !planner
 			.isBridgeCell(target.getX(), target.getZ(), pos.x, pos.z))
-			return;
+			return false;
 			
 		// your feet already below the bridge's top: the block would be
 		// inside you
 		if(player.getBoundingBox().minY < laneY + 1 - 1e-4
 			&& player.getBoundingBox().intersects(new AABB(target)))
-			return;
+			return false;
 		
 		InteractionSimulator.rightClickBlock(now, InteractionHand.MAIN_HAND);
+		return true;
 	}
 	
 	private BlockHitResult raycast(Rotation rotation)
@@ -444,16 +516,23 @@ public final class ScaffoldWalkHack extends Hack
 		if(bridging)
 		{
 			// Turning around (or to look at a block) is a hand on a mouse,
-			// easing in and out. The pitch nudges between blocks are small,
-			// quick corrections that must land within a tick - the click
-			// needs the rotation already sent to be on the face too, and the
-			// humanized ease-out took 4+ ticks for a few degrees.
+			// easing in and out. The pitch nudges between blocks are small
+			// corrections that must still land before the click (the
+			// rotation already sent has to be on the face too): a smooth,
+			// critically damped spring - no jumps, no overshoot, settled in
+			// under two ticks. (The humanized ease-out took 4+ ticks.)
 			boolean small = Math.abs(
 				Mth.wrapDegrees(MC.player.getYRot() - targetYaw)) < SMALL_TURN
 				&& Math.abs(MC.player.getXRot() - targetPitch) < SMALL_TURN;
-			cameraAim.turnCamera(bridgeTurn,
-				new Rotation(targetYaw, targetPitch), new double[2],
-				humanize && !small, speed);
+			if(small)
+				springToTarget(humanize, speed);
+			else
+			{
+				springing = false;
+				cameraAim.turnCamera(bridgeTurn,
+					new Rotation(targetYaw, targetPitch), new double[2],
+					humanize, speed);
+			}
 			return;
 		}
 		
@@ -469,6 +548,60 @@ public final class ScaffoldWalkHack extends Hack
 			returning = false;
 			cameraAim.reset();
 		}
+	}
+	
+	/**
+	 * One frame of the smooth aim ({@link Godbridge#spring}). Keeps its own
+	 * exact angles (the camera gets them rounded to whole mouse steps) and
+	 * speed, so it moves on smoothly from frame to frame. Humanized, its
+	 * quickness drifts a little, like a hand's.
+	 */
+	private void springToTarget(boolean humanize, double maxSpeed)
+	{
+		LocalPlayer player = MC.player;
+		long now = System.nanoTime();
+		if(!springing)
+		{
+			springing = true;
+			aimYaw = player.getYRot();
+			aimPitch = player.getXRot();
+			aimYawVel = 0;
+			aimPitchVel = 0;
+			lastFrameNs = now;
+			cameraAim.reset();
+			return;
+		}
+		
+		double dt = Math.min((now - lastFrameNs) / 1e9, 0.1);
+		lastFrameNs = now;
+		if(humanize)
+			aimOmegaFactor =
+				Mth.clamp(aimOmegaFactor + (RANDOM.nextDouble() - 0.5) * dt * 2,
+					0.85, 1.15);
+		else
+			aimOmegaFactor = 1;
+		double omega = Godbridge.AIM_OMEGA * aimOmegaFactor;
+		
+		double yawTarget = aimYaw + Mth.wrapDegrees(targetYaw - aimYaw);
+		double[] yaw =
+			Godbridge.spring(aimYaw, aimYawVel, yawTarget, dt, omega);
+		double[] pitch =
+			Godbridge.spring(aimPitch, aimPitchVel, targetPitch, dt, omega);
+		
+		// never faster than the turn speed
+		double speed = Math.hypot(yaw[1], pitch[1]);
+		if(speed > maxSpeed)
+		{
+			yaw[1] *= maxSpeed / speed;
+			pitch[1] *= maxSpeed / speed;
+		}
+		aimYaw = yaw[0];
+		aimYawVel = yaw[1];
+		aimPitch = pitch[0];
+		aimPitchVel = pitch[1];
+		
+		// whole mouse steps, see Rotation.applyToClientPlayer()
+		new Rotation((float)aimYaw, (float)aimPitch).applyToClientPlayer();
 	}
 	
 	/**
@@ -515,7 +648,8 @@ public final class ScaffoldWalkHack extends Hack
 			world = toWorld(getPhysicalIntent(), origYaw);
 		
 		if(world.lengthSqr() < 1e-4)
-			return new Input(false, false, false, false, keys.jump(),
+			return new Input(false, false, false, false,
+				keys.jump() || bridging && jumpNow,
 				bridging ? sneaking : keys.shift(), keys.sprint());
 		
 		// the eight key combinations, relative to where the camera faces
@@ -531,8 +665,8 @@ public final class ScaffoldWalkHack extends Hack
 		// an edge until a click works
 		boolean shift = bridging ? sneaking : keys.shift();
 		boolean sprint = !bridging && keys.sprint();
-		return new Input(forward, backward, left, right, keys.jump(), shift,
-			sprint);
+		return new Input(forward, backward, left, right,
+			keys.jump() || bridging && jumpNow, shift, sprint);
 	}
 	
 	/** Vanilla's move vector for a set of keys. */

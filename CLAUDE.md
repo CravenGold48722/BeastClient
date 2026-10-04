@@ -439,10 +439,21 @@ does it. When writing or touching a hack:
     at a face (rescue); shift the line sideways so it doesn't run along block corners
     (`chooseAnchor`); pick the stance by simulating each a few blocks ahead (`chooseStance`, ~2 ms
     once per bridge; planning ~0.02 ms/tick); keep planning while sliding after you let go.
-  - the camera must reach each planned pitch within a tick: humanized ease-out took 4+ ticks for a
-    few degrees, so small corrections (< 12°) go straight there, big turns stay humanized; and
-    the "turn around before walking" gate is only for the start (during a rescue turn it
-    stopped the walk, which dropped sneak mid-slide);
+  - smooth aim (user, 2026-10-03): corrections < 12° follow a critically damped spring
+    (`Godbridge.spring`, omega 50/s; exact closed form), big turns stay humanized. The planner
+    **predicts the camera** with that spring (`Cam.at`): a click at tick k needs the camera at k
+    and at k-1 (= the rotation sent) on the face. Assuming an instant camera with omega 35 gave
+    488 sim falls; the humanized ease-out took 4+ ticks for a few degrees. The "turn around before
+    walking" gate is only for the start (during a rescue turn it dropped sneak mid-slide);
+  - jumps like a godbridger (Hypixel: every 8-10 blocks, placing in the air): jump key via the
+    input, right after a placement, only in rhythm (no sneak/rescue for 6 ticks), only if
+    `jumpSafe` (a 3-block simulation from here) and the plan made with the jump has a click that
+    catches the landing (`hasPlan`); `Body` models vanilla air movement (jump 0.42, gravity 0.08,
+    drag 0.98, air accel 0.0196, friction 0.91, landing decided at the tick-start position, crouch
+    eyes 1.27); the horizon is 14 ticks while jumping/in the air (8 on the ground - 14 everywhere
+    made walking worse); stepping stones may be placed mid-air (on the ground only from the edge);
+  - the gametest also fails on any packet type a bridging player wouldn't send, swings != block
+    clicks, too many clicks, or no jump on the straight bridge;
   `GodbridgeTest` simulates every degree 0-359 from random offsets (0 falls, ~14% sneak ticks at
   odd angles, 0 for straight/diagonal); `ScaffoldWalkHackTest` (gametest) bridges north,
   north-east and 200° from a ledge in the air. Gametest tp: `"%d.5"` is the wrong block for

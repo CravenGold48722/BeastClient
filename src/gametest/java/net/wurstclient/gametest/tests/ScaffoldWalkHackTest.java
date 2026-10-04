@@ -8,6 +8,10 @@
 package net.wurstclient.gametest.tests;
 
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
@@ -33,10 +37,26 @@ public final class ScaffoldWalkHackTest extends SingleplayerTest
 	private static final int HEIGHT = 12;
 	
 	private final AtomicInteger slotPackets = new AtomicInteger();
+	/** Every packet sent while bridging, by type. */
+	private final Map<String, Integer> packets = new ConcurrentHashMap<>();
 	private final ConnectionPacketOutputListener counter = event -> {
 		if(event.getPacket() instanceof ServerboundSetCarriedItemPacket)
 			slotPackets.incrementAndGet();
+		packets.merge(event.getPacket().getClass().getSimpleName(), 1,
+			Integer::sum);
 	};
+	
+	/**
+	 * What a player godbridging sends: movement, input, tick ends, block
+	 * clicks with their swings, the hotbar switch. Nothing else.
+	 */
+	private static final Set<String> VANILLA_BRIDGING = Set.of("Pos", "Rot",
+		"PosRot", "StatusOnly", "ServerboundClientTickEndPacket",
+		"ServerboundPlayerInputPacket", "ServerboundUseItemOnPacket",
+		"ServerboundSwingPacket", "ServerboundSetCarriedItemPacket",
+		"ServerboundKeepAlivePacket", "ServerboundChatCommandPacket",
+		// vanilla acknowledging chunks as you move into them
+		"ServerboundChunkBatchReceivedPacket");
 	
 	public ScaffoldWalkHackTest(ClientGameTestContext context,
 		TestSingleplayerContext spContext)
@@ -105,8 +125,20 @@ public final class ScaffoldWalkHackTest extends SingleplayerTest
 		
 		slotPackets.set(0);
 		runWurstCommand("t ScaffoldWalk on");
+		packets.clear();
 		context.runOnClient(mc -> mc.options.keyUp.setDown(true));
-		context.waitTicks(120);
+		// count the jumps: leaving the ground going up
+		int jumps = 0;
+		boolean wasUp = false;
+		for(int t = 0; t < 120; t++)
+		{
+			context.waitTick();
+			boolean up = context
+				.computeOnClient(mc -> mc.player.getY() > laneY + 1 + 0.3);
+			if(up && !wasUp)
+				jumps++;
+			wasUp = up;
+		}
 		context.runOnClient(mc -> mc.options.keyUp.setDown(false));
 		context.waitTicks(30);
 		runWurstCommand("t ScaffoldWalk off");
@@ -120,9 +152,9 @@ public final class ScaffoldWalkHackTest extends SingleplayerTest
 			moved.subtract(dir.scale(progress)).horizontalDistance();
 		logger.info(
 			"Godbridge {}: {} blocks along, {} off the line, y {} (lane top"
-				+ " {}), yaw {}, {} slot packets",
-			name, progress, sideways, pos.y, laneY + 1, endYaw,
-			slotPackets.get());
+				+ " {}), yaw {}, {} jumps, {} slot packets, packets {}",
+			name, progress, sideways, pos.y, laneY + 1, endYaw, jumps,
+			slotPackets.get(), new TreeMap<>(packets));
 		
 		if(pos.y < laneY + 1 - 0.01)
 			throw new RuntimeException(
@@ -139,5 +171,22 @@ public final class ScaffoldWalkHackTest extends SingleplayerTest
 		if(slotPackets.get() > 2)
 			throw new RuntimeException(slotPackets.get()
 				+ " slot changes for one " + name + " bridge");
+		
+		// nothing a vanilla player couldn't send while bridging
+		for(String type : packets.keySet())
+			if(!VANILLA_BRIDGING.contains(type))
+				throw new RuntimeException(
+					"Sent " + type + " while bridging " + name);
+		int clicks = packets.getOrDefault("ServerboundUseItemOnPacket", 0);
+		int swings = packets.getOrDefault("ServerboundSwingPacket", 0);
+		if(swings != clicks)
+			throw new RuntimeException(
+				swings + " swings for " + clicks + " block clicks");
+		if(clicks > progress * 2.5 + 4)
+			throw new RuntimeException(clicks + " block clicks for " + progress
+				+ " blocks of " + name + " bridge");
+		if(name.equals("north") && jumps < 1)
+			throw new RuntimeException("No godbridge jump in " + progress
+				+ " blocks of " + name + " bridge");
 	}
 }

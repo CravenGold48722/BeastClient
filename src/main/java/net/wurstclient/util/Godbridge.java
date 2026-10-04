@@ -10,6 +10,7 @@ package net.wurstclient.util;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 
 /**
@@ -70,14 +71,33 @@ public final class Godbridge
 	
 	public static final double SNEAK_FACTOR = 0.3;
 	
+	/** Air acceleration per tick (0.02 flying speed * 0.98 input). */
+	public static final double AIR_ACCEL = 0.0196;
+	
+	public static final double AIR_FRICTION = 0.91;
+	public static final double JUMP_POWER = 0.42;
+	public static final double GRAVITY = 0.08;
+	public static final double DRAG = 0.98;
+	public static final double EYE_STANDING = 1.62;
+	public static final double EYE_CROUCHING = 1.27;
+	
+	/**
+	 * How quickly the smooth aim settles (1/s, critically damped): smooth,
+	 * but still on the planned pitch before the click.
+	 */
+	public static final double AIM_OMEGA = 50;
+	
 	/** Keeps clicks this far inside a face's top and bottom edges. */
 	private static final double DEPTH_MARGIN = 0.1;
 	
 	/** ...and this far inside its sides. */
 	private static final double SIDE_MARGIN = 0.06;
 	
-	/** How far ahead (ticks) a click is planned at most. */
-	private static final int MAX_LEAD = 8;
+	/** How far ahead (ticks) a click is planned at most... */
+	private static final int LEAD = 8;
+	
+	/** ...and while jumping: the whole jump, to its landing. */
+	private static final int MAX_LEAD = 14;
 	
 	public interface Lane
 	{
@@ -118,9 +138,10 @@ public final class Godbridge
 	private boolean plannedSneaking;
 	private double lastPitch = NOMINAL_PITCH;
 	private boolean sneak;
+	private int horizon = LEAD;
+	private boolean rescuing;
+	private Cam cam = new Cam(0, NOMINAL_PITCH, 0, 0);
 	private double rescueYaw = Double.NaN;
-	/** The yaw aimed with since the last plan. */
-	private double lastYaw = Double.NaN;
 	
 	/**
 	 * @param bridgeYaw
@@ -154,15 +175,17 @@ public final class Godbridge
 	}
 	
 	/**
-	 * Whether placing this cell helps the bridge: on your way, within reach
-	 * of the line.
+	 * Whether placing this cell helps the bridge: under you right now, or on
+	 * your way within reach of the line.
 	 */
 	public boolean isBridgeCell(int cx, int cz, double x, double z)
 	{
+		if(overlaps(cx, cz, x, z, HALF_WIDTH))
+			return true;
 		double here = along(x, z);
 		double cellAlong = along(cx + 0.5, cz + 0.5);
-		return cellAlong > here - 1 && cellAlong < here + 3
-			&& Math.abs(lateral(cx + 0.5, cz + 0.5)) < 1;
+		return cellAlong > here - 1.5 && cellAlong < here + 3
+			&& Math.abs(lateral(cx + 0.5, cz + 0.5)) < 1.5;
 	}
 	
 	/** Whether a player centered here stands on any block of the lane. */
@@ -382,51 +405,180 @@ public final class Godbridge
 		return rescueYaw;
 	}
 	
+	/** Whether it's looking straight at a block (no stance click works). */
+	public boolean isRescuing()
+	{
+		return rescuing;
+	}
+	
+	/** Whether a click is planned (for the jump: one that catches you). */
+	public boolean hasPlan()
+	{
+		return committed;
+	}
+	
 	/** Whether to sneak this tick (a click planned at the edge). */
 	public boolean shouldSneak()
 	{
 		return sneak;
 	}
 	
+	// ── Movement ───────────────────────────────────────────────────────
+	
+	/**
+	 * Your movement state at the start of a tick, relative to the lane, and
+	 * vanilla's movement for one tick (LivingEntity.travel) - one model for
+	 * the planner and the simulation, so they predict the same thing.
+	 */
+	public static final class Body
+	{
+		public double x;
+		public double z;
+		/** Feet height above the lane's top. */
+		public double h;
+		/** deltaMovement as vanilla stores it (after friction and gravity). */
+		public double vx;
+		public double vy;
+		public double vz;
+		public boolean onGround;
+		/** Crouching this tick (sneak held last tick): eyes at 1.27. */
+		public boolean crouching;
+		
+		public Body(double x, double z, double h, double vx, double vy,
+			double vz, boolean onGround, boolean crouching)
+		{
+			this.x = x;
+			this.z = z;
+			this.h = h;
+			this.vx = vx;
+			this.vy = vy;
+			this.vz = vz;
+			this.onGround = onGround;
+			this.crouching = crouching;
+		}
+		
+		/** Standing on the lane, still. */
+		public static Body standing(double x, double z)
+		{
+			return new Body(x, z, 0, 0, -GRAVITY * DRAG, 0, true, false);
+		}
+		
+		public Body copy()
+		{
+			return new Body(x, z, h, vx, vy, vz, onGround, crouching);
+		}
+		
+		public double eyeAboveTop()
+		{
+			return h + (crouching ? EYE_CROUCHING : EYE_STANDING);
+		}
+		
+		/** Whether this tick's vertical move needs a block under you. */
+		public boolean needsSupport()
+		{
+			return onGround ? vy <= 0 : h + vy <= 1e-9;
+		}
+		
+		/**
+		 * One tick: the jump, acceleration from the keys (ground 0.098, air
+		 * 0.0196, sneaking 0.3x), sneaking's edge protection (the step only),
+		 * the vertical move before the horizontal one (landing and falling
+		 * are decided where the tick starts), then friction and gravity.
+		 */
+		public void step(Godbridge lane, double moveX, double moveZ,
+			boolean sneak, boolean jump)
+		{
+			boolean ground = onGround;
+			if(jump && ground)
+				vy = JUMP_POWER;
+			
+			double accel =
+				(ground ? WALK_ACCEL : AIR_ACCEL) * (sneak ? SNEAK_FACTOR : 1);
+			double dx = vx + moveX * accel;
+			double dz = vz + moveZ * accel;
+			double mx = dx;
+			double mz = dz;
+			if(sneak && ground && vy <= 0)
+			{
+				double[] step = lane.protect(x, z, dx, dz);
+				mx = step[0];
+				mz = step[1];
+			}
+			
+			boolean landed = false;
+			double dy = vy;
+			if(h + dy <= 0 && lane.supported(x, z))
+			{
+				dy = -h;
+				landed = true;
+			}
+			h += dy;
+			x += mx;
+			z += mz;
+			onGround = landed;
+			vy = ((landed ? 0 : vy) - GRAVITY) * DRAG;
+			double friction = ground ? FRICTION : AIR_FRICTION;
+			vx = dx * friction;
+			vz = dz * friction;
+			crouching = sneak;
+		}
+	}
+	
+	/** Tick start states: [0] = now, [k] = in k ticks. */
+	private Body[] predict(Body start, double moveX, double moveZ,
+		boolean sneaking, boolean jumpFirst)
+	{
+		Body[] path = new Body[MAX_LEAD + 1];
+		path[0] = start.copy();
+		for(int k = 1; k <= MAX_LEAD; k++)
+		{
+			Body b = path[k - 1].copy();
+			b.step(this, moveX, moveZ, sneaking, jumpFirst && k == 1);
+			path[k] = b;
+		}
+		return path;
+	}
+	
+	// ── Planning ─────────────────────────────────────────────────────────
+	
 	/**
 	 * Plans the aim for the frames until the next tick.
 	 *
 	 * @param tick
 	 *            a tick counter
-	 * @param x
-	 *            where this tick starts (your center)
-	 * @param vx
-	 *            your velocity of the last tick, before friction: vanilla's
-	 *            deltaMovement / {@link #FRICTION} (not the distance moved -
-	 *            sneaking at an edge cuts that short, the velocity not)
+	 * @param body
+	 *            your state at the start of this tick
+	 * @param cam
+	 *            the camera now, and how fast it turns ({@link #spring})
 	 * @param moveX
-	 *            the direction you walk in (unit), 0 when standing
+	 *            the direction your keys walk in (unit), 0 when not walking
+	 * @param jump
+	 *            whether you jump this tick
 	 * @param yaw
 	 *            the camera yaw that will be used
 	 * @return the pitch to aim with
 	 */
-	public double plan(long tick, double x, double z, double vx, double vz,
-		double moveX, double moveZ, double eyeAboveTop, double yaw,
-		double reach)
+	public double plan(long tick, Body body, Cam cam, double moveX,
+		double moveZ, boolean jump, double yaw, double reach)
 	{
-		double pitch = planPitch(tick, x, z, vx, vz, moveX, moveZ, eyeAboveTop,
-			yaw, reach);
-		lastYaw = Double.isNaN(rescueYaw) ? yaw : rescueYaw;
-		return pitch;
+		this.cam = cam;
+		return planPitch(tick, body, moveX, moveZ, jump, yaw, reach);
 	}
 	
-	private double planPitch(long tick, double x, double z, double vx,
-		double vz, double moveX, double moveZ, double eyeAboveTop, double yaw,
-		double reach)
+	private double planPitch(long tick, Body body, double moveX, double moveZ,
+		boolean jump, double yaw, double reach)
 	{
 		sneak = false;
 		rescueYaw = Double.NaN;
+		rescuing = false;
 		
-		// where you'll be at the start of the next ticks, walking...
-		double[][] walk = predict(x, z, vx, vz, moveX, moveZ, false);
+		// where you'll be at the start of the next ticks, walking on...
+		Body[] walk = predict(body, moveX, moveZ, false, jump);
+		horizon = jump || !body.onGround ? MAX_LEAD : LEAD;
 		int lost = 0;
-		for(int k = 1; k <= MAX_LEAD; k++)
-			if(!supported(walk[k][0], walk[k][1], PLAN_HALF_WIDTH))
+		for(int k = 1; k <= horizon; k++)
+			if(walk[k].needsSupport()
+				&& !supported(walk[k].x, walk[k].z, PLAN_HALF_WIDTH))
 			{
 				lost = k;
 				break;
@@ -442,10 +594,11 @@ public final class Godbridge
 		// any of the cells that would hold you where you'd lose support - or,
 		// when none of those touches a block yet (moving away from a block's
 		// corner), a stepping stone next to them first
-		List<int[]> targets = supportCells(walk[lost][0], walk[lost][1]);
+		Body end = walk[lost];
+		List<int[]> targets = supportCells(end.x, end.z);
 		boolean stepping = targets.isEmpty();
 		if(stepping)
-			targets = steppingStones(walk[lost][0], walk[lost][1], x, z);
+			targets = steppingStones(end.x, end.z, body.x, body.z);
 		if(targets.isEmpty())
 		{
 			committed = false;
@@ -457,12 +610,12 @@ public final class Godbridge
 		if(committed && tick < plannedTick
 			&& contains(targets, plannedX, plannedZ))
 		{
-			double[][] path = plannedSneaking
-				? predict(x, z, vx, vz, moveX, moveZ, true) : walk;
+			Body[] path = plannedSneaking
+				? predict(body, moveX, moveZ, true, false) : walk;
 			int k = (int)(plannedTick - tick);
-			if((plannedSneaking || k <= lost) && k <= MAX_LEAD
-				&& placesTarget(path[k], eyeAboveTop, plannedYaw, plannedPitch,
-					reach, targets) != null)
+			if((plannedSneaking || k <= lost) && k <= horizon
+				&& clickHits(path[k], k, plannedYaw, plannedPitch, reach,
+					targets) != null)
 			{
 				sneak = plannedSneaking;
 				rescueYaw = plannedYaw;
@@ -471,19 +624,20 @@ public final class Godbridge
 		}
 		committed = false;
 		
-		// a click while walking on (not for a stepping stone: it doesn't hold
-		// you where you'd walk to)...
-		Click best = stepping ? null
-			: search(tick, walk, lost, targets, eyeAboveTop, yaw, reach, x, z);
+		// a click while walking on (not for a stepping stone on the ground: it
+		// doesn't hold you where you'd walk to - in the air nothing has to
+		// hold you until you land, so there it can go in first)...
+		boolean inAir = jump || !body.onGround;
+		Click best =
+			stepping && !inAir ? null : search(walk, lost, targets, yaw, reach);
 		boolean sneaking = false;
 		
 		// ...or else sneak to the edge (vanilla keeps you on it) and click
 		// there, like a player ninja bridging
-		if(best == null)
+		if(best == null && !jump)
 		{
-			double[][] edge = predict(x, z, vx, vz, moveX, moveZ, true);
-			best = search(tick, edge, MAX_LEAD + 1, targets, eyeAboveTop, yaw,
-				reach, x, z);
+			Body[] edge = predict(body, moveX, moveZ, true, false);
+			best = search(edge, horizon + 1, targets, yaw, reach);
 			sneaking = true;
 		}
 		
@@ -492,13 +646,14 @@ public final class Godbridge
 			// Not even from the edge at this yaw: once the edge is close, sneak
 			// (vanilla keeps you on the block) and look straight at a face,
 			// the way anyone would. Further out, a window may still come.
-			if(lost > 2)
+			if(lost > 2 || jump)
 				return lastPitch;
 			sneak = true;
-			double[] look = rescueAim(x, z, targets, eyeAboveTop, reach);
+			double[] look = rescueAim(body, targets, reach);
 			if(look == null)
 				return lastPitch;
 			rescueYaw = look[0];
+			rescuing = true;
 			return lastPitch = look[1];
 		}
 		
@@ -522,9 +677,9 @@ public final class Godbridge
 	 *
 	 * @return {yaw, pitch}
 	 */
-	private double[] rescueAim(double x, double z, List<int[]> targets,
-		double eyeAboveTop, double reach)
+	private double[] rescueAim(Body body, List<int[]> targets, double reach)
 	{
+		double eye = body.eyeAboveTop();
 		double[] best = null;
 		double bestTurn = Double.MAX_VALUE;
 		for(int[] cell : targets)
@@ -532,16 +687,16 @@ public final class Godbridge
 			{
 				double px = face.x() + 0.5 + face.dx() * 0.5;
 				double pz = face.z() + 0.5 + face.dz() * 0.5;
-				double dx = px - x;
-				double dz = pz - z;
+				double dx = px - body.x;
+				double dz = pz - body.z;
 				// in front of the face
 				if(dx * face.dx() + dz * face.dz() >= -0.02)
 					continue;
 				
 				double yaw = Math.toDegrees(Math.atan2(-dx, dz));
-				double pitch = Math.toDegrees(
-					Math.atan2(eyeAboveTop + 0.35, Math.hypot(dx, dz)));
-				Face hit = raycast(x, z, eyeAboveTop, yaw, pitch, reach);
+				double pitch =
+					Math.toDegrees(Math.atan2(eye + 0.35, Math.hypot(dx, dz)));
+				Face hit = raycast(body.x, body.z, eye, yaw, pitch, reach);
 				if(hit == null || hit.targetX() != cell[0]
 					|| hit.targetZ() != cell[1])
 					continue;
@@ -576,83 +731,96 @@ public final class Godbridge
 		return new double[]{dx, dz};
 	}
 	
-	/** Tick start positions: [0] = now, [k] = in k ticks. */
-	private double[][] predict(double x, double z, double vx, double vz,
-		double moveX, double moveZ, boolean sneaking)
-	{
-		double accel = WALK_ACCEL * (sneaking ? SNEAK_FACTOR : 1);
-		double[][] path = new double[MAX_LEAD + 1][];
-		path[0] = new double[]{x, z};
-		for(int k = 1; k <= MAX_LEAD; k++)
-		{
-			vx = vx * FRICTION + moveX * accel;
-			vz = vz * FRICTION + moveZ * accel;
-			// sneaking: the step is cut short at the edge, the velocity isn't
-			double[] stepXZ =
-				sneaking ? protect(x, z, vx, vz) : new double[]{vx, vz};
-			x += stepXZ[0];
-			z += stepXZ[1];
-			path[k] = new double[]{x, z};
-		}
-		return path;
-	}
-	
 	/**
 	 * The best click on the way: a tick before support runs out (or, worse,
-	 * the one after, while your feet are still level), a pitch that lands
-	 * on a face placing one of the target cells.
+	 * that tick itself), with your feet not below the lane's top, a rotation
+	 * that lands on a face placing one of the target cells.
 	 */
-	private Click search(long tick, double[][] path, int lost,
-		List<int[]> targets, double eyeAboveTop, double yaw, double reach,
-		double x, double z)
+	private Click search(Body[] path, int lost, List<int[]> targets, double yaw,
+		double reach)
 	{
 		Click best = null;
-		for(int k = 1; k <= Math.min(MAX_LEAD, lost); k++)
+		for(int k = 1; k <= Math.min(horizon, lost); k++)
 		{
-			// The click needs this rotation in the frames before it AND in the
-			// one sent at the end of the tick before. One tick ahead, only the
-			// rotation already aimed for can do that, yaw and pitch: it stays.
-			// Further ahead, the (steered) yaw has time to be sent first.
-			double kYaw = k == 1 ? lastYaw : yaw;
-			if(Double.isNaN(kYaw))
-				continue;
-			List<Double> pitches = new ArrayList<>();
-			if(k == 1)
-				pitches.add(lastPitch);
-			else
-				for(int[] cell : targets)
-					for(Face face : sourceFaces(cell[0], cell[1]))
-						for(double p : pitchesFor(face, path[k][0], path[k][1],
-							eyeAboveTop, yaw))
-							pitches.add(p);
-						
-			for(double pitch : pitches)
+			Body b = path[k];
+			// the block would be inside you
+			if(b.h < -1e-4)
+				break;
+				
+			// Aim targets to try: the yaw to aim with and pitches that land
+			// on a face from there - and holding the camera where it is.
+			// Each is judged with the camera's real lag (clickHits).
+			List<double[]> aims = new ArrayList<>();
+			aims.add(new double[]{cam.yaw(), cam.pitch()});
+			for(int[] cell : targets)
+				for(Face face : sourceFaces(cell[0], cell[1]))
+					for(double p : pitchesFor(face, b.x, b.z, b.eyeAboveTop(),
+						yaw))
+						aims.add(new double[]{yaw, p});
+					
+			for(double[] aim : aims)
 			{
-				Face hit = placesTarget(path[k], eyeAboveTop, kYaw, pitch,
-					reach, targets);
+				Face hit = clickHits(b, k, aim[0], aim[1], reach, targets);
 				if(hit == null)
 					continue;
 					
 				// a click while still standing on a block, rather than in
 				// the last tick before falling; near the line rather than
-				// off to the side
-				double score = Math.abs(pitch - NOMINAL_PITCH) + 0.05 * k
+				// off to the side; little turning
+				double score = Math.abs(aim[1] - NOMINAL_PITCH) + 0.05 * k
 					+ (k == lost ? 3 : 0) + Math
 						.abs(lateral(hit.targetX() + 0.5, hit.targetZ() + 0.5));
 				if(best == null || score < best.score())
-					best = new Click(hit.targetX(), hit.targetZ(), k, kYaw,
-						pitch, score);
+					best = new Click(hit.targetX(), hit.targetZ(), k, aim[0],
+						aim[1], score);
 			}
 		}
 		return best;
 	}
 	
-	private Face placesTarget(double[] pos, double eyeAboveTop, double yaw,
-		double pitch, double reach, List<int[]> targets)
+	/**
+	 * Whether aiming at this target from now on gets a click in at tick k:
+	 * the camera (lagging behind, see {@link #spring}) must be on a face that
+	 * places one of the targets at tick k AND one tick before - that's the
+	 * rotation the server will already have.
+	 */
+	private Face clickHits(Body b, int k, double targetYaw, double targetPitch,
+		double reach, List<int[]> targets)
 	{
-		Face hit = raycast(pos[0], pos[1], eyeAboveTop, yaw, pitch, reach);
+		Cam now = cam.at(targetYaw, targetPitch, 0.05 * k);
+		Cam sent = cam.at(targetYaw, targetPitch, 0.05 * (k - 1));
+		Face hit = placesTarget(b, now.yaw(), now.pitch(), reach, targets);
+		if(hit == null)
+			return null;
+		Face sentHit =
+			raycast(b.x, b.z, b.eyeAboveTop(), sent.yaw(), sent.pitch(), reach);
+		return hit.equals(sentHit) ? hit : null;
+	}
+	
+	private Face placesTarget(Body b, double yaw, double pitch, double reach,
+		List<int[]> targets)
+	{
+		Face hit = raycast(b.x, b.z, b.eyeAboveTop(), yaw, pitch, reach);
 		return hit != null && contains(targets, hit.targetX(), hit.targetZ())
 			? hit : null;
+	}
+	
+	/**
+	 * The camera: where it points and how fast it turns (degrees per
+	 * second), following its aim target with the {@link #spring} smooth aim.
+	 */
+	public record Cam(double yaw, double pitch, double yawVel, double pitchVel)
+	{
+		/** Where it is after t seconds of following this target. */
+		public Cam at(double targetYaw, double targetPitch, double t)
+		{
+			if(t <= 0)
+				return this;
+			double[] y =
+				spring(yaw, yawVel, yaw + wrap(targetYaw - yaw), t, AIM_OMEGA);
+			double[] p = spring(pitch, pitchVel, targetPitch, t, AIM_OMEGA);
+			return new Cam(y[0], p[0], y[1], p[1]);
+		}
 	}
 	
 	private static boolean contains(List<int[]> cells, int x, int z)
@@ -661,6 +829,35 @@ public final class Godbridge
 			if(c[0] == x && c[1] == z)
 				return true;
 		return false;
+	}
+	
+	public double anchorX()
+	{
+		return anchorX;
+	}
+	
+	public double anchorZ()
+	{
+		return anchorZ;
+	}
+	
+	// ── Aim ─────────────────────────────────────────────────────────────
+	
+	/**
+	 * Smooth aim: one step of a critically damped spring toward the target
+	 * (no overshoot, no jerk when the target moves), exact for any frame
+	 * time. A 2 degree nudge settles in well under two ticks.
+	 *
+	 * @return {angle, velocity}
+	 */
+	public static double[] spring(double angle, double velocity, double target,
+		double dt, double omega)
+	{
+		double e = angle - target;
+		double c = velocity + omega * e;
+		double decay = Math.exp(-omega * dt);
+		return new double[]{target + (e + c * dt) * decay,
+			(velocity - omega * c * dt) * decay};
 	}
 	
 	// ── Stance and line ─────────────────────────────────────────────────
@@ -759,101 +956,161 @@ public final class Godbridge
 	}
 	
 	public record SimResult(boolean fell, double travelled, int placed,
-		int ticks, int sneakTicks, double minPitch, double maxPitch)
+		int ticks, int sneakTicks, int jumps, double minPitch, double maxPitch,
+		double maxAimSpeed)
 	{}
 	
+	/** Frames per tick the simulated camera is turned in (60 fps). */
+	private static final int SIM_FRAMES = 3;
+	
 	/**
-	 * Walks a bridge tick by tick with vanilla's ground movement (walking
-	 * acceleration and friction; sneaking at 0.3x with edge protection),
-	 * the feet staying level one tick past the last supported position, and
-	 * a click only where the crosshair really is - with the rotation sent at
-	 * the end of the tick before hitting the same face. The camera is
-	 * assumed to reach each planned rotation within a tick.
+	 * Walks a bridge tick by tick: {@link Body}'s vanilla movement, a camera
+	 * that follows the plan with the {@link #spring} smooth aim (three frames
+	 * per tick), a click only where the crosshair really is and the rotation
+	 * sent at the end of the tick before hits the same face, and optionally
+	 * a godbridger's jump every 8-10 blocks (when {@link #jumpSafe}).
 	 *
 	 * @param solid
 	 *            the lane's blocks (keys from {@link #key}); gets the placed
 	 *            ones added
+	 * @param jumpFirst
+	 *            jump in the first tick
+	 * @param jumps
+	 *            randomness for the rhythm jumps, null for none
 	 */
 	public static SimResult simulate(Set<Long> solid, double bridgeYaw,
-		double stanceYaw, double anchorX, double anchorZ, double x, double z,
-		double vx, double vz, double eyeAboveTop, double reach, double distance,
-		int maxTicks)
+		double stanceYaw, double anchorX, double anchorZ, Body body,
+		double camYaw, double camPitch, double reach, double distance,
+		int maxTicks, boolean jumpFirst, Random jumps)
 	{
 		Godbridge bridge =
 			new Godbridge((cx, cz) -> solid.contains(key(cx, cz)), bridgeYaw,
 				anchorX, anchorZ);
-		double startAlong = bridge.along(x, z);
-		double yawNow = stanceYaw;
-		double yawSent = stanceYaw;
-		double pitchNow = NOMINAL_PITCH;
+		Body b = body.copy();
+		double startAlong = bridge.along(b.x, b.z);
+		double yawNow = camYaw;
+		double pitchNow = camPitch;
+		double yawSent = yawNow;
 		double pitchSent = pitchNow;
+		double velYaw = 0;
+		double velPitch = 0;
 		double min = pitchNow;
 		double max = pitchNow;
+		double maxSpeed = 0;
 		int placed = 0;
 		int sneakTicks = 0;
+		int jumpCount = 0;
+		int sinceJump = 0;
+		int sinceSneak = 99;
+		int jumpAt = jumps == null ? 0 : 8 + jumps.nextInt(3);
 		
 		int tick = 0;
 		for(; tick < maxTicks; tick++)
 		{
-			if(bridge.along(x, z) - startAlong >= distance)
+			if(bridge.along(b.x, b.z) - startAlong >= distance && b.onGround)
 				break;
 			
 			// click what the crosshair is on (and the sent rotation too)
-			Face now =
-				bridge.raycast(x, z, eyeAboveTop, yawNow, pitchNow, reach);
+			double eye = b.eyeAboveTop();
+			Face now = bridge.raycast(b.x, b.z, eye, yawNow, pitchNow, reach);
 			Face sent =
-				bridge.raycast(x, z, eyeAboveTop, yawSent, pitchSent, reach);
-			if(now != null && now.equals(sent)
+				bridge.raycast(b.x, b.z, eye, yawSent, pitchSent, reach);
+			boolean clicked = false;
+			if(b.h >= -1e-4 && now != null && now.equals(sent)
 				&& !solid.contains(key(now.targetX(), now.targetZ()))
-				&& bridge.isBridgeCell(now.targetX(), now.targetZ(), x, z))
+				&& bridge.isBridgeCell(now.targetX(), now.targetZ(), b.x, b.z))
 			{
 				solid.add(key(now.targetX(), now.targetZ()));
 				placed++;
+				sinceJump++;
+				clicked = true;
 			}
 			
-			// Vertical movement is resolved first, at where the tick started
-			// and
-			// after its click: nothing under you there and you start to fall.
-			if(!bridge.supported(x, z))
-				return new SimResult(true, bridge.along(x, z) - startAlong,
-					placed, tick, sneakTicks, min, max);
+			// falling below the lane: nothing held you where the tick started
+			if(b.needsSupport() && !bridge.supported(b.x, b.z))
+				return new SimResult(true, bridge.along(b.x, b.z) - startAlong,
+					placed, tick, sneakTicks, jumpCount, min, max, maxSpeed);
 				
-			// aim for the next tick
 			// keys: the one of the eight directions relative to the camera
 			// closest to the bridge direction, like ScaffoldWalk's input
 			double moveRad = Math.toRadians(
 				yawNow + Math.round(wrap(bridgeYaw - yawNow) / 45) * 45);
 			double moveX = -Math.sin(moveRad);
 			double moveZ = Math.cos(moveRad);
-			double pitchTarget =
-				bridge.plan(tick, x, z, vx, vz, moveX, moveZ, eyeAboveTop,
-					stanceYaw + yawCorrection(bridge.lateral(x, z)), reach);
+			double steerYaw =
+				stanceYaw + yawCorrection(bridge.lateral(b.x, b.z));
+			
+			// a godbridger's jump: right after a block, every 8-10 of them
+			boolean jump = tick == 0 && jumpFirst;
+			if(jumps != null && clicked && sinceJump >= jumpAt && b.onGround
+				&& sinceSneak > 6 && jumpSafe(solid, bridgeYaw, stanceYaw,
+					anchorX, anchorZ, b, yawNow, pitchNow, reach))
+			{
+				jump = true;
+				sinceJump = 0;
+				jumpAt = 8 + jumps.nextInt(3);
+			}
+			
+			double pitchTarget = bridge.plan(tick, b,
+				new Cam(yawNow, pitchNow, velYaw, velPitch), moveX, moveZ, jump,
+				steerYaw, reach);
 			boolean sneak = bridge.shouldSneak();
-			double yawTarget = Double.isNaN(bridge.yawOverride())
-				? stanceYaw + yawCorrection(bridge.lateral(x, z))
+			if(jump && (sneak || !bridge.hasPlan()))
+			{
+				// no jumping off a sneak plan, nor without a click that
+				// catches the landing
+				jump = false;
+				pitchTarget = bridge.plan(tick, b,
+					new Cam(yawNow, pitchNow, velYaw, velPitch), moveX, moveZ,
+					false, steerYaw, reach);
+				sneak = bridge.shouldSneak();
+			}
+			if(jump)
+				jumpCount++;
+			double yawTarget = Double.isNaN(bridge.yawOverride()) ? steerYaw
 				: bridge.yawOverride();
 			if(sneak)
 				sneakTicks++;
+			sinceSneak = sneak || bridge.isRescuing() ? 0 : sinceSneak + 1;
 			
-			// move
-			double accel = WALK_ACCEL * (sneak ? SNEAK_FACTOR : 1);
-			vx = vx * FRICTION + moveX * accel;
-			vz = vz * FRICTION + moveZ * accel;
-			double[] stepXZ =
-				sneak ? bridge.protect(x, z, vx, vz) : new double[]{vx, vz};
-			x += stepXZ[0];
-			z += stepXZ[1];
+			b.step(bridge, moveX, moveZ, sneak, jump);
 			
+			// the camera follows during the frames until the next tick
 			yawSent = yawNow;
 			pitchSent = pitchNow;
-			yawNow = yawTarget;
-			pitchNow = pitchTarget;
+			double target = yawNow + wrap(yawTarget - yawNow);
+			for(int f = 0; f < SIM_FRAMES; f++)
+			{
+				double dt = 0.05 / SIM_FRAMES;
+				double[] y = spring(yawNow, velYaw, target, dt, AIM_OMEGA);
+				double[] p =
+					spring(pitchNow, velPitch, pitchTarget, dt, AIM_OMEGA);
+				yawNow = y[0];
+				velYaw = y[1];
+				pitchNow = p[0];
+				velPitch = p[1];
+				maxSpeed = Math.max(maxSpeed, Math.hypot(velYaw, velPitch));
+			}
 			min = Math.min(min, pitchNow);
 			max = Math.max(max, pitchNow);
 		}
 		
-		return new SimResult(false, bridge.along(x, z) - startAlong, placed,
-			tick, sneakTicks, min, max);
+		return new SimResult(false, bridge.along(b.x, b.z) - startAlong, placed,
+			tick, sneakTicks, jumpCount, min, max, maxSpeed);
+	}
+	
+	/**
+	 * Whether jumping now works out: a short simulation from here, jumping
+	 * right away - landing on blocks placed in the air, without falling and
+	 * with at most a moment of sneaking to get back into the rhythm.
+	 */
+	public static boolean jumpSafe(Set<Long> solid, double bridgeYaw,
+		double stanceYaw, double anchorX, double anchorZ, Body body,
+		double camYaw, double camPitch, double reach)
+	{
+		SimResult r = simulate(new HashSet<>(solid), bridgeYaw, stanceYaw,
+			anchorX, anchorZ, body, camYaw, camPitch, reach, 3, 40, true, null);
+		return !r.fell() && r.sneakTicks() <= 3;
 	}
 	
 	/**
@@ -862,15 +1119,16 @@ public final class Godbridge
 	 * doesn't fall and sneaks least (then the shorter turn).
 	 */
 	public static double chooseStance(Set<Long> solid, double bridgeYaw,
-		double anchorX, double anchorZ, double x, double z, double vx,
-		double vz, double eyeAboveTop, double reach, double currentYaw)
+		double anchorX, double anchorZ, Body body, double reach,
+		double currentYaw)
 	{
 		double best = Double.NaN;
 		double bestScore = Double.MAX_VALUE;
 		for(double yaw : stanceCandidates(bridgeYaw))
 		{
-			SimResult r = simulate(new HashSet<>(solid), bridgeYaw, yaw,
-				anchorX, anchorZ, x, z, vx, vz, eyeAboveTop, reach, 20, 300);
+			SimResult r =
+				simulate(new HashSet<>(solid), bridgeYaw, yaw, anchorX, anchorZ,
+					body, yaw, NOMINAL_PITCH, reach, 20, 300, false, null);
 			double score = (r.fell() ? 1000 : 0) + r.sneakTicks()
 				+ Math.abs(wrap(yaw - currentYaw)) / 1000;
 			if(score < bestScore)

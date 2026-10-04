@@ -41,12 +41,21 @@ class GodbridgeTest
 	
 	static SimResult walk(double bridgeYaw, double x, double z, double distance)
 	{
+		return walk(bridgeYaw, x, z, distance, null);
+	}
+	
+	/** With {@code jumps}: a godbridger's jump every 8-10 blocks. */
+	static SimResult walk(double bridgeYaw, double x, double z, double distance,
+		Random jumps)
+	{
 		Set<Long> solid = platform(x, z);
 		double[] anchor = Godbridge.chooseAnchor(bridgeYaw, x, z);
+		Godbridge.Body body = Godbridge.Body.standing(x, z);
 		double stance = Godbridge.chooseStance(solid, bridgeYaw, anchor[0],
-			anchor[1], x, z, 0, 0, EYE, REACH, bridgeYaw);
+			anchor[1], body, REACH, bridgeYaw);
 		return Godbridge.simulate(solid, bridgeYaw, stance, anchor[0],
-			anchor[1], x, z, 0, 0, EYE, REACH, distance, (int)(distance * 40));
+			anchor[1], body, stance, Godbridge.NOMINAL_PITCH, REACH, distance,
+			(int)(distance * 40), false, jumps);
 	}
 	
 	@Test
@@ -125,8 +134,8 @@ class GodbridgeTest
 		for(int i = 0; i < n; i++)
 		{
 			double yaw = random.nextInt(360);
-			Godbridge.chooseStance(platform(0.5, 0.5), yaw, 0.5, 0.5, 0.5, 0.5,
-				0, 0, EYE, REACH, yaw);
+			Godbridge.chooseStance(platform(0.5, 0.5), yaw, 0.5, 0.5,
+				Godbridge.Body.standing(0.5, 0.5), REACH, yaw);
 		}
 		double stanceMs = (System.nanoTime() - start) / 1e6 / n;
 		
@@ -143,5 +152,48 @@ class GodbridgeTest
 			tickMs);
 		assertTrue(stanceMs < 50, "stance choice " + stanceMs + " ms");
 		assertTrue(tickMs < 1, "planning " + tickMs + " ms per tick");
+	}
+	
+	@Test
+	void jumpsLikeAGodbridger()
+	{
+		// a jump every 8-10 blocks, the next blocks placed in the air - in
+		// every direction, and still never falling
+		Random random = new Random(4);
+		int runs = 0;
+		int falls = 0;
+		long jumps = 0;
+		long placed = 0;
+		long ticks = 0;
+		long sneakTicks = 0;
+		double maxAim = 0;
+		StringBuilder fallList = new StringBuilder();
+		for(int yaw = 0; yaw < 360; yaw += 3)
+			for(int i = 0; i < 2; i++)
+			{
+				SimResult r = walk(yaw, 0.2 + random.nextDouble() * 0.6,
+					0.2 + random.nextDouble() * 0.6, 40, random);
+				runs++;
+				jumps += r.jumps();
+				placed += r.placed();
+				ticks += r.ticks();
+				sneakTicks += r.sneakTicks();
+				maxAim = Math.max(maxAim, r.maxAimSpeed());
+				if(r.fell())
+				{
+					falls++;
+					if(fallList.length() < 400)
+						fallList.append(
+							String.format(" %d(%.1f)", yaw, r.travelled()));
+				}
+			}
+		
+		System.out.printf(
+			"GODBRIDGE jumping: %d runs, %d falls%s; a jump every %.1f blocks;"
+				+ " sneaking %.1f%%; aim up to %.0f deg/s%n",
+			runs, falls, fallList, placed / (double)Math.max(1, jumps),
+			100.0 * sneakTicks / ticks, maxAim);
+		assertEquals(0, falls, "fell at:" + fallList);
+		assertTrue(jumps > runs * 2, "only " + jumps + " jumps");
 	}
 }

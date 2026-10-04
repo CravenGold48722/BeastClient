@@ -8,6 +8,8 @@
 package net.wurstclient.hacks;
 
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 
@@ -58,14 +60,17 @@ public final class ScaffoldWalkHack extends Hack
 	private final FaceTargetSetting faceTarget =
 		FaceTargetSetting.withPacketSpam(WText
 			.literal("How ScaffoldWalk faces the block it places against.\n\n"
-				+ "§lClient-side§r godbridges, the way players do it: walk"
-				+ " toward where you want the bridge and ScaffoldWalk turns"
-				+ " around to face back along it at 45 degrees, looks down"
-				+ " at about 75 degrees and walks backward with §lS§r plus"
-				+ " §lA§r or §lD§r - your keys keep meaning the direction you"
-				+ " were facing. It clicks the side of the last block the"
-				+ " moment the crosshair is on it, no sneaking, and turns"
-				+ " back to where you were looking when you stop.\n\n"
+				+ "§lClient-side§r godbridges in whatever direction you walk,"
+				+ " the way players do it: it turns around to face back along"
+				+ " the bridge and walks backward - straight bridges at 45"
+				+ " degrees with §lS§r plus §lA§r or §lD§r, diagonals"
+				+ " straight back with §lS§r, other angles as a staircase -"
+				+ " looking down at about 75 degrees and clicking the side of"
+				+ " a block the moment the crosshair is on it. Your keys keep"
+				+ " meaning the direction you were facing, and it turns back"
+				+ " when you stop. Where no click works in time it sneaks to"
+				+ " the edge (or looks straight at the block) instead of"
+				+ " letting you fall.\n\n"
 				+ "The other modes place instantly with a faked or no"
 				+ " rotation."),
 			FaceTarget.CLIENT);
@@ -81,31 +86,37 @@ public final class ScaffoldWalkHack extends Hack
 			+ " afterwards.",
 		900, 180, 1800, 30, ValueDisplay.DEGREES.withSuffix("/s"));
 	
+	/** Bridge directions this close to straight or diagonal snap to it. */
+	private static final double SNAP_DEGREES = 4;
+	
 	/**
-	 * Your center this far off the lane's middle keeps the clicks clear of
-	 * the block's side corner.
+	 * Camera corrections smaller than this (degrees) go straight to the target
+	 * instead of easing in and out.
 	 */
-	private static final double LANE_OFFSET = 0.15;
+	private static final double SMALL_TURN = 12;
+	
+	/** How far around you the stance choice looks at the blocks. */
+	private static final int SNAPSHOT_RADIUS = 8;
 	
 	private final CameraAim cameraAim = new CameraAim();
-	private final Godbridge.Planner planner = new Godbridge.Planner();
 	private final Object bridgeTurn = new Object();
 	private final Object returnTurn = new Object();
 	
 	// godbridge state
 	private boolean bridging;
-	private Direction bridgeDir;
+	private Godbridge planner;
+	private double bridgeYaw;
+	private double stanceYaw;
 	private int laneY;
-	/** +1: facing back to the right of the bridge (S+D), -1: left (S+A). */
-	private int side;
 	/** 1 = along the bridge, -1 = back toward its start, 0 = standing. */
 	private int moving;
+	private boolean sneaking;
+	/** Whether the turn-around at the start is done. */
+	private boolean walking;
 	private int idleTicks;
+	private long tick;
 	private float targetYaw;
 	private float targetPitch;
-	private double nominalPitch;
-	/** Where you were at the start of the last tick, to measure your step. */
-	private Vec3 lastTickPos;
 	
 	// where you were looking before, to turn back to
 	private float origYaw;
@@ -131,6 +142,7 @@ public final class ScaffoldWalkHack extends Hack
 	{
 		bridging = false;
 		returning = false;
+		sneaking = false;
 		prevSlot = -1;
 		slotRestorePending = false;
 		cameraAim.reset();
@@ -147,6 +159,7 @@ public final class ScaffoldWalkHack extends Hack
 		EVENTS.remove(MouseUpdateListener.class, this);
 		bridging = false;
 		returning = false;
+		sneaking = false;
 		cameraAim.reset();
 		if(prevSlot != -1)
 			restoreSlot();
@@ -176,36 +189,20 @@ public final class ScaffoldWalkHack extends Hack
 	{
 		LocalPlayer player = MC.player;
 		Vec2 intent = getPhysicalIntent();
+		tick++;
 		
-		if(!bridging)
+		if(!bridging && !tryStartBridge(intent))
 		{
-			if(MC.screen != null || intent.lengthSquared() < 1e-4
-				|| !player.onGround() || MC.options.keyShift.isDown())
-				return;
-				
-			// the direction you're walking in, rounded to the nearest of the
-			// four bridge directions (while still turning back from the last
-			// bridge, your keys mean the direction you faced before it)
-			float keysYaw = returning ? origYaw : player.getYRot();
-			Direction dir = Direction.fromYRot(
-				keysYaw - Math.toDegrees(Math.atan2(intent.x, intent.y)));
-			// diagonal keys would end it again right away
-			Vec3 walk = toWorld(intent, keysYaw);
-			if(Math.abs(walk.dot(lateralVec(dir))) > 0.5)
-				return;
-			int lane = BlockPos.containing(player.position()).below().getY();
-			if(findGap(dir, lane, 2.5) == null || findBlockSlot() == -1)
-				return;
-			
-			startBridge(dir, lane);
+			return;
 		}
 		
 		// you sneaked, opened something, fell off, or walk sideways off the
-		// lane: hand the controls back
+		// line: hand the controls back
 		Vec3 world = toWorld(intent, origYaw);
-		Vec3 d = dirVec(bridgeDir);
-		double along = world.dot(d);
-		double across = Math.abs(world.dot(lateralVec(bridgeDir)));
+		Vec3 dir = Vec3.directionFromRotation(0, (float)bridgeYaw);
+		double along = world.dot(dir);
+		double across = Math.abs(
+			world.dot(Vec3.directionFromRotation(0, (float)bridgeYaw + 90)));
 		if(MC.screen != null || MC.options.keyShift.isDown()
 			|| player.getY() < laneY + 1 - 0.6 || across > 0.5)
 		{
@@ -223,50 +220,102 @@ public final class ScaffoldWalkHack extends Hack
 			idleTicks = 0;
 			
 		// Turn around first, then walk - like a player. Walking during the
-		// turn could take you over the edge before the aim is there.
-		boolean turned =
-			Math.abs(Mth.wrapDegrees(player.getYRot() - targetYaw)) < 8
-				&& Math.abs(player.getXRot() - targetPitch) < 8;
-		moving = turned ? wanted : 0;
+		// turn could take you over the edge before the aim is there. (Only at
+		// the start: later turns, like looking straight at a block, happen
+		// while the planner keeps you sneaking on the edge.)
+		if(!walking)
+			walking =
+				Math.abs(Mth.wrapDegrees(player.getYRot() - targetYaw)) < 8
+					&& Math.abs(player.getXRot() - targetPitch) < 8;
+		moving = walking ? wanted : 0;
 		
 		// click first (with the aim from before), then aim for the next one
-		BlockPos gap = findGap(bridgeDir, laneY, 1.5);
-		if(gap != null && ensureBlockSlot())
-			tryPlace(gap);
-		
-		updateAim(findGap(bridgeDir, laneY, 1.5));
-		lastTickPos = player.position();
+		if(ensureBlockSlot())
+			tryPlace();
+		updateAim();
 	}
 	
-	private void startBridge(Direction dir, int lane)
+	private boolean tryStartBridge(Vec2 intent)
 	{
 		LocalPlayer player = MC.player;
+		if(MC.screen != null || intent.lengthSquared() < 1e-4
+			|| !player.onGround() || MC.options.keyShift.isDown())
+			return false;
+			
+		// the direction you're walking in (while still turning back from
+		// the last bridge, your keys mean the direction you faced before)
+		float keysYaw = returning ? origYaw : player.getYRot();
+		double yaw = keysYaw - Math.toDegrees(Math.atan2(intent.x, intent.y));
+		// nearly straight or diagonal: exactly that, a cleaner bridge
+		double snapped = Math.round(yaw / 45) * 45;
+		if(Math.abs(Mth.wrapDegrees(yaw - snapped)) <= SNAP_DEGREES)
+			yaw = snapped;
+		
+		int lane = BlockPos.containing(player.position()).below().getY();
+		Vec3 pos = player.position();
+		double[] anchor = Godbridge.chooseAnchor(yaw, pos.x, pos.z);
+		Godbridge bridge =
+			new Godbridge(laneOf(lane), yaw, anchor[0], anchor[1]);
+		
+		// only with an edge coming up, and blocks to bridge with
+		if(!edgeAhead(bridge, pos, yaw, 2.5) || findBlockSlot() == -1)
+			return false;
+		
+		Vec3 velocity = player.getDeltaMovement().scale(1 / Godbridge.FRICTION);
+		double eyeAboveTop = player.getEyeY() - (lane + 1);
+		stanceYaw = Godbridge.chooseStance(snapshot(lane, pos), yaw, anchor[0],
+			anchor[1], pos.x, pos.z, velocity.x, velocity.z, eyeAboveTop,
+			player.blockInteractionRange(), player.getYRot());
+		if(Double.isNaN(stanceYaw))
+			return false;
+		
 		bridging = true;
-		bridgeDir = dir;
+		planner = bridge;
+		bridgeYaw = yaw;
 		laneY = lane;
 		idleTicks = 0;
-		lastTickPos = null;
-		planner.reset();
 		moving = 0;
+		sneaking = false;
+		walking = false;
 		if(!returning)
 		{
 			origYaw = player.getYRot();
 			origPitch = player.getXRot();
 		}
 		returning = false;
-		
-		// face back along the bridge at 45 degrees, to whichever side is the
-		// shorter turn
-		float back = dir.toYRot() + 180;
-		float right = back + 45;
-		float left = back - 45;
-		side = Math.abs(Mth.wrapDegrees(right - player.getYRot())) <= Math
-			.abs(Mth.wrapDegrees(left - player.getYRot())) ? 1 : -1;
-		
-		// everyone holds a slightly different angle
-		nominalPitch = Godbridge.NOMINAL_PITCH + (Math.random() - 0.5) * 0.6;
-		targetYaw = back + 45 * side;
-		targetPitch = (float)nominalPitch;
+		targetYaw = (float)stanceYaw;
+		targetPitch = (float)Godbridge.NOMINAL_PITCH;
+		return true;
+	}
+	
+	private boolean edgeAhead(Godbridge bridge, Vec3 pos, double yaw,
+		double distance)
+	{
+		Vec3 dir = Vec3.directionFromRotation(0, (float)yaw);
+		for(double d = 0; d <= distance; d += 0.1)
+			if(!bridge.supported(pos.x + dir.x * d, pos.z + dir.z * d))
+				return true;
+		return false;
+	}
+	
+	private Godbridge.Lane laneOf(int lane)
+	{
+		return (x, z) -> !BlockUtils.getState(new BlockPos(x, lane, z))
+			.canBeReplaced();
+	}
+	
+	/** The lane's blocks around you, for simulating the stances. */
+	private Set<Long> snapshot(int lane, Vec3 pos)
+	{
+		Set<Long> solid = new HashSet<>();
+		int px = Mth.floor(pos.x);
+		int pz = Mth.floor(pos.z);
+		Godbridge.Lane real = laneOf(lane);
+		for(int x = px - SNAPSHOT_RADIUS; x <= px + SNAPSHOT_RADIUS; x++)
+			for(int z = pz - SNAPSHOT_RADIUS; z <= pz + SNAPSHOT_RADIUS; z++)
+				if(real.isSolid(x, z))
+					solid.add(Godbridge.key(x, z));
+		return solid;
 	}
 	
 	private void endBridge()
@@ -275,90 +324,103 @@ public final class ScaffoldWalkHack extends Hack
 			return;
 		
 		bridging = false;
+		planner = null;
 		moving = 0;
+		sneaking = false;
 		returning = true;
 		slotRestorePending = prevSlot != -1;
 	}
 	
 	/**
-	 * Picks this tick's aim: back along the bridge at 45 degrees (nudged a
-	 * little to keep you in the lane), and the pitch that lands the next
-	 * click inside the window - see {@link Godbridge}.
+	 * Picks this tick's aim with the planner: the stance, nudged a little to
+	 * stay on the line, and the pitch that lands the next click inside its
+	 * window - see {@link Godbridge}.
 	 */
-	private void updateAim(BlockPos gap)
+	private void updateAim()
 	{
 		LocalPlayer player = MC.player;
-		Vec3 d = dirVec(bridgeDir);
-		Vec3 e = lateralVec(bridgeDir);
-		float baseYaw = bridgeDir.toYRot() + 180 + 45 * side;
-		Vec3 look = Vec3.directionFromRotation(0, baseYaw);
+		Vec3 pos = player.position();
 		
-		// stay a little to the side the crosshair moves away from, so the
-		// clicks land on the side face, not its corner
-		BlockPos column = gap != null ? gap.relative(bridgeDir.getOpposite())
-			: BlockPos.containing(player.position()).below();
-		Vec3 center = Vec3.atCenterOf(column);
-		double offset = player.position().subtract(center).dot(e);
-		double wanted = -LANE_OFFSET * Math.signum(look.dot(e));
-		float correction =
-			(float)Mth.clamp((wanted - offset) * 20, -3, 3) * moving;
-		targetYaw = baseYaw + correction;
+		// steering back onto the line (the other way round walking back)
+		double lateral = planner.lateral(pos.x, pos.z);
+		double correction =
+			Godbridge.yawCorrection(moving >= 0 ? lateral : -lateral);
+		// (kept when you let go: a yaw change spoils a click that's due)
+		double planYaw = stanceYaw + correction;
 		
-		if(gap == null || moving <= 0)
+		// the real velocity, not the step: sneaking at an edge cuts the step
+		// short but keeps the momentum
+		Vec3 velocity = player.getDeltaMovement().scale(1 / Godbridge.FRICTION);
+		
+		// Stopped and not sliding any more (or walking back along the
+		// bridge): nothing to plan. Still sliding after letting go, though,
+		// the slide can take you over the edge - keep planning, with no keys.
+		boolean sliding = moving == 0 && velocity.horizontalDistance() > 0.005;
+		if(moving < 0 || moving == 0 && !sliding)
 		{
-			targetPitch = (float)nominalPitch;
+			planner.reset();
+			sneaking = false;
+			targetYaw = (float)planYaw;
+			targetPitch = (float)Godbridge.NOMINAL_PITCH;
 			return;
 		}
 		
-		// past: how far your center is past the last block's side face
-		Vec3 last = Vec3.atCenterOf(gap.relative(bridgeDir.getOpposite()));
-		double past = player.position().subtract(last).dot(d) - 0.5;
-		// the last tick's actual step (the stored velocity is after friction,
-		// about half of it; xo is already reset to the current position here)
-		double speed = lastTickPos == null ? 0
-			: Math.max(player.position().subtract(lastTickPos).dot(d), 0);
+		// where the keys will take you: the one of the eight key directions
+		// relative to the camera that's closest to the bridge direction
+		double cameraYaw = player.getYRot();
+		double moveYaw = cameraYaw
+			+ Math.round(Mth.wrapDegrees(bridgeYaw - cameraYaw) / 45) * 45;
+		Vec3 move =
+			sliding ? Vec3.ZERO : Vec3.directionFromRotation(0, (float)moveYaw);
 		double eyeAboveTop = player.getEyeY() - (laneY + 1);
-		double horizontal = -Vec3.directionFromRotation(0, targetYaw).dot(d);
 		
-		targetPitch = (float)planner.pitch(past, speed, eyeAboveTop, horizontal,
-			nominalPitch);
+		double pitch =
+			planner.plan(tick, pos.x, pos.z, velocity.x, velocity.z, move.x,
+				move.z, eyeAboveTop, planYaw, player.blockInteractionRange());
+		sneaking = planner.shouldSneak();
+		double override = planner.yawOverride();
+		targetYaw = (float)(Double.isNaN(override) ? planYaw : override);
+		targetPitch = (float)pitch;
 	}
 	
 	/**
 	 * Clicks what the crosshair is really on, like a player spam-clicking:
-	 * only when it's on the last block's side face (with the rotation the
-	 * server already has, too - the click goes out before this tick's
-	 * movement packet), the spot is free and your feet are still level with
-	 * the bridge.
+	 * only when it's on the side of a block of the lane, the spot behind it
+	 * is free and part of the bridge, your feet are still level with the
+	 * bridge, and the rotation the server already has hits the same face
+	 * (the click goes out before this tick's movement packet).
 	 */
-	private void tryPlace(BlockPos gap)
+	private void tryPlace()
 	{
 		LocalPlayer player = MC.player;
-		if(!BlockUtils.getState(gap).canBeReplaced())
+		BlockHitResult now =
+			raycast(new Rotation(player.getYRot(), player.getXRot()));
+		BlockHitResult sent =
+			raycast(new Rotation(player.yRotLast, player.xRotLast));
+		if(now == null || now.getType() != HitResult.Type.BLOCK || sent == null
+			|| sent.getType() != HitResult.Type.BLOCK
+			|| !now.getBlockPos().equals(sent.getBlockPos())
+			|| now.getDirection() != sent.getDirection())
+			return;
+		
+		Direction face = now.getDirection();
+		BlockPos clicked = now.getBlockPos();
+		if(face.getAxis() == Direction.Axis.Y || clicked.getY() != laneY)
+			return;
+		
+		BlockPos target = clicked.relative(face);
+		Vec3 pos = player.position();
+		if(!BlockUtils.getState(target).canBeReplaced() || !planner
+			.isBridgeCell(target.getX(), target.getZ(), pos.x, pos.z))
 			return;
 			
 		// your feet already below the bridge's top: the block would be
 		// inside you
 		if(player.getBoundingBox().minY < laneY + 1 - 1e-4
-			&& player.getBoundingBox().intersects(new AABB(gap)))
-			return;
-		
-		BlockPos last = gap.relative(bridgeDir.getOpposite());
-		BlockHitResult now =
-			raycast(new Rotation(player.getYRot(), player.getXRot()));
-		BlockHitResult sent =
-			raycast(new Rotation(player.yRotLast, player.xRotLast));
-		if(!isOnFace(now, last) || !isOnFace(sent, last))
+			&& player.getBoundingBox().intersects(new AABB(target)))
 			return;
 		
 		InteractionSimulator.rightClickBlock(now, InteractionHand.MAIN_HAND);
-	}
-	
-	private boolean isOnFace(BlockHitResult hit, BlockPos last)
-	{
-		return hit != null && hit.getType() == HitResult.Type.BLOCK
-			&& hit.getBlockPos().equals(last)
-			&& hit.getDirection() == bridgeDir;
 	}
 	
 	private BlockHitResult raycast(Rotation rotation)
@@ -371,32 +433,6 @@ public final class ScaffoldWalkHack extends Hack
 			ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
 	}
 	
-	/**
-	 * The first free spot on the lane in front of you (within
-	 * {@code reach} blocks of your center), with a block behind it to click
-	 * on. Null when there's nothing to bridge.
-	 */
-	private BlockPos findGap(Direction dir, int lane, double reach)
-	{
-		Vec3 pos = MC.player.position();
-		BlockPos start = BlockPos.containing(pos.x, lane, pos.z);
-		for(int i = 0; i <= Math.ceil(reach); i++)
-		{
-			BlockPos spot = start.relative(dir, i);
-			if(!BlockUtils.getState(spot).canBeReplaced())
-				continue;
-			
-			// too far ahead to matter yet
-			Vec3 spotCenter = Vec3.atCenterOf(spot);
-			if(spotCenter.subtract(pos).dot(dirVec(dir)) - 0.5 > reach)
-				return null;
-			
-			BlockPos behind = spot.relative(dir.getOpposite());
-			return BlockUtils.canBeClicked(behind) ? spot : null;
-		}
-		return null;
-	}
-	
 	@Override
 	public void onRender(PoseStack matrixStack, float partialTicks)
 	{
@@ -407,9 +443,17 @@ public final class ScaffoldWalkHack extends Hack
 		boolean humanize = humanizeAim.isChecked();
 		if(bridging)
 		{
+			// Turning around (or to look at a block) is a hand on a mouse,
+			// easing in and out. The pitch nudges between blocks are small,
+			// quick corrections that must land within a tick - the click
+			// needs the rotation already sent to be on the face too, and the
+			// humanized ease-out took 4+ ticks for a few degrees.
+			boolean small = Math.abs(
+				Mth.wrapDegrees(MC.player.getYRot() - targetYaw)) < SMALL_TURN
+				&& Math.abs(MC.player.getXRot() - targetPitch) < SMALL_TURN;
 			cameraAim.turnCamera(bridgeTurn,
-				new Rotation(targetYaw, targetPitch), new double[2], humanize,
-				speed);
+				new Rotation(targetYaw, targetPitch), new double[2],
+				humanize && !small, speed);
 			return;
 		}
 		
@@ -452,9 +496,9 @@ public final class ScaffoldWalkHack extends Hack
 	 * Called from KeyboardInputMixin after vanilla has read the movement
 	 * keys: while bridging (and turning back), your keys keep meaning the
 	 * direction you were facing before. They become the keys that walk that
-	 * way with the camera where it is now - S plus A or D while bridging,
-	 * like a player godbridging - and those are also the keys the server
-	 * sees.
+	 * way with the camera where it is now - S plus A or D on a straight
+	 * bridge, S on a diagonal, like a player godbridging - and those are
+	 * also the keys the server sees. Sneaking when the planner says so.
 	 *
 	 * @return the input to use, or null to leave vanilla's alone
 	 */
@@ -465,13 +509,14 @@ public final class ScaffoldWalkHack extends Hack
 		
 		Vec3 world;
 		if(bridging)
-			world = dirVec(bridgeDir).scale(moving);
+			world =
+				Vec3.directionFromRotation(0, (float)bridgeYaw).scale(moving);
 		else
 			world = toWorld(getPhysicalIntent(), origYaw);
 		
 		if(world.lengthSqr() < 1e-4)
 			return new Input(false, false, false, false, keys.jump(),
-				keys.shift(), keys.sprint());
+				bridging ? sneaking : keys.shift(), keys.sprint());
 		
 		// the eight key combinations, relative to where the camera faces
 		double worldYaw = Math.toDegrees(Math.atan2(-world.x, world.z));
@@ -482,8 +527,9 @@ public final class ScaffoldWalkHack extends Hack
 		boolean right = octant == 1 || octant == 2 || octant == 3;
 		boolean left = octant == 5 || octant == 6 || octant == 7;
 		
-		// no sneaking and no sprinting backward while godbridging
-		boolean shift = !bridging && keys.shift();
+		// no sprinting backward while godbridging; sneaking only to stay on
+		// an edge until a click works
+		boolean shift = bridging ? sneaking : keys.shift();
 		boolean sprint = !bridging && keys.sprint();
 		return new Input(forward, backward, left, right, keys.jump(), shift,
 			sprint);
@@ -520,17 +566,6 @@ public final class ScaffoldWalkHack extends Hack
 		Vec3 forward = Vec3.directionFromRotation(0, yaw);
 		Vec3 left = Vec3.directionFromRotation(0, yaw - 90);
 		return forward.scale(intent.y).add(left.scale(intent.x));
-	}
-	
-	private static Vec3 dirVec(Direction dir)
-	{
-		return new Vec3(dir.getStepX(), 0, dir.getStepZ());
-	}
-	
-	/** 90 degrees clockwise (seen from above) from the bridge direction. */
-	private static Vec3 lateralVec(Direction dir)
-	{
-		return new Vec3(-dir.getStepZ(), 0, dir.getStepX());
 	}
 	
 	// ── Hotbar ─────────────────────────────────────────────────────────

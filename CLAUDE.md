@@ -412,20 +412,41 @@ does it. When writing or touching a hack:
   `PacketOrder.canChangeSlotNow()` and wait a tick if false (MaceAssist does), or the action goes
   out with the old item. `PacketBudgetTest` counts violations independently (MaceAssist swap-back
   scenario: 9/9 violations without the guard, 0 with it).
-- **ScaffoldWalk Client-side = a real godbridge** (user, 2026-10-03; Hypixel bridging guide):
-  face back along the bridge at 45° (yaw = bridge + 180 ± 45), pitch ~75.4 (players: 75.0-75.8),
-  walk backward with S + A/D, no sneak, click the last block's side face when the crosshair is on
-  it. `KeyboardInputMixin` → `ScaffoldWalkHack.modifyInput` remaps the keys, so your W keeps
-  meaning the direction you faced and the server's input packet shows S+D like a player's; the
-  camera is turned per frame with `CameraAim` and turned back when you stop. Clicks are on the
-  real crosshair hit, only when the sent rotation (`yRotLast/xRotLast`) hits the same face too.
-  The window is ~1 tick per block (the crosshair clears the top edge at ~0.3 past it, where you
-  start to fall; feet stay level one tick past that) - a fixed pitch falls within 30 blocks,
-  which is why humans jump every 8-10. `util/Godbridge.Planner` nudges the pitch ~±1.5° per
-  block and commits to a click tick 3 ticks ahead (re-planning late left the sent rotation
-  stale: fell every ~15 blocks). `GodbridgeTest` simulates it, `ScaffoldWalkHackTest` (gametest)
-  bridges 25 blocks north from a ledge in the air. The per-tick step comes from our own last
-  position: in `onUpdate`, `xo` is already reset to the current position.
+- **ScaffoldWalk Client-side = a real godbridge, any direction** (user, 2026-10-03; Hypixel
+  bridging guide, LiquidBounce's GodBridge technique). Keys only move in 45° steps relative to
+  the camera, so the camera faces bridge + 180 + 45k: straight bridges at 45° with S + A/D (pitch
+  ~75.4, players 75.0-75.8), diagonals straight back with S only, other angles a staircase. A face
+  is only clickable from in front, so the look must point back along both axes the staircase
+  steps on. `KeyboardInputMixin` → `ScaffoldWalkHack.modifyInput` remaps the keys (your W keeps
+  meaning the direction you faced; the server's input packet shows S+D/S like a player's) and
+  sets sneak; the camera turns per frame with `CameraAim` and back when you stop. Clicks only on
+  the real crosshair hit, and only when the sent rotation (`yRotLast/xRotLast`) hits the same face.
+  `util/Godbridge` does the planning; things that each cost a round of falls to learn:
+  - the window is ~1 tick per block (crosshair clears the top edge ~0.3 past it, where you fall) -
+    a fixed pitch falls within 30 blocks (why humans jump every 8-10); the planner predicts tick
+    positions with vanilla's movement (step = last * 0.546 + 0.098) and raycasts candidate pitches;
+  - place where support runs out (any cell under the predicted hitbox, margin 0.05), not a fixed
+    path; moving off a block's corner needs a stepping stone first, placed only from the edge;
+  - you start falling in a tick only if nothing is under you **after** that tick's click
+    (vertical movement is resolved first, at the tick-start position);
+  - commit a click early, re-check every tick that it still hits **and** lands no later than the
+    predicted support loss; one tick ahead only the rotation already aimed for works (yaw and
+    pitch kept); 2+ ticks ahead the steered yaw has time to be sent; a yaw that changes between
+    the sent and the current rotation misses near corners (yaw nudges per click: 500+ sim falls);
+  - sneak edge protection shortens the step, not the velocity - predict from
+    `getDeltaMovement() / 0.546`, never from the distance moved (slid off when sneak ended);
+  - no window at all: sneak to the edge and plan there; still none near the edge: look straight
+    at a face (rescue); shift the line sideways so it doesn't run along block corners
+    (`chooseAnchor`); pick the stance by simulating each a few blocks ahead (`chooseStance`, ~2 ms
+    once per bridge; planning ~0.02 ms/tick); keep planning while sliding after you let go.
+  - the camera must reach each planned pitch within a tick: humanized ease-out took 4+ ticks for a
+    few degrees, so small corrections (< 12°) go straight there, big turns stay humanized; and
+    the "turn around before walking" gate is only for the start (during a rescue turn it
+    stopped the walk, which dropped sneak mid-slide);
+  `GodbridgeTest` simulates every degree 0-359 from random offsets (0 falls, ~14% sneak ticks at
+  odd angles, 0 for straight/diagonal); `ScaffoldWalkHackTest` (gametest) bridges north,
+  north-east and 200° from a ledge in the air. Gametest tp: `"%d.5"` is the wrong block for
+  negative coordinates - format `Vec3.atBottomCenterOf(pos)`.
 - **Chat / server commands:** `ChatUtils.sendAsPlayer("/cmd …")` — same normalisation and chat
   history as typing it; doesn't fire `ChatOutputEvent`, so it can't loop.
 - **Changing a default:** `settings.json` stores defaults too, so add an entry to

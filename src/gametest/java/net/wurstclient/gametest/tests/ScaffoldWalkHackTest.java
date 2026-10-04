@@ -7,6 +7,7 @@
  */
 package net.wurstclient.gametest.tests;
 
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
@@ -15,20 +16,27 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
 import net.minecraft.util.Mth;
-import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
 import net.wurstclient.WurstClient;
 import net.wurstclient.events.ConnectionPacketOutputListener;
 import net.wurstclient.gametest.SingleplayerTest;
 
 /**
- * Godbridging with ScaffoldWalk (Client-side): standing on a ledge in the
- * air, facing north, holding W - the bridge has to go north, in a straight
- * line, without falling, switching to the blocks once instead of for every
- * block. Letting go of W turns the camera back to north.
+ * Godbridging with ScaffoldWalk (Client-side) in three directions - straight
+ * (north), diagonal (north-east) and an odd angle (200 degrees, a staircase)
+ * - from a ledge in the air, holding W: no fall, real progress in the
+ * direction you faced, the line kept, the blocks selected once instead of
+ * for every block, and the camera turned back afterwards.
  */
 public final class ScaffoldWalkHackTest extends SingleplayerTest
 {
 	private static final int HEIGHT = 12;
+	
+	private final AtomicInteger slotPackets = new AtomicInteger();
+	private final ConnectionPacketOutputListener counter = event -> {
+		if(event.getPacket() instanceof ServerboundSetCarriedItemPacket)
+			slotPackets.incrementAndGet();
+	};
 	
 	public ScaffoldWalkHackTest(ClientGameTestContext context,
 		TestSingleplayerContext spContext)
@@ -40,76 +48,18 @@ public final class ScaffoldWalkHackTest extends SingleplayerTest
 	protected void runImpl()
 	{
 		logger.info("Testing ScaffoldWalk godbridge");
+		BlockPos ground =
+			context.computeOnClient(mc -> mc.player.blockPosition());
 		
-		BlockPos start = context
-			.computeOnClient(mc -> mc.player.blockPosition().above(HEIGHT));
-		int laneY = start.getY() - 1;
-		
-		AtomicInteger slotPackets = new AtomicInteger();
-		ConnectionPacketOutputListener counter = event -> {
-			if(event.getPacket() instanceof ServerboundSetCarriedItemPacket)
-				slotPackets.incrementAndGet();
-		};
-		
+		context.runOnClient(mc -> WurstClient.INSTANCE.getEventManager()
+			.add(ConnectionPacketOutputListener.class, counter));
 		try
 		{
-			// a 2-block ledge, you on its north end, facing north (yaw 180),
-			// blocks in slot 1 and something else in your hand
 			runCommand("gamemode survival");
-			clearInventory();
-			runCommand("item replace entity @s hotbar.0 with diamond_sword");
-			runCommand("item replace entity @s hotbar.1 with stone 64");
-			context
-				.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
-			runCommand(String.format("fill %d %d %d %d %d %d stone",
-				start.getX(), laneY, start.getZ(), start.getX(), laneY,
-				start.getZ() + 1));
-			runCommand(String.format("tp @s %d.5 %d %d.3 180 30", start.getX(),
-				start.getY(), start.getZ()));
-			context.waitTicks(10);
-			
-			context.runOnClient(mc -> WurstClient.INSTANCE.getEventManager()
-				.add(ConnectionPacketOutputListener.class, counter));
-			runWurstCommand("t ScaffoldWalk on");
-			context.runOnClient(mc -> mc.options.keyUp.setDown(true));
-			context.waitTicks(120);
-			context.runOnClient(mc -> mc.options.keyUp.setDown(false));
-			context.waitTicks(30);
-			
-			// count the bridge: blocks north of the ledge, in a line
-			int length = 0;
-			for(int i = 1; i <= 40; i++)
-			{
-				BlockPos pos =
-					new BlockPos(start.getX(), laneY, start.getZ() - i);
-				if(!context.computeOnClient(
-					mc -> mc.level.getBlockState(pos).is(Blocks.STONE)))
-					break;
-				length++;
-			}
-			
-			double y = context.computeOnClient(mc -> mc.player.getY());
-			float yaw = context.computeOnClient(mc -> mc.player.getYRot());
-			double x = context.computeOnClient(mc -> mc.player.getX());
-			logger.info(
-				"Godbridge: {} blocks north, y {} (lane top {}), x {}, yaw {},"
-					+ " {} slot packets",
-				length, y, laneY + 1, x, yaw, slotPackets.get());
-			
-			if(y < laneY + 1 - 0.01)
-				throw new RuntimeException(
-					"Fell off the bridge after " + length + " blocks");
-			if(length < 15)
-				throw new RuntimeException(
-					"Bridge only " + length + " blocks long");
-			if(Math.abs(x - (start.getX() + 0.5)) > 0.5)
-				throw new RuntimeException("Drifted off the lane: x " + x);
-			if(Math.abs(Mth.wrapDegrees(yaw - 180)) > 2)
-				throw new RuntimeException(
-					"Camera didn't turn back to north: yaw " + yaw);
-			if(slotPackets.get() > 2)
-				throw new RuntimeException(
-					slotPackets.get() + " slot changes for one bridge");
+			// away from the wall the other tests build at z+10
+			bridge(ground.offset(0, HEIGHT, -4), 180, "north");
+			bridge(ground.offset(-20, HEIGHT, -4), 225, "north-east");
+			bridge(ground.offset(20, HEIGHT, -4), 200, "200 degrees");
 			
 		}finally
 		{
@@ -118,17 +68,76 @@ public final class ScaffoldWalkHackTest extends SingleplayerTest
 				.remove(ConnectionPacketOutputListener.class, counter));
 			runWurstCommand("t ScaffoldWalk off");
 			runCommand(String.format("fill %d %d %d %d %d %d air",
-				start.getX() - 2, laneY, start.getZ() - 45, start.getX() + 2,
-				laneY, start.getZ() + 1));
+				ground.getX() - 45, ground.getY() + HEIGHT - 1,
+				ground.getZ() - 45, ground.getX() + 45,
+				ground.getY() + HEIGHT - 1, ground.getZ() - 1));
 			runCommand("gamemode creative");
 			clearInventory();
-			runCommand(String.format("tp @s %d.5 %d %d.5 0 0", start.getX(),
-				start.getY() - HEIGHT, start.getZ()));
+			Vec3 home = Vec3.atBottomCenterOf(ground);
+			runCommand(String.format(Locale.ROOT, "tp @s %.1f %d %.1f 0 0",
+				home.x, ground.getY(), home.z));
 			
 			clearChat();
 			context.runOnClient(
 				mc -> mc.gui.setOverlayMessage(Component.empty(), false));
 			context.waitTicks(7);
 		}
+	}
+	
+	private void bridge(BlockPos start, float yaw, String name)
+	{
+		int laneY = start.getY() - 1;
+		
+		// a 3x3 ledge, you in its middle, blocks in slot 1 and something
+		// else in your hand
+		clearInventory();
+		runCommand("item replace entity @s hotbar.0 with diamond_sword");
+		runCommand("item replace entity @s hotbar.1 with stone 64");
+		context.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
+		runCommand(String.format("fill %d %d %d %d %d %d stone",
+			start.getX() - 1, laneY, start.getZ() - 1, start.getX() + 1, laneY,
+			start.getZ() + 1));
+		// (block centers: "%d.5" is the wrong block for negative coordinates)
+		Vec3 center = Vec3.atBottomCenterOf(start);
+		runCommand(String.format(Locale.ROOT, "tp @s %.1f %d %.1f %s 30",
+			center.x, start.getY(), center.z, yaw));
+		context.waitTicks(10);
+		
+		slotPackets.set(0);
+		runWurstCommand("t ScaffoldWalk on");
+		context.runOnClient(mc -> mc.options.keyUp.setDown(true));
+		context.waitTicks(120);
+		context.runOnClient(mc -> mc.options.keyUp.setDown(false));
+		context.waitTicks(30);
+		runWurstCommand("t ScaffoldWalk off");
+		
+		Vec3 pos = context.computeOnClient(mc -> mc.player.position());
+		float endYaw = context.computeOnClient(mc -> mc.player.getYRot());
+		Vec3 dir = Vec3.directionFromRotation(0, yaw);
+		Vec3 moved = pos.subtract(Vec3.atBottomCenterOf(start));
+		double progress = moved.dot(dir);
+		double sideways =
+			moved.subtract(dir.scale(progress)).horizontalDistance();
+		logger.info(
+			"Godbridge {}: {} blocks along, {} off the line, y {} (lane top"
+				+ " {}), yaw {}, {} slot packets",
+			name, progress, sideways, pos.y, laneY + 1, endYaw,
+			slotPackets.get());
+		
+		if(pos.y < laneY + 1 - 0.01)
+			throw new RuntimeException(
+				"Fell off the " + name + " bridge after " + progress);
+		if(progress < 12)
+			throw new RuntimeException(
+				"Only " + progress + " blocks of " + name + " bridge");
+		if(sideways > 1)
+			throw new RuntimeException(
+				name + " bridge drifted " + sideways + " off the line");
+		if(Math.abs(Mth.wrapDegrees(endYaw - yaw)) > 2)
+			throw new RuntimeException(
+				"Camera didn't turn back to " + name + ": yaw " + endYaw);
+		if(slotPackets.get() > 2)
+			throw new RuntimeException(slotPackets.get()
+				+ " slot changes for one " + name + " bridge");
 	}
 }

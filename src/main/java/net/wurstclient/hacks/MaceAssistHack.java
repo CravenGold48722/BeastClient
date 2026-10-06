@@ -32,6 +32,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.item.enchantment.ItemEnchantments;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
@@ -50,6 +51,8 @@ import net.wurstclient.settings.filters.FilterSpeedSetting;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.HitCheck;
+import net.wurstclient.util.RotationUtils;
+import net.wurstclient.util.TriggerSweep;
 import net.wurstclient.util.PacketOrder;
 import net.wurstclient.util.Rotation;
 
@@ -346,6 +349,16 @@ public final class MaceAssistHack extends Hack
 	/** The smooth, human-like aim, shared with AimAssist. */
 	private final CameraAim cameraAim = new CameraAim();
 	
+	/**
+	 * How far ahead of the target the mace aim points while a hit is coming:
+	 * half a tick of your relative motion. See {@link #updateAimLead}.
+	 */
+	private Vec3 aimLead = Vec3.ZERO;
+	
+	/** Ticks until the target is in reach while closing in fast, 0 = calm. */
+	private double urgentTicks;
+	private static final double URGENT_TICKS = 4;
+	
 	private int triggerHitsThisFall;
 	private int triggerCooldownTimer;
 	private boolean wasInAir;
@@ -510,6 +523,9 @@ public final class MaceAssistHack extends Hack
 		
 		tickAutoChestplate();
 		
+		updateAimLead(triggerActive);
+		updateUrgency();
+		
 		if(!triggerActive)
 			return;
 			
@@ -540,9 +556,23 @@ public final class MaceAssistHack extends Hack
 		
 		// Turned every frame, like a mouse, with the same smooth, human-like
 		// aim as AimAssist - including keeping up with a moving target.
-		if(isAimActive())
-			cameraAim.aimAtEntity(lockedTarget, getAimPoint(lockedTarget),
-				partialTicks, humanizeAim.isChecked(), aimSpeed.getValue());
+		if(!isAimActive())
+			return;
+		
+		Vec3 point = getAimPoint(lockedTarget).add(aimLead);
+		boolean humanize = humanizeAim.isChecked();
+		double speed = aimSpeed.getValue();
+		if(urgentTicks > 0)
+		{
+			// closing in fast: no reaction delay, and on the target a tick
+			// before it's in reach (a flick, like a player diving at it)
+			humanize = false;
+			double angle = RotationUtils.getAngleToLookVec(point);
+			double time = Math.max(0.05, (urgentTicks - 1) * 0.05);
+			speed = Math.min(2000, Math.max(speed, angle / time * 1.5));
+		}
+		cameraAim.aimAtEntity(lockedTarget, point, partialTicks, humanize,
+			speed);
 		
 	}
 	
@@ -605,18 +635,19 @@ public final class MaceAssistHack extends Hack
 			return;
 		
 		double bestDist = maxDistSq;
-		double yawRad = Math.toRadians(MC.player.getYRot());
+		Vec3 eyes = MC.player.getEyePosition();
+		Vec3 look = MC.player.getLookAngle();
 		
 		for(Entity e : MC.level.entitiesForRendering())
 		{
 			if(!isValidTarget(e))
 				continue;
-			
-			// only consider targets in front of the player
-			double dx = e.getX() - MC.player.getX();
-			double dz = e.getZ() - MC.player.getZ();
-			double dot = -Math.sin(yawRad) * dx + Math.cos(yawRad) * dz;
-			if(dot <= 0)
+				
+			// only targets in front of you - along your real (3D) look, so a
+			// target below you counts while diving down at it (by yaw alone,
+			// one just behind your yaw direction never got picked)
+			Vec3 toTarget = e.getBoundingBox().getCenter().subtract(eyes);
+			if(look.dot(toTarget) <= 0)
 				continue;
 			
 			if(!hasLineOfSight(e))
@@ -698,9 +729,87 @@ public final class MaceAssistHack extends Hack
 		return new Vec3(target.getX(), y, target.getZ());
 	}
 	
+	/**
+	 * Sees the hit coming ({@link TriggerSweep}: 150 samples of the coming
+	 * tick, only when the target is close enough to matter) and, while it
+	 * is, leads the mace aim by half a tick of your relative motion.
+	 *
+	 * <p>
+	 * The hit only counts when the rotation sent at the end of the tick
+	 * before and the current one both point at the target ({@link HitCheck}).
+	 * Aimed straight at it, the sent one trails a full tick of motion behind;
+	 * aimed half a tick ahead, the two sit either side of it, half as far
+	 * off - so the first tick that could hit does, instead of the one after.
+	 * The hit itself stays the real check, in the tick.
+	 */
+	private void updateAimLead(boolean triggerActive)
+	{
+		aimLead = Vec3.ZERO;
+		if(!triggerActive || lockedTarget == null)
+			return;
+		
+		LocalPlayer player = MC.player;
+		Vec3 eyes = player.getEyePosition();
+		Vec3 selfStep = player.getDeltaMovement();
+		Vec3 targetStep = lockedTarget.position().subtract(lockedTarget.xo,
+			lockedTarget.yo, lockedTarget.zo);
+		AABB box =
+			lockedTarget.getBoundingBox().inflate(lockedTarget.getPickRadius());
+		double reach =
+			Math.min(triggerRange.getValue(), player.entityInteractionRange());
+		
+		// close enough to come within reach during the coming tick at all
+		double closing = selfStep.length() + targetStep.length();
+		double distance = Math.sqrt(TriggerSweep.distanceSq(eyes, box));
+		if(distance > reach + closing)
+			return;
+		
+		if(TriggerSweep.firstInReach(eyes, selfStep, box, targetStep,
+			reach) < 0)
+			return;
+		
+		aimLead = targetStep.subtract(selfStep).scale(0.5);
+	}
+	
+	/**
+	 * How urgent the turn is: closing in at 1+ block per tick (riptiding or
+	 * falling fast at a target), the ticks left until it's in reach - the
+	 * aim then skips the reaction delay and turns fast enough to be on it a
+	 * tick before (the rotation sent then has to be on it too, see
+	 * {@link HitCheck}). 0 = not urgent.
+	 */
+	private void updateUrgency()
+	{
+		urgentTicks = 0;
+		if(lockedTarget == null)
+			return;
+		
+		LocalPlayer player = MC.player;
+		Vec3 eyes = player.getEyePosition();
+		AABB box =
+			lockedTarget.getBoundingBox().inflate(lockedTarget.getPickRadius());
+		Vec3 toTarget = box.getCenter().subtract(eyes);
+		if(toTarget.lengthSqr() < 1e-6)
+			return;
+		Vec3 relative =
+			player.getDeltaMovement().subtract(lockedTarget.position()
+				.subtract(lockedTarget.xo, lockedTarget.yo, lockedTarget.zo));
+		double closing = relative.dot(toTarget.normalize());
+		if(closing < 1)
+			return;
+		
+		double reach =
+			Math.min(triggerRange.getValue(), player.entityInteractionRange());
+		double distance = Math.sqrt(TriggerSweep.distanceSq(eyes, box));
+		double ticks = Math.max(0, (distance - reach) / closing);
+		if(ticks <= URGENT_TICKS)
+			urgentTicks = Math.max(1, ticks);
+	}
+	
 	private void resetAim()
 	{
 		lockedTarget = null;
+		aimLead = Vec3.ZERO;
 		losGraceTicks = 0;
 		cameraAim.reset();
 	}

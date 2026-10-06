@@ -596,6 +596,17 @@ Design points that were deliberate, don't "fix" them blindly:
   the server never saw (Grim "HITBOX: hit without any intersection", user report 2026-10-02). Now
   `isCrosshairOnTarget`: current eyes, current look, min(Trigger range, `entityInteractionRange()`),
   hitbox + pick radius, block line of sight. Don't bring the prediction back.
+- **Fast dives (riptide, long falls) - user, 2026-10-06:** "check 150 times a tick" would bring the
+  prediction back (positions don't change within a tick; only predicted ones would). Instead
+  `util/TriggerSweep` samples the coming tick 150 times only to *see the hit coming*: while it is,
+  the mace aim leads by half a tick of relative motion (the sent and the current rotation then
+  sit either side of the target, see `HitCheck`), and closing at 1+ block/tick with <= 4 ticks to
+  reach the aim skips the reaction delay and turns fast enough to be on target a tick early. The
+  hit stays the real once-per-tick check. Targets are picked "in front" along the 3D look (by yaw
+  alone a target just behind your yaw while diving straight down was never locked), and
+  `HitCheck` drops its post-move eye check above 1 block/tick (the post-move point is past the
+  target - it blocked every hit). Gametest `MaceTriggerTest`: 3.5 blocks/tick dive at a husk, in
+  reach for one tick, hits.
 - Item detection uses `ItemTags.SWORDS/AXES/SPEARS/CHEST_ARMOR` (the mod used
   `item.toString().contains("sword")`).
 - **Mannequins**: `net.minecraft.world.entity.decoration.Mannequin extends Avatar`, and in 26.1.2

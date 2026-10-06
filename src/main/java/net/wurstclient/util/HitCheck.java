@@ -31,7 +31,8 @@ import net.wurstclient.WurstClient;
  * anticheats, so a verifiable hit has to work with all of them:
  * <ul>
  * <li>the rotation already sent <i>and</i> the current one both hit,</li>
- * <li>from where you are now and from where this tick's move takes you,</li>
+ * <li>from where you are now and (at ordinary speeds) from where this
+ * tick's move takes you,</li>
  * <li>within your real reach, with no block in between,</li>
  * <li>a little inside the hitbox's sides, since the server's copy of the
  * target is rarely exactly where you see it.</li>
@@ -47,6 +48,9 @@ public enum HitCheck
 	
 	/** How far inside the hitbox's sides the rays have to hit, blocks. */
 	private static final double SIDE_MARGIN = 0.1;
+	
+	/** Faster than this (blocks per tick, squared): no post-move check. */
+	private static final double FAST_SQ = 1;
 	
 	public static boolean isVerifiable(Entity target)
 	{
@@ -70,8 +74,17 @@ public enum HitCheck
 			new Rotation(faker.getServerYaw(), faker.getServerPitch());
 		Rotation sent = new Rotation(player.yRotLast, player.xRotLast);
 		
-		return rayHits(eyes, sent, box, reach) && rayHits(eyes, now, box, reach)
-			&& rayHits(eyesAfterMove, now, box, reach);
+		if(!rayHits(eyes, sent, box, reach) || !rayHits(eyes, now, box, reach))
+			return false;
+			
+		// The attack goes out before this tick's move, so the server judges
+		// it from where you are now; the post-move check is only a margin at
+		// ordinary speeds. Moving fast - riptiding down at a target, a
+		// falling mace slam - the post-move point is already past or below
+		// the target, and requiring it blocked every hit that could land.
+		if(player.getDeltaMovement().lengthSqr() >= FAST_SQ)
+			return true;
+		return rayHits(eyesAfterMove, now, box, reach);
 	}
 	
 	private static boolean rayHits(Vec3 eyes, Rotation rotation, AABB box,

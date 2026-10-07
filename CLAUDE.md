@@ -454,6 +454,15 @@ does it. When writing or touching a hack:
     made walking worse); stepping stones may be placed mid-air (on the ground only from the edge);
   - the gametest also fails on any packet type a bridging player wouldn't send, swings != block
     clicks, too many clicks, or no jump on the straight bridge;
+  - found with an in-game flight recorder (2026-10-06): the planner must predict the camera
+    **rounded to whole mouse steps** (`Cam.shownYaw/shownPitch`, the sim rounds to 0.15 too) -
+    0.03° off the exact spring angle missed a block's edge; a kept plan must still be allowed
+    (a stepping stone planned mid-jump was kept after landing and walked off); the sneak
+    slowdown follows the crouching flag vanilla sets from the **previous** tick's sneak key
+    (`Body.step` uses `crouching`), edge protection the current one; planned clicks must still
+    hit with ±0.015 blocks of position (`SLACK`) - at 81° pitch 0.01 blocks moves the hit 0.07
+    down the face. Still open: the 200° gametest bridge falls in ~1 of 2 runs near its end,
+    apparently after W is released (the recorder didn't catch it while bridging);
   `GodbridgeTest` simulates every degree 0-359 from random offsets (0 falls, ~14% sneak ticks at
   odd angles, 0 for straight/diagonal); `ScaffoldWalkHackTest` (gametest) bridges north,
   north-east and 200° from a ledge in the air. Gametest tp: `"%d.5"` is the wrong block for

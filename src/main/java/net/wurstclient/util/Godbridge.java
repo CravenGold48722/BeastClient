@@ -93,6 +93,10 @@ public final class Godbridge
 	/** ...and this far inside its sides. */
 	private static final double SIDE_MARGIN = 0.06;
 	
+	/** Position slack a planned click must work with (blocks). */
+	private static final double[][] SLACK =
+		{{0, 0}, {0.015, 0}, {-0.015, 0}, {0, 0.015}, {0, -0.015}};
+	
 	/** How far ahead (ticks) a click is planned at most... */
 	private static final int LEAD = 8;
 	
@@ -491,9 +495,12 @@ public final class Godbridge
 			boolean ground = onGround;
 			if(jump && ground)
 				vy = JUMP_POWER;
-			
-			double accel =
-				(ground ? WALK_ACCEL : AIR_ACCEL) * (sneak ? SNEAK_FACTOR : 1);
+				
+			// the sneak slowdown follows the crouching pose, which only changes
+			// at the end of a tick: a tick late, both ways (measured in-game,
+			// 0.065 blocks off each time) - edge protection doesn't wait
+			double accel = (ground ? WALK_ACCEL : AIR_ACCEL)
+				* (crouching ? SNEAK_FACTOR : 1);
 			double dx = vx + moveX * accel;
 			double dz = vz + moveZ * accel;
 			double mx = dx;
@@ -606,9 +613,13 @@ public final class Godbridge
 			return lastPitch;
 		}
 		
-		// keep the plan while it still works from where you'll really be
+		// keep the plan while it still works from where you'll really be -
+		// and is still allowed: a stepping stone planned in the air is no good
+		// once you've landed and walk on (only from a sneaking edge)
+		boolean inAir = jump || !body.onGround;
 		if(committed && tick < plannedTick
-			&& contains(targets, plannedX, plannedZ))
+			&& contains(targets, plannedX, plannedZ)
+			&& (!stepping || inAir || plannedSneaking))
 		{
 			Body[] path = plannedSneaking
 				? predict(body, moveX, moveZ, true, false) : walk;
@@ -627,7 +638,6 @@ public final class Godbridge
 		// a click while walking on (not for a stepping stone on the ground: it
 		// doesn't hold you where you'd walk to - in the air nothing has to
 		// hold you until you land, so there it can go in first)...
-		boolean inAir = jump || !body.onGround;
 		Click best =
 			stepping && !inAir ? null : search(walk, lost, targets, yaw, reach);
 		boolean sneaking = false;
@@ -789,12 +799,29 @@ public final class Godbridge
 	{
 		Cam now = cam.at(targetYaw, targetPitch, 0.05 * k);
 		Cam sent = cam.at(targetYaw, targetPitch, 0.05 * (k - 1));
-		Face hit = placesTarget(b, now.yaw(), now.pitch(), reach, targets);
+		Face hit =
+			placesTarget(b, now.shownYaw(), now.shownPitch(), reach, targets);
 		if(hit == null)
 			return null;
-		Face sentHit =
-			raycast(b.x, b.z, b.eyeAboveTop(), sent.yaw(), sent.pitch(), reach);
-		return hit.equals(sentHit) ? hit : null;
+			
+		// Both rotations, and with some slack: from where you'll be, and a
+		// little off it in every direction. At a steep pitch 0.01 blocks of
+		// position moves the crosshair 0.07 down the face - a click planned
+		// at its very edge went past the block's bottom in-game.
+		double eye = b.eyeAboveTop();
+		for(double[] off : SLACK)
+		{
+			double x = b.x + off[0];
+			double z = b.z + off[1];
+			if(!hit.equals(
+				raycast(x, z, eye, sent.shownYaw(), sent.shownPitch(), reach)))
+				return null;
+			if(off[0] != 0 || off[1] != 0)
+				if(!hit.equals(raycast(x, z, eye, now.shownYaw(),
+					now.shownPitch(), reach)))
+					return null;
+		}
+		return hit;
 	}
 	
 	private Face placesTarget(Body b, double yaw, double pitch, double reach,
@@ -809,8 +836,15 @@ public final class Godbridge
 	 * The camera: where it points and how fast it turns (degrees per
 	 * second), following its aim target with the {@link #spring} smooth aim.
 	 */
-	public record Cam(double yaw, double pitch, double yawVel, double pitchVel)
+	public record Cam(double yaw, double pitch, double yawVel, double pitchVel,
+		double realYaw, double realPitch, double step)
 	{
+		/** A camera that turns to exact angles (no mouse-step rounding). */
+		public Cam(double yaw, double pitch, double yawVel, double pitchVel)
+		{
+			this(yaw, pitch, yawVel, pitchVel, yaw, pitch, 0);
+		}
+		
 		/** Where it is after t seconds of following this target. */
 		public Cam at(double targetYaw, double targetPitch, double t)
 		{
@@ -819,7 +853,25 @@ public final class Godbridge
 			double[] y =
 				spring(yaw, yawVel, yaw + wrap(targetYaw - yaw), t, AIM_OMEGA);
 			double[] p = spring(pitch, pitchVel, targetPitch, t, AIM_OMEGA);
-			return new Cam(y[0], p[0], y[1], p[1]);
+			return new Cam(y[0], p[0], y[1], p[1], realYaw, realPitch, step);
+		}
+		
+		/**
+		 * Where the real camera points: the smooth aim's angle rounded to
+		 * whole mouse steps from where the camera is now, like
+		 * Rotation.applyToClientPlayer() does every frame. 0.03 degrees
+		 * between the two was enough to miss a block's edge.
+		 */
+		public double shownYaw()
+		{
+			return step <= 0 ? yaw
+				: realYaw + Math.round(wrap(yaw - realYaw) / step) * step;
+		}
+		
+		public double shownPitch()
+		{
+			return step <= 0 ? pitch : Math.max(-90, Math.min(90,
+				realPitch + Math.round((pitch - realPitch) / step) * step));
 		}
 	}
 	
@@ -960,6 +1012,9 @@ public final class Godbridge
 		double maxAimSpeed)
 	{}
 	
+	/** The mouse step at default sensitivity (0.5): 0.15 degrees. */
+	private static final double SIM_MOUSE_STEP = 0.15;
+	
 	/** Frames per tick the simulated camera is turned in (60 fps). */
 	private static final int SIM_FRAMES = 3;
 	
@@ -990,8 +1045,11 @@ public final class Godbridge
 		double startAlong = bridge.along(b.x, b.z);
 		double yawNow = camYaw;
 		double pitchNow = camPitch;
-		double yawSent = yawNow;
-		double pitchSent = pitchNow;
+		// the camera as shown: whole mouse steps from where it started
+		double realYaw = camYaw;
+		double realPitch = camPitch;
+		double yawSent = realYaw;
+		double pitchSent = realPitch;
 		double velYaw = 0;
 		double velPitch = 0;
 		double min = pitchNow;
@@ -1012,7 +1070,7 @@ public final class Godbridge
 			
 			// click what the crosshair is on (and the sent rotation too)
 			double eye = b.eyeAboveTop();
-			Face now = bridge.raycast(b.x, b.z, eye, yawNow, pitchNow, reach);
+			Face now = bridge.raycast(b.x, b.z, eye, realYaw, realPitch, reach);
 			Face sent =
 				bridge.raycast(b.x, b.z, eye, yawSent, pitchSent, reach);
 			boolean clicked = false;
@@ -1034,7 +1092,7 @@ public final class Godbridge
 			// keys: the one of the eight directions relative to the camera
 			// closest to the bridge direction, like ScaffoldWalk's input
 			double moveRad = Math.toRadians(
-				yawNow + Math.round(wrap(bridgeYaw - yawNow) / 45) * 45);
+				realYaw + Math.round(wrap(bridgeYaw - realYaw) / 45) * 45);
 			double moveX = -Math.sin(moveRad);
 			double moveZ = Math.cos(moveRad);
 			double steerYaw =
@@ -1044,16 +1102,17 @@ public final class Godbridge
 			boolean jump = tick == 0 && jumpFirst;
 			if(jumps != null && clicked && sinceJump >= jumpAt && b.onGround
 				&& sinceSneak > 6 && jumpSafe(solid, bridgeYaw, stanceYaw,
-					anchorX, anchorZ, b, yawNow, pitchNow, reach))
+					anchorX, anchorZ, b, realYaw, realPitch, reach))
 			{
 				jump = true;
 				sinceJump = 0;
 				jumpAt = 8 + jumps.nextInt(3);
 			}
 			
-			double pitchTarget = bridge.plan(tick, b,
-				new Cam(yawNow, pitchNow, velYaw, velPitch), moveX, moveZ, jump,
-				steerYaw, reach);
+			double pitchTarget = bridge.plan(
+				tick, b, new Cam(yawNow, pitchNow, velYaw, velPitch, realYaw,
+					realPitch, SIM_MOUSE_STEP),
+				moveX, moveZ, jump, steerYaw, reach);
 			boolean sneak = bridge.shouldSneak();
 			if(jump && (sneak || !bridge.hasPlan()))
 			{
@@ -1061,8 +1120,9 @@ public final class Godbridge
 				// catches the landing
 				jump = false;
 				pitchTarget = bridge.plan(tick, b,
-					new Cam(yawNow, pitchNow, velYaw, velPitch), moveX, moveZ,
-					false, steerYaw, reach);
+					new Cam(yawNow, pitchNow, velYaw, velPitch, realYaw,
+						realPitch, SIM_MOUSE_STEP),
+					moveX, moveZ, false, steerYaw, reach);
 				sneak = bridge.shouldSneak();
 			}
 			if(jump)
@@ -1076,8 +1136,8 @@ public final class Godbridge
 			b.step(bridge, moveX, moveZ, sneak, jump);
 			
 			// the camera follows during the frames until the next tick
-			yawSent = yawNow;
-			pitchSent = pitchNow;
+			yawSent = realYaw;
+			pitchSent = realPitch;
 			double target = yawNow + wrap(yawTarget - yawNow);
 			for(int f = 0; f < SIM_FRAMES; f++)
 			{
@@ -1089,6 +1149,10 @@ public final class Godbridge
 				velYaw = y[1];
 				pitchNow = p[0];
 				velPitch = p[1];
+				realYaw += Math.round(wrap(yawNow - realYaw) / SIM_MOUSE_STEP)
+					* SIM_MOUSE_STEP;
+				realPitch += Math.round((pitchNow - realPitch) / SIM_MOUSE_STEP)
+					* SIM_MOUSE_STEP;
 				maxSpeed = Math.max(maxSpeed, Math.hypot(velYaw, velPitch));
 			}
 			min = Math.min(min, pitchNow);

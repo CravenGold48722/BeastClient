@@ -345,10 +345,15 @@ public final class ScaffoldWalkHack extends Hack
 	 */
 	private Godbridge.Cam camNow()
 	{
+		// the real camera is the aim rounded to whole mouse steps
+		float realYaw = MC.player.getYRot();
+		float realPitch = MC.player.getXRot();
+		double step = Rotation.getMouseStep();
 		if(springing)
-			return new Godbridge.Cam(aimYaw, aimPitch, aimYawVel, aimPitchVel);
-		return new Godbridge.Cam(MC.player.getYRot(), MC.player.getXRot(), 0,
-			0);
+			return new Godbridge.Cam(aimYaw, aimPitch, aimYawVel, aimPitchVel,
+				realYaw, realPitch, step);
+		return new Godbridge.Cam(realYaw, realPitch, 0, 0, realYaw, realPitch,
+			step);
 	}
 	
 	/** Your movement state for the planner, relative to the lane. */

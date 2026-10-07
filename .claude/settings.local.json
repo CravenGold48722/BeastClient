@@ -2,7 +2,8 @@
   "env": {
     "MAX_THINKING_TOKENS": "60000",
     "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5-5",
-    "CLAUDE_CODE_SUBAGENT_EFFORT": "max"
+    "CLAUDE_CODE_SUBAGENT_EFFORT": "max",
+    "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1"
   },
   "effort": "high",
   "defaultMode": "auto",

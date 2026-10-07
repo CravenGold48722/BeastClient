@@ -14,14 +14,21 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.effect.MobEffect;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.alchemy.PotionContents;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.mixinterface.IMultiPlayerGameMode;
+import net.wurstclient.settings.EnumSetting;
 import net.wurstclient.settings.ItemListSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
@@ -49,6 +56,17 @@ public final class RestockHack extends Hack implements UpdateListener
 		"Minimum amount of items in hand before a new round of restocking is triggered.",
 		1, 1, 64, 1, ValueDisplay.INTEGER);
 	
+	private final EnumSetting<PotionEffect> potionEffect = new EnumSetting<>(
+		"Potion effect",
+		"For potions (drinkable, splash, lingering) and tipped arrows in the"
+			+ " list: only restock ones with this effect. They all share an item"
+			+ " ID, so without this a splash potion of Harming would do as well"
+			+ " as one of Healing.\n\n"
+			+ "§lHealing§r = Instant Health (Healing and Healing II)."
+			+ " §lAny§r = any potion of that kind.\n\n"
+			+ "Other items in the list aren't affected.",
+		PotionEffect.values(), PotionEffect.HEALING);
+	
 	private final SliderSetting repairMode = new SliderSetting(
 		"Tools repair mode",
 		"Swaps out tools when their durability reaches the given threshold, so"
@@ -61,6 +79,7 @@ public final class RestockHack extends Hack implements UpdateListener
 		super("Restock");
 		setCategory(Category.ITEMS);
 		addSetting(items);
+		addSetting(potionEffect);
 		addSetting(restockSlot);
 		addSetting(restockAmount);
 		addSetting(repairMode);
@@ -175,7 +194,67 @@ public final class RestockHack extends Hack implements UpdateListener
 			&& isTooDamaged(stack))
 			return false;
 		
-		return BuiltInRegistries.ITEM.getKey(stack.getItem()).toString()
-			.equals(itemName);
+		if(!BuiltInRegistries.ITEM.getKey(stack.getItem()).toString()
+			.equals(itemName))
+			return false;
+		
+		return hasWantedEffect(stack);
+		
+	}
+	
+	/**
+	 * Whether a potion (or tipped arrow) has the effect from the "Potion
+	 * effect" setting. Anything without potion contents always counts.
+	 */
+	private boolean hasWantedEffect(ItemStack stack)
+	{
+		PotionContents contents = stack.get(DataComponents.POTION_CONTENTS);
+		PotionEffect wanted = potionEffect.getSelected();
+		if(contents == null || wanted.effect == null)
+			return true;
+		
+		for(MobEffectInstance instance : contents.getAllEffects())
+			if(instance.is(wanted.effect))
+				return true;
+		return false;
+	}
+	
+	public enum PotionEffect
+	{
+		ANY("Any", null),
+		HEALING("Healing", MobEffects.INSTANT_HEALTH),
+		REGENERATION("Regeneration", MobEffects.REGENERATION),
+		STRENGTH("Strength", MobEffects.STRENGTH),
+		SWIFTNESS("Swiftness", MobEffects.SPEED),
+		FIRE_RESISTANCE("Fire Resistance", MobEffects.FIRE_RESISTANCE),
+		RESISTANCE("Resistance (Turtle Master)", MobEffects.RESISTANCE),
+		INVISIBILITY("Invisibility", MobEffects.INVISIBILITY),
+		NIGHT_VISION("Night Vision", MobEffects.NIGHT_VISION),
+		WATER_BREATHING("Water Breathing", MobEffects.WATER_BREATHING),
+		LEAPING("Leaping", MobEffects.JUMP_BOOST),
+		SLOW_FALLING("Slow Falling", MobEffects.SLOW_FALLING),
+		HARMING("Harming", MobEffects.INSTANT_DAMAGE),
+		POISON("Poison", MobEffects.POISON),
+		SLOWNESS("Slowness", MobEffects.SLOWNESS),
+		WEAKNESS("Weakness", MobEffects.WEAKNESS),
+		WIND_CHARGING("Wind Charging", MobEffects.WIND_CHARGED),
+		WEAVING("Weaving", MobEffects.WEAVING),
+		OOZING("Oozing", MobEffects.OOZING),
+		INFESTATION("Infestation", MobEffects.INFESTED);
+		
+		private final String name;
+		private final Holder<MobEffect> effect;
+		
+		private PotionEffect(String name, Holder<MobEffect> effect)
+		{
+			this.name = name;
+			this.effect = effect;
+		}
+		
+		@Override
+		public String toString()
+		{
+			return name;
+		}
 	}
 }

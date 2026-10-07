@@ -138,6 +138,7 @@ public class WurstTest implements FabricClientGameTest
 		new NoWeatherHackTest(context, spContext).run();
 		new ScaffoldWalkHackTest(context, spContext).run();
 		new MaceTriggerTest(context, spContext).run();
+		new RestockHackTest(context, spContext).run();
 		new XRayHackTest(context, spContext).run();
 		
 		// Test Wurst commands

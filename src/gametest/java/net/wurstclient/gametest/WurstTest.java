@@ -9,6 +9,7 @@ package net.wurstclient.gametest;
 
 import static net.wurstclient.gametest.WurstClientTestHelper.*;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -67,6 +68,38 @@ public class WurstTest implements FabricClientGameTest
 		LOGGER.info("Starting Wurst Client GameTest");
 		if(!ONLY.isEmpty())
 			LOGGER.info("Only running tests matching {}", ONLY);
+			
+		// Real anticheat servers (gradle/anticheat.gradle), started right
+		// away so they're up by the time the singleplayer tests are done.
+		List<AnticheatServer> servers = new ArrayList<>();
+		for(AnticheatServer server : new AnticheatServer[]{
+			AnticheatServer.grim(), AnticheatServer.intave()})
+			if(server != null && isWanted("AnticheatTest" + server.getName()))
+			{
+				LOGGER.info("Starting the {} server", server.getName());
+				server.start();
+				servers.add(server);
+			}
+		
+		try
+		{
+			runAllTests(context, servers);
+			
+		}finally
+		{
+			servers.forEach(AnticheatServer::stop);
+		}
+		
+		// a typo shouldn't look like a pass
+		if(!ONLY.isEmpty() && selectedRun == 0)
+			throw new RuntimeException("No test matches " + ONLY);
+		
+		LOGGER.info("Test complete");
+	}
+	
+	private void runAllTests(ClientGameTestContext context,
+		List<AnticheatServer> servers)
+	{
 		hideSplashTexts(context);
 		waitForTitleScreenFade(context);
 		
@@ -81,6 +114,13 @@ public class WurstTest implements FabricClientGameTest
 			VanillaSpoofTest.testTranslationSpoof(context);
 			VanillaSpoofTest.testPacketFilter(context);
 		}
+		
+		// Up and idle before the singleplayer world: two servers still
+		// booting while that world shut down deadlocked the test harness
+		// (Fabric's tick phaser vs. the integrated server's halt, a race that
+		// a busy CPU makes likely).
+		for(AnticheatServer server : servers)
+			server.awaitStarted();
 		
 		LOGGER.info("Creating test world");
 		TestWorldBuilder worldBuilder = context.worldBuilder();
@@ -99,11 +139,10 @@ public class WurstTest implements FabricClientGameTest
 			LOGGER.info("Exiting test world");
 		}
 		
-		// a typo shouldn't look like a pass
-		if(!ONLY.isEmpty() && selectedRun == 0)
-			throw new RuntimeException("No test matches " + ONLY);
-		
-		LOGGER.info("Test complete");
+		// joins each server like a player, at the normal 20 ticks/s
+		for(AnticheatServer server : servers)
+			if(isSelected("AnticheatTest" + server.getName()))
+				new AnticheatTest(context, server).run();
 	}
 	
 	private void testInWorld(ClientGameTestContext context,
@@ -186,6 +225,13 @@ public class WurstTest implements FabricClientGameTest
 		
 		// Test special cases
 		run(new PistonTest(context, spContext));
+	}
+	
+	/** Like {@link #isSelected}, without counting it as run. */
+	private static boolean isWanted(String testName)
+	{
+		String name = testName.toLowerCase(Locale.ROOT);
+		return ONLY.isEmpty() || ONLY.stream().anyMatch(name::contains);
 	}
 	
 	private static boolean isSelected(String testName)

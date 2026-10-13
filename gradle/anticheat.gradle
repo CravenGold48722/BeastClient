@@ -1,0 +1,329 @@
+// ── Anticheat servers for the gametests ─────────────────────────────────
+// The gametests also join two real servers, each in its own process, and
+// collect every flag their anticheat raises:
+//
+//   Grim    - GrimAC on a Fabric 26.1.2 server, built from its source in
+//             ../Testing (-PgrimDir=...)
+//   Intave  - Intave on a Paper 26.1.2 server, built from its source in
+//             ../Testing2 (-PintaveDir=...)
+//
+// A source folder that isn't there leaves its server out; -PnoAnticheat
+// leaves both out. Each server lives in build/anticheat/<name>; its world is
+// made fresh every run, the downloaded game files are kept. The test bot
+// isn't op on either (Intave gives ops its bypass trust factor), and neither
+// kicks or bans - the servers only log.
+
+def anticheatDir = layout.buildDirectory.dir("anticheat").get().asFile
+def noAnticheat = providers.gradleProperty("noAnticheat").isPresent()
+def grimSource = file(providers.gradleProperty("grimDir").getOrElse("../Testing"))
+def intaveSource = file(providers.gradleProperty("intaveDir").getOrElse("../Testing2"))
+def useGrim = !noAnticheat && grimSource.isDirectory()
+def useIntave = !noAnticheat && intaveSource.isDirectory()
+
+def grimPort = 25571
+def intavePort = 25572
+
+def windows = System.getProperty("os.name").toLowerCase().contains("windows")
+def gradlewIn = { File dir ->
+	windows ? ["cmd", "/c", new File(dir, "gradlew.bat").absolutePath]
+		: [new File(dir, "gradlew").absolutePath]
+}
+
+// ── Building the anticheats ──
+
+def buildGrim = tasks.register("buildGrim", Exec) {
+	onlyIf { useGrim }
+	workingDir grimSource
+	commandLine(gradlewIn(grimSource))
+	args(":fabric:jar", "--console=plain", "-q")
+	// only rebuilt when Grim's source changes
+	inputs.files(fileTree(grimSource) {
+		exclude "**/build/**", "**/.gradle/**", "**/run/**", ".idea/**"
+	})
+	outputs.dir(new File(grimSource, "fabric/build/libs"))
+}
+
+// Intave's build stamps the git commit into its version and fails without a
+// repository; a stub one here keeps its folder untouched.
+def intaveGit = new File(anticheatDir, "intave-git")
+def buildIntave = tasks.register("buildIntave", Exec) {
+	onlyIf { useIntave }
+	workingDir intaveSource
+	commandLine(gradlewIn(intaveSource))
+	args("shadowJar", "--console=plain", "-q")
+	environment("GIT_DIR", new File(intaveGit, ".git").absolutePath)
+	inputs.files(fileTree(intaveSource) {
+		include "src/main/**", "*.gradle.kts", "gradle.properties", "gradle/**"
+	})
+	outputs.file(new File(intaveSource, "build/libs/Intave-bundled.jar"))
+	doFirst {
+		if(new File(intaveGit, ".git").isDirectory())
+			return
+		intaveGit.mkdirs()
+		["git", "init", "-q"].execute(null, intaveGit).waitFor()
+		["git", "-c", "user.name=stub", "-c", "user.email=stub@localhost",
+			"commit", "-q", "--allow-empty", "-m", "stub for Intave's build"]
+			.execute(null, intaveGit).waitFor()
+	}
+}
+
+// ── Server software ──
+
+abstract class DownloadFile extends DefaultTask
+{
+	@Input
+	abstract Property<String> getUrl()
+
+	@Input
+	@Optional
+	abstract Property<String> getSha256()
+
+	@OutputFile
+	abstract RegularFileProperty getDestination()
+
+	@TaskAction
+	void download()
+	{
+		File dest = destination.get().asFile
+		File part = new File(dest.path + ".part")
+		dest.parentFile.mkdirs()
+		new URL(url.get()).openStream().withCloseable { input ->
+			part.withOutputStream { it << input }
+		}
+		if(sha256.isPresent())
+		{
+			String actual = java.security.MessageDigest.getInstance("SHA-256")
+				.digest(part.bytes).encodeHex().toString()
+			if(actual != sha256.get())
+				throw new GradleException("Bad download of " + url.get()
+					+ ": sha256 " + actual)
+		}
+		java.nio.file.Files.move(part.toPath(), dest.toPath(),
+			java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+	}
+}
+
+def downloadFabricServer = tasks.register("downloadFabricServer", DownloadFile) {
+	onlyIf { useGrim }
+	url = "https://meta.fabricmc.net/v2/versions/loader/${project.minecraft_version}/${project.loader_version}/1.1.2/server/jar"
+	destination = new File(anticheatDir, "downloads/fabric-server-${project.minecraft_version}-${project.loader_version}.jar")
+}
+
+def downloadPaperServer = tasks.register("downloadPaperServer", DownloadFile) {
+	onlyIf { useIntave }
+	url = "https://fill-data.papermc.io/v1/objects/1d70b1dab9cf4a6de615209a536f3a45a2186240253c428213ce2188ab95e5f7/paper-26.1.2-74.jar"
+	sha256 = "1d70b1dab9cf4a6de615209a536f3a45a2186240253c428213ce2188ab95e5f7"
+	destination = new File(anticheatDir, "downloads/paper-26.1.2-74.jar")
+}
+
+configurations {
+	anticheatFabricApi {
+		transitive = false
+	}
+}
+
+dependencies {
+	anticheatFabricApi "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+// ── Server folders ──
+
+abstract class PrepareTestServer extends DefaultTask
+{
+	@Input
+	abstract Property<Boolean> getUseServer()
+
+	@Internal
+	abstract DirectoryProperty getServerDir()
+
+	@InputFiles
+	abstract ConfigurableFileCollection getServerJar()
+
+	@Input
+	abstract Property<String> getServerJarName()
+
+	@InputFiles
+	abstract ConfigurableFileCollection getAddons()
+
+	@Input
+	abstract Property<String> getAddonDir()
+
+	@Input
+	abstract Property<Boolean> getPatchGrim()
+
+	@Input
+	abstract MapProperty<String, String> getTextFiles()
+
+	@Input
+	abstract ListProperty<String> getFreshDirs()
+
+	@TaskAction
+	void prepare()
+	{
+		if(!useServer.get())
+			return
+
+		File dir = serverDir.get().asFile
+		dir.mkdirs()
+		freshDirs.get().each { new File(dir, it).deleteDir() }
+
+		new File(dir, serverJarName.get()).bytes = serverJar.singleFile.bytes
+
+		File addonsDir = new File(dir, addonDir.get())
+		addonsDir.mkdirs()
+		addonsDir.listFiles()?.findAll { it.name.endsWith(".jar") }*.delete()
+		addons.files.each { jar ->
+			byte[] bytes = jar.bytes
+			if(patchGrim.get())
+				bytes = GrimJarPatch.patch(bytes)
+			new File(addonsDir, jar.name).bytes = bytes
+		}
+
+		textFiles.get().each { path, text ->
+			File file = new File(dir, path)
+			file.parentFile.mkdirs()
+			file.setText(text, "UTF-8")
+		}
+	}
+}
+
+/**
+ * The one change the test copy of Grim needs: the cloud command library it
+ * bundles asks for Minecraft 26.2, and Fabric then leaves it out on 26.1.2 -
+ * Grim says 26.1.2 is fine. Without it, Grim runs without its commands.
+ */
+class GrimJarPatch
+{
+	static final java.util.regex.Pattern NESTED =
+		~/META-INF\/jars\/(grimac-|cloud-fabric-)[^\/]*\.jar/
+
+	static byte[] patch(byte[] jar)
+	{
+		def out = new ByteArrayOutputStream()
+		new java.util.zip.ZipInputStream(new ByteArrayInputStream(jar)).withCloseable { zin ->
+			new java.util.zip.ZipOutputStream(out).withCloseable { zout ->
+				def entry
+				while((entry = zin.nextEntry) != null)
+				{
+					byte[] data = zin.readAllBytes()
+					if(entry.name == "fabric.mod.json")
+						data = patchModJson(new String(data, "UTF-8"))
+							.getBytes("UTF-8")
+					else if(NESTED.matcher(entry.name).matches())
+						data = patch(data)
+					zout.putNextEntry(new java.util.zip.ZipEntry(entry.name))
+					zout.write(data)
+					zout.closeEntry()
+				}
+			}
+		}
+		return out.toByteArray()
+	}
+
+	static String patchModJson(String json)
+	{
+		// some are written with ">=" escaped; same JSON either way (built
+		// from pieces: Groovy reads backslash-u escapes in the source itself,
+		// even inside a regex)
+		String bs = "\\"
+		json = json.replace(bs + "u003e", ">").replace(bs + "u003d", "=")
+		return json.replaceAll(/"minecraft"\s*:\s*">=26\.2"/,
+			'"minecraft": ">=26.1.2"')
+	}
+}
+
+def serverProperties = { int port, String motd ->
+	"""online-mode=false
+server-ip=127.0.0.1
+server-port=${port}
+motd=${motd}
+level-name=world
+level-type=minecraft\\:flat
+generate-structures=false
+spawn-protection=0
+difficulty=easy
+gamemode=survival
+view-distance=6
+simulation-distance=6
+max-tick-time=-1
+enforce-secure-profile=false
+sync-chunk-writes=false
+"""
+}
+
+def prepareGrimServer = tasks.register("prepareGrimServer", PrepareTestServer) {
+	dependsOn buildGrim, downloadFabricServer
+	useServer = useGrim
+	serverDir = new File(anticheatDir, "grim")
+	serverJar.from(downloadFabricServer.flatMap { it.destination })
+	serverJarName = "fabric-server.jar"
+	addons.from(configurations.anticheatFabricApi)
+	addons.from(fileTree(new File(grimSource, "fabric/build/libs")) {
+		include "grimac-fabric-*.jar"
+		exclude "grimac-fabric-official-*", "grimac-fabric-intermediary-*",
+			"grimac-fabric-mc*"
+	})
+	addonDir = "mods"
+	patchGrim = true
+	freshDirs = ["world", "logs"]
+	textFiles = [
+		"eula.txt": "eula=true\n",
+		"server.properties": serverProperties(grimPort, "Wurst test (Grim)"),
+		"ops.json": "[]\n",
+		// no usage statistics sent from test runs
+		"config/bStats/config.yml": "enabled: false\n",
+		"plugins/bStats/config.yml": "enabled: false\n",
+		// every flag in the console, not only alerts past a threshold
+		"config/GrimAC/config.yml": useGrim
+			? new File(grimSource, "common/src/main/resources/config/en.yml")
+				.getText("UTF-8").replaceFirst(/(?m)^verbose:\s*\n(\s*)print-to-console: false/,
+					"verbose:\n\$1print-to-console: true")
+				.replaceFirst(/(?m)^check-for-updates: true/, "check-for-updates: false")
+			: ""
+	]
+	outputs.upToDateWhen { false }
+}
+
+def prepareIntaveServer = tasks.register("prepareIntaveServer", PrepareTestServer) {
+	dependsOn buildIntave, downloadPaperServer
+	useServer = useIntave
+	serverDir = new File(anticheatDir, "intave")
+	serverJar.from(downloadPaperServer.flatMap { it.destination })
+	serverJarName = "paper.jar"
+	addons.from(new File(intaveSource, "build/libs/Intave-bundled.jar"))
+	addonDir = "plugins"
+	patchGrim = false
+	freshDirs = ["world", "world_nether", "world_the_end", "logs",
+		"plugins/Intave/logs"]
+	textFiles = [
+		"eula.txt": "eula=true\n",
+		"server.properties": serverProperties(intavePort, "Wurst test (Intave)"),
+		"ops.json": "[]\n",
+		// no usage statistics sent from test runs
+		"config/bStats/config.yml": "enabled: false\n",
+		"plugins/bStats/config.yml": "enabled: false\n",
+		// logging only: no kicks, no bans
+		"plugins/Intave/config.yml": useIntave
+			? new File(intaveSource, "src/main/resources/config.yml")
+				.getText("UTF-8")
+				.replaceFirst(/(?ms)^kick-commands:\s*\n(\s+-[^\n]*\n)+/, "kick-commands: []\n")
+				.replaceFirst(/(?ms)^ban-commands:\s*\n(\s+-[^\n]*\n)+/, "ban-commands: []\n")
+			: ""
+	]
+	outputs.upToDateWhen { false }
+}
+
+tasks.named("runClientGameTest") {
+	dependsOn prepareGrimServer, prepareIntaveServer
+}
+
+loom {
+	runs {
+		clientGameTest {
+			if(useGrim)
+				vmArgs.add("-Dwurst.test.grimServer=${new File(anticheatDir, "grim").absolutePath}:${grimPort}")
+			if(useIntave)
+				vmArgs.add("-Dwurst.test.intaveServer=${new File(anticheatDir, "intave").absolutePath}:${intavePort}")
+		}
+	}
+}

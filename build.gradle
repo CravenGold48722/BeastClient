@@ -331,3 +331,6 @@ task closeMilestone {
 		}
 	}
 }
+
+// real anticheat servers (Grim, Intave) for the gametests
+apply from: "gradle/anticheat.gradle"

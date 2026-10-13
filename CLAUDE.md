@@ -705,5 +705,42 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
   spring) runs on `util/GameClock` - ticks that actually ran + the frame's partial tick, 50 ms each -
   not `System.nanoTime`; the test client runs at most one tick per frame, so real time x tick rate
   would be wrong too. New per-frame aim code must use `GameClock.nanoTime()`.
-- `PacketBudgetTest` is the only automated check of combat-hack behaviour (packets, swings per
-  attack, aim settling); feel and accuracy still need a launch of the client.
+- `PacketBudgetTest` counts packets, swings per attack and aim settling in singleplayer; feel and
+  accuracy still need a launch of the client.
+- **Real anticheats (`AnticheatTest`, user, 2026-10-13).** The gametests also join two real
+  servers, each its own process, and collect every flag: **GrimAC** on a Fabric 26.1.2 server
+  (source `../Testing`) and **Intave** on Paper 26.1.2 (source `../Testing2`). `gradle/anticheat.gradle`
+  builds both from source (only when it changed; Intave's build needs git - a stub repo in
+  `build/anticheat/intave-git` via `GIT_DIR`), downloads the Fabric server launcher / Paper 26.1.2
+  (pinned, sha256), and prepares `build/anticheat/{grim,intave}` (fresh world each run, offline mode,
+  flat, ports 25571/25572, nobody op - Intave gives ops its bypass trust factor; Grim verbose to
+  console; Intave kick/ban commands emptied; bStats and update checks off). `-PnoAnticheat` /
+  `-PgrimDir` / `-PintaveDir`; `gametest grim|intave|anticheat` runs just those. `AnticheatServer`
+  starts the process, sends console commands (`query` waits for an answer line, e.g. a husk's
+  health), reads Grim flags from the console ("Grim » X failed Check") and Intave's from
+  `plugins/Intave/logs` ("(DET)" lines - Intave never prints them). Scenarios: baseline (no hacks,
+  must stay clean), control (Flight, must flag - proves flags arrive), Killaura, MaceAssist,
+  ScaffoldWalk; each reports what it did (husk damage, blocks placed) and the tick pacing.
+  Things that cost a round each:
+  - Grim **can't run in the integrated server**: packetevents attaches to every connection in the
+    JVM, including the client's end of the singleplayer link, and its client side misreads the
+    configuration packets (and its 26.x build has no client chain entrypoint - it crashed on an
+    immutable list). Separate processes are the only accurate setup anyway.
+  - Grim's bundled cloud-fabric asks for MC >=26.2; the test copy rewrites that to 26.1.2
+    (`GrimJarPatch`; Groovy reads backslash-u escapes even inside regexes - normalise the JSON's
+    `>` first). Grim then runs without commands (cloud fails at runtime) - fine, console
+    commands are vanilla.
+  - **Timer/TimerLimit flags at the join are server lag, not the client**: a fresh server goes
+    silent for ~1 s after the first join; the client keeps ticking evenly (measured by
+    `PacketTrace`: tick-end packets out, any packet in), and the timer check, whose clock is its
+    own pings, sees the client ahead. A run with Wurst switched off also got them. So the join is
+    its own report line (after a 5 s settle) and the baseline ignores timer flags only in a window
+    where the server was silent > 500 ms while the client stayed <= 22 ticks/s.
+  - Fabric's gametest harness can **deadlock closing the singleplayer world** while another heavy
+    process starts (render thread in the deferred disconnect -> `IntegratedServer.halt`, server
+    thread parked in the harness phaser): the servers are awaited before that world is created.
+    `gametest.ps1` has a watchdog (no game log output for 4 min -> jstack to
+    `build/gametest-hang.txt`, kill, FAILED), and the gametest `ConnectionMixin` logs every
+    disconnect reason and connection exception (a silent disconnect used to hang the run).
+  First results (2026-10-13): Killaura, MaceAssist (mace hit) and ScaffoldWalk clean on both;
+  Intave once noted "halting game ticks" (+0 VL) after the Flight setbacks.

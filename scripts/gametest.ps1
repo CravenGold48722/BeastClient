@@ -14,6 +14,7 @@ if($Help)
 	Write-Host @"
 gametest                   run every in-game test
 gametest mace scaffold     only tests whose name contains "mace" or "scaffold"
+gametest anticheat         only the Grim and Intave servers (or: grim, intave)
 gametest -mods             with Sodium etc. installed
 gametest -update           re-record the screenshot templates (check git diff!)
 "@
@@ -61,9 +62,59 @@ $script:nextIsCause = $false
 # Native stderr shows up as ErrorRecords in Windows PowerShell; keep going.
 $ErrorActionPreference = "Continue"
 
-& .\gradlew.bat @gradleArgs 2>&1 | ForEach-Object { "$_" } |
-	Tee-Object -FilePath $fullLog | ForEach-Object {
+# Watchdog: the game log not changing for 4 minutes means the game hung (a
+# deadlock in the test harness has happened). Save a thread dump, then stop
+# the game and the anticheat test servers, so the run ends with a reason.
+$hangMarker = Join-Path $root "build\gametest-hang.txt"
+Remove-Item $hangMarker -ErrorAction SilentlyContinue
+$watchdog = Start-Job -ArgumentList (Join-Path $root "$runDir\logs\latest.log"), $hangMarker -ScriptBlock {
+	param($gameLog, $hangMarker)
+	$startedAt = Get-Date
+	while($true)
+	{
+		Start-Sleep -Seconds 15
+		$game = Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
+			Where-Object { $_.CommandLine -match "fabric\.client\.gametest" } |
+			Select-Object -First 1
+		if(-not $game -or -not (Test-Path $gameLog))
+		{
+			continue
+		}
+		$last = (Get-Item $gameLog).LastWriteTime
+		if($last -lt $startedAt -or ((Get-Date) - $last).TotalMinutes -lt 4)
+		{
+			continue
+		}
+
+		$jstack = Join-Path (Split-Path $game.ExecutablePath) "jstack.exe"
+		"No game output for 4 minutes - thread dump:" | Out-File $hangMarker -Encoding utf8
+		if(Test-Path $jstack)
+		{
+			& $jstack $game.ProcessId | Out-File $hangMarker -Append -Encoding utf8
+		}
+		Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
+			Where-Object { $_.CommandLine -match "fabric\.client\.gametest|fabric-server\.jar|paper\.jar" } |
+			ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+		return
+	}
+}
+
+# UTF-8 (Tee-Object writes UTF-16 in Windows PowerShell); another file if
+# that one is still held open (e.g. by an earlier run that hung)
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+try
+{
+	$writer = New-Object System.IO.StreamWriter($fullLog, $false, $utf8)
+}catch
+{
+	$fullLog = Join-Path $root ("build\gametest-output-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+	$writer = New-Object System.IO.StreamWriter($fullLog, $false, $utf8)
+	Write-Host "(build\gametest-output.log is in use - writing $fullLog)" -ForegroundColor DarkGray
+}
+
+& .\gradlew.bat @gradleArgs 2>&1 | ForEach-Object { "$_" } | ForEach-Object {
 	$line = $_
+	$writer.WriteLine($line)
 	if($line -match "\(Wurst Test\) (.*)$")
 	{
 		$msg = $Matches[1]
@@ -78,17 +129,17 @@ $ErrorActionPreference = "Continue"
 		{
 			Write-Host "    $msg"
 		}
-
+		
 	}elseif($line -match "Client gametests failed")
 	{
 		$script:nextIsCause = $true
-
+		
 	}elseif($script:nextIsCause -and $line -match "^\s*(\S*(Exception|Error)\S*): (.*)$")
 	{
 		# the exception right after "Client gametests failed": the reason
 		$script:errors.Add($Matches[3])
 		$script:nextIsCause = $false
-
+		
 	}elseif($line -match ": error: |^> Task \S+ FAILED" -and $line -notmatch "runClientGameTest")
 	{
 		# compile errors etc. from Gradle
@@ -97,6 +148,14 @@ $ErrorActionPreference = "Continue"
 	}
 }
 $exitCode = $LASTEXITCODE
+$writer.Close()
+Stop-Job $watchdog -ErrorAction SilentlyContinue
+Remove-Job $watchdog -Force -ErrorAction SilentlyContinue
+if(Test-Path $hangMarker)
+{
+	$script:complete = $false
+	$script:errors.Insert(0, "The game hung (no output for 4 minutes) and was stopped - thread dump in build\gametest-hang.txt")
+}
 
 $time = (Get-Date) - $start
 $took = "{0}m {1:00}s" -f [int][math]::Floor($time.TotalMinutes), $time.Seconds

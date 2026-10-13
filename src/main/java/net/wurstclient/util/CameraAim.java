@@ -100,44 +100,12 @@ public final class CameraAim
 	}
 	
 	/**
-	 * Turns the camera toward a point with the PID aim
-	 * ({@link HumanAim#pidStep}
-	 * - the one AimAssist uses on auto speed), as seen from the given eyes -
-	 * which don't have to be where you are now: aiming from where you'll be
-	 * when a hit can go out keeps the crosshair right for that moment.
-	 *
-	 * @param key
-	 *            what is being aimed at; a change starts a new turn
-	 * @param velocity
-	 *            how fast the point moves relative to those eyes, blocks per
-	 *            second
-	 * @param tolerance
-	 *            how far (degrees) the crosshair can be from the point and
-	 *            still be on the target
-	 * @param yawFirst
-	 *            sideways first, see {@link HumanAim#pidStep}
+	 * Turns the camera sideways only, smoothly, toward a point on an entity
+	 * (given at its tick position) - see {@link HumanAim#springYawStep}. The
+	 * pitch stays the player's.
 	 */
-	public void pidAim(Object key, Vec3 eyes, Vec3 point, Vec3 velocity,
-		boolean humanize, double maxSpeed, double tolerance, boolean yawFirst)
-	{
-		Rotation needed = RotationUtils.getNeededRotations(eyes, point);
-		double[] track = HumanAim.trackingRate(eyes, point, velocity);
-		
-		long now = GameClock.nanoTime();
-		prepare(key, now, true);
-		float dt = aim.takeDt(now);
-		aim.updateTracking(track[0], track[1], dt);
-		aim.pidStep(needed.yaw(), needed.pitch(), dt, now, maxSpeed, tolerance,
-			humanize, yawFirst);
-		applyToCamera();
-	}
-	
-	/**
-	 * Turns the camera sideways only, with the PID aim, toward a point on an
-	 * entity (given at its tick position). The pitch is left to the player.
-	 */
-	public void pidTurnYawToEntity(Entity target, Vec3 tickAimPoint,
-		float partialTicks, boolean humanize, double maxSpeed, double tolerance)
+	public void turnYawSmoothly(Entity target, Vec3 tickAimPoint,
+		float partialTicks, boolean humanize, double maxSpeed)
 	{
 		Vec3 offset = EntityUtils.getLerpedPos(target, partialTicks)
 			.subtract(target.position());
@@ -152,8 +120,13 @@ public final class CameraAim
 		prepare(target, now, true);
 		float dt = aim.takeDt(now);
 		aim.updateTracking(track[0], 0, dt);
-		aim.pidStepYaw(needed.yaw(), dt, now, maxSpeed, tolerance, humanize);
-		applyToCamera();
+		aim.springYawStep(needed.yaw(), dt, now, maxSpeed, humanize);
+		
+		// the pitch exactly as the player left it
+		new Rotation(aim.getYaw(), MC.player.getXRot()).applyToClientPlayer();
+		lastSetYaw = MC.player.getYRot();
+		lastSetPitch = MC.player.getXRot();
+		lastSetValid = true;
 	}
 	
 	/**

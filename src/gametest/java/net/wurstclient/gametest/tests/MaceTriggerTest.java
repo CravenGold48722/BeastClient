@@ -11,9 +11,12 @@ import java.util.Locale;
 
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
+import org.lwjgl.glfw.GLFW;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.monster.zombie.Husk;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.gametest.SingleplayerTest;
@@ -28,11 +31,12 @@ import net.wurstclient.gametest.SingleplayerTest;
  * anywhere near the target in the air), starting off to its side and looking
  * away from it, it still has to hit it.</li>
  * </ul>
- * The test only sets up the fall; aiming and hitting are MaceAssist's.
+ * The test only sets up the fall and the pitch (the mace aim only turns
+ * sideways); turning sideways onto the target and hitting are MaceAssist's.
  */
 public final class MaceTriggerTest extends SingleplayerTest
 {
-	private static final int HEIGHT = 25;
+	private static final int HEIGHT = 40;
 	private static final double DIVE_SPEED = 3.5;
 	private static final int HEAVY_HEIGHT = 10_000;
 	private static final double HEAVY_GRAVITY = 50;
@@ -49,6 +53,62 @@ public final class MaceTriggerTest extends SingleplayerTest
 	{
 		testRiptideDive();
 		testHeavyFall();
+		testCobweb();
+	}
+	
+	/**
+	 * Right-clicking a block with a sword, with cobwebs and wind charges in
+	 * the hotbar: a cobweb goes down, the sword is back in hand, and no wind
+	 * charge is fired.
+	 */
+	private void testCobweb()
+	{
+		logger.info("Testing MaceAssist cobweb on right click");
+		try
+		{
+			clearInventory();
+			runCommand("item replace entity @s hotbar.0 with diamond_sword");
+			runCommand("item replace entity @s hotbar.4 with cobweb 8");
+			runCommand("item replace entity @s hotbar.5 with wind_charge 8");
+			context
+				.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
+			// a block two ahead, looked at from its side
+			runCommand("setblock ~ ~ ~2 smooth_stone");
+			runCommand("tp @s ~ ~ ~ 0 30");
+			runWurstCommand("t MaceAssist on");
+			context.waitTicks(7);
+			
+			input.pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+			waitForBlock(0, 0, 1, Blocks.COBWEB);
+			context.waitTicks(4);
+			
+			int slot = context.computeOnClient(
+				mc -> mc.player.getInventory().getSelectedSlot());
+			int windCharges = context.computeOnClient(
+				mc -> mc.player.getInventory().getItem(5).getCount());
+			logger.info("Cobweb placed; selected slot {}, wind charges {}",
+				slot, windCharges);
+			if(slot != 0)
+				throw new RuntimeException(
+					"Not back on the sword after the cobweb: slot " + slot);
+			if(windCharges != 8)
+				throw new RuntimeException(
+					"A wind charge was fired instead of / besides the cobweb");
+			
+		}finally
+		{
+			runWurstCommand("t MaceAssist off");
+			runCommand("setblock ~ ~ ~1 air");
+			runCommand("setblock ~ ~ ~2 air");
+			clearInventory();
+			runCommand("tp @s ~ ~ ~ 0 0");
+			clearChat();
+			clearParticles();
+			clearToasts();
+			context.runOnClient(
+				mc -> mc.gui.setOverlayMessage(Component.empty(), false));
+			context.waitTicks(7);
+		}
 	}
 	
 	private void testRiptideDive()
@@ -63,9 +123,12 @@ public final class MaceTriggerTest extends SingleplayerTest
 		{
 			setUp(spot, target);
 			
-			// above it, a little to the side, looking down
-			runCommand(String.format(Locale.ROOT, "tp @s %.1f %d %.1f 0 89",
-				spot.x + 0.4, target.getY() + HEIGHT, spot.z + 0.4));
+			// 1.5 blocks to its side (one tick in reach on the way down),
+			// facing away from it sideways; the pitch is the player's - the
+			// mace aim only turns sideways - and 37 degrees down hits it from
+			// that tick
+			runCommand(String.format(Locale.ROOT, "tp @s %.1f %d %.1f 0 37",
+				spot.x + 1.5, target.getY() + HEIGHT, spot.z));
 			context.waitTicks(5);
 			
 			// dive at riptide speed until landing
@@ -113,9 +176,10 @@ public final class MaceTriggerTest extends SingleplayerTest
 			logger.info("Effective gravity: {}",
 				(Object)context.computeOnClient(mc -> mc.player.getGravity()));
 			
-			// 2.1 blocks to its side (in reach once down there), looking
-			// straight ahead - away from it
-			runCommand(String.format(Locale.ROOT, "tp @s %.1f %d %.1f 0 0",
+			// 2.1 blocks to its side (in reach once down there), facing away
+			// from it sideways; the player's pitch: 48 degrees up, at the
+			// husk floating 3 blocks above the floor
+			runCommand(String.format(Locale.ROOT, "tp @s %.1f %d %.1f 0 -48",
 				spot.x + 1.5, target.getY() + HEAVY_HEIGHT, spot.z + 1.5));
 			
 			// (right after the tp you still count as on the ground)
@@ -151,6 +215,7 @@ public final class MaceTriggerTest extends SingleplayerTest
 			spot.x, target.getY(), spot.z, HEALTH, HEALTH));
 		runWurstCommand("setcheckbox MaceAssist Mace_trigger_bot on");
 		runWurstCommand("setcheckbox MaceAssist Mace_aim_assist on");
+		runWurstCommand("setslider MaceAssist Aim_speed 1800");
 		runWurstCommand("t MaceAssist on");
 	}
 	
@@ -166,6 +231,7 @@ public final class MaceTriggerTest extends SingleplayerTest
 	private void cleanUp(BlockPos ground)
 	{
 		runWurstCommand("t MaceAssist off");
+		runWurstCommand("setslider MaceAssist Aim_speed 15");
 		runWurstCommand("setcheckbox MaceAssist Mace_trigger_bot off");
 		runWurstCommand("setcheckbox MaceAssist Mace_aim_assist off");
 		runCommand("kill @e[type=husk]");

@@ -34,7 +34,6 @@ import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.item.enchantment.ItemEnchantments;
 import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -58,7 +57,7 @@ import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.HitCheck;
 import net.wurstclient.util.HumanAim;
-import net.wurstclient.util.TriggerSweep;
+import net.wurstclient.util.InteractionSimulator;
 import net.wurstclient.util.PacketOrder;
 import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
@@ -160,6 +159,15 @@ public final class MaceAssistHack extends Hack
 				+ " instead of doing nothing.",
 			true);
 	
+	private final CheckboxSetting cobwebOnRightClick = new CheckboxSetting(
+		"Cobweb on right click",
+		"Right-clicking a block with a sword puts a cobweb there, from your"
+			+ " hotbar or offhand, then switches back to the sword.\n\n"
+			+ "Comes before §lWind on right click§r: with cobwebs and wind"
+			+ " charges both on you, you get the cobweb (the wind charge only"
+			+ " when you aren't looking at a block).",
+		true);
+	
 	private final CheckboxSetting airPots = new CheckboxSetting("Air pots",
 		"Fires a wind charge right after you throw a splash potion in midair,"
 			+ " so the potion catches you.",
@@ -183,19 +191,20 @@ public final class MaceAssistHack extends Hack
 	
 	// ── Mace aim assist ──────────────────────────────────────────────────
 	
-	private final CheckboxSetting maceAimAssist =
-		new CheckboxSetting("Mace aim assist",
-			"Drags your camera toward the nearest target while you fall, so the"
-				+ " mace lands.",
-			false);
+	private final CheckboxSetting maceAimAssist = new CheckboxSetting(
+		"Mace aim assist",
+		"Turns your camera sideways toward the nearest target while you"
+			+ " fall, so the mace lands. Only sideways - looking up and down"
+			+ " stays yours.",
+		false);
 	
 	private final SliderSetting aimSpeed = new SliderSetting("Aim speed",
-		"How fast the camera is allowed to turn toward the target, in degrees"
-			+ " per second.\n\n"
+		"How fast the camera turns toward the target, in degrees per second -"
+			+ " the top speed, and how quickly it settles (faster = firmer).\n\n"
 			+ "On top of this it moves as fast as the target moves across your"
 			+ " view, so once it's on the target it stays there.\n\n"
 			+ "AimAssist turns at 720.",
-		15, 0.5, 720, 0.5, ValueDisplay.DECIMAL);
+		15, 0.5, 1800, 0.5, ValueDisplay.DECIMAL);
 	
 	private final SliderSetting aimRange = new SliderSetting("Aim range",
 		"How far away a target can be before aim assist ignores it.", 15, 0.5,
@@ -214,16 +223,14 @@ public final class MaceAssistHack extends Hack
 	
 	private final CheckboxSetting humanizeAim = new CheckboxSetting(
 		"Humanize aim",
-		"The aim is the PID aim AimAssist uses: it turns until the crosshair"
-			+ " is anywhere on the target's hitbox - the nearest part of it -"
-			+ " and doesn't move the camera at all while it already is.\n\n"
-			+ "On: like a hand on a mouse - a short reaction delay, a speed"
-			+ " that drifts a little, a slightly curved path and a slight"
-			+ " hand tremor while still far off.\n\n"
-			+ "Off: a snappier, more obvious turn.\n\n"
-			+ "Either way the camera turns every frame, keeps up with a moving"
-			+ " target, and moves in whole mouse counts of your real"
-			+ " sensitivity, like an actual mouse.",
+		"The aim turns smoothly - speeding up and slowing down, never past"
+			+ " the target - until your direction is anywhere on the target,"
+			+ " and doesn't move the camera at all while it already is (it"
+			+ " does keep following a target that slides across your view).\n\n"
+			+ "On: a short reaction delay before turning to a new target, like"
+			+ " a hand.\n\n"
+			+ "Either way the camera turns every frame and moves in whole mouse"
+			+ " counts of your real sensitivity, like an actual mouse.",
 		true);
 	
 	private final CheckboxSetting approachTarget = new CheckboxSetting(
@@ -347,6 +354,13 @@ public final class MaceAssistHack extends Hack
 	private int windReturnSlot = -1;
 	private int windActionCooldown;
 	private boolean wasUsePressed;
+	/** Vanilla handled a right click this tick (see onUpdate). */
+	private boolean rightClickedThisTick;
+	
+	/** The hotbar slot a cobweb goes down from next; -1 = none. */
+	private int cobwebSlot = -1;
+	/** The slot to switch back to after a cobweb; -1 = none. */
+	private int cobwebReturnSlot = -1;
 	
 	private boolean airPotThrown;
 	private int airPotWindDelay;
@@ -364,17 +378,15 @@ public final class MaceAssistHack extends Hack
 	private final CameraAim cameraAim = new CameraAim();
 	
 	/**
-	 * Where on the target the current turn goes, relative to its position:
-	 * the part of its hitbox nearest the crosshair when the turn started.
-	 * Kept for the whole turn, so the aim point only moves with the target -
-	 * one picked afresh every frame from the crosshair would move with the
-	 * camera and the aim would chase itself. null = pick a new one.
+	 * Where on the target the current turn goes, relative to the middle of
+	 * its footprint: the part of the middle nearest the crosshair when the
+	 * turn started. null = pick a new one.
 	 */
 	private Vec3 aimOffset;
-	/** Whether {@link #aimOffset} was picked for the sideways approach. */
-	private boolean aimOffsetFlat;
 	/** The target {@link #aimOffset} was picked on. */
 	private Entity aimOffsetTarget;
+	/** A turn is under way (until it has settled); otherwise the aim holds. */
+	private boolean turning;
 	
 	/** Turning sideways toward the target and holding W, see Approach. */
 	private boolean approaching;
@@ -385,42 +397,25 @@ public final class MaceAssistHack extends Hack
 	private static final double APPROACH_DISTANCE = 3;
 	
 	/**
-	 * How far inside the hitbox's sides the crosshair has to be to count as
-	 * on it - the margin {@link HitCheck} wants, so a hit can go out.
+	 * How far inside the footprint's sides your direction has to cross it to
+	 * count as on the target - the margin {@link HitCheck} wants, so a hit
+	 * can go out.
 	 */
 	private static final double ON_TARGET_MARGIN = 0.1;
 	/** ...at most this share of its half-size (as HitCheck: a quarter). */
 	private static final double ON_TARGET_SHARE = 0.5;
 	
 	/**
-	 * How far inside the hitbox's sides the aim point is picked: about 0.1
-	 * blocks deeper than "on it", so landing there isn't a hair from the edge.
+	 * A turn aims for the middle third of the footprint (at least 0.2 blocks
+	 * inside the sides), so it ends well inside the band where the aim holds.
 	 */
-	private static final double AIM_POINT_MARGIN = 0.2;
-	/** ...at most this share of its half-size. */
-	private static final double AIM_POINT_SHARE = 0.65;
+	private static final double AIM_ZONE_MARGIN = 0.2;
+	private static final double AIM_ZONE_SHARE = 0.65;
 	
-	/**
-	 * A hit at most this many ticks away: no reaction delay, and the turn is
-	 * made fast enough to be done in time.
-	 */
-	private static final double URGENT_TICKS = 4;
-	
-	/** The fastest flick an urgent turn may make, degrees per second. */
-	private static final double MAX_FLICK_SPEED = 3600;
-	
-	/** How many ticks ahead the next hit is looked for. */
-	private static final int PREDICT_TICKS = 40;
-	
-	/**
-	 * How much closer than your reach the predicted eyes have to be: the
-	 * prediction isn't exact, and the hit has to land inside the hitbox.
-	 */
-	private static final double REACH_SLACK = 0.1;
-	
-	private HitWindow hitWindow;
-	private int hitWindowTick = -1;
-	private Entity hitWindowTarget;
+	/** A turn has settled within this many degrees of its point... */
+	private static final double SETTLED_YAW = 0.5;
+	/** ...while the target slides across your view slower than this, deg/s. */
+	private static final double STILL_RATE = 5;
 	
 	private int triggerHitsThisFall;
 	private int triggerCooldownTimer;
@@ -447,6 +442,7 @@ public final class MaceAssistHack extends Hack
 		addSetting(pearlReturnMode);
 		
 		addSetting(windOnRightClick);
+		addSetting(cobwebOnRightClick);
 		addSetting(airPots);
 		
 		addSetting(lungeSwapping);
@@ -502,7 +498,12 @@ public final class MaceAssistHack extends Hack
 		EVENTS.remove(RightClickListener.class, this);
 		
 		if(MC.player != null)
+		{
 			restoreOriginalSlot();
+			// back to the sword if a cobweb was just put down
+			if(cobwebReturnSlot != -1 && PacketOrder.canChangeSlotNow())
+				selectSlot(cobwebReturnSlot);
+		}
 		
 		fullReset();
 	}
@@ -541,7 +542,17 @@ public final class MaceAssistHack extends Hack
 		if(windActionCooldown > 0)
 			windActionCooldown--;
 		
-		if(windOnRightClick.isChecked())
+		boolean usePressed = MC.options.keyUse.isDown();
+		// a fresh click: held now, or a tap vanilla handled that was already
+		// let go of by the time the tick polls the key
+		boolean usePressedNow =
+			!wasUsePressed && (usePressed || rightClickedThisTick);
+		rightClickedThisTick = false;
+		wasUsePressed = usePressed;
+		
+		tickCobweb();
+		// a cobweb, when one can go down, comes before the wind charge
+		if(usePressedNow && !startCobweb() && windOnRightClick.isChecked())
 			tickWindRightClick();
 		
 		tickStunSlam();
@@ -619,212 +630,60 @@ public final class MaceAssistHack extends Hack
 			return;
 		}
 		
-		// Turned every frame, like a mouse, with the same PID aim as AimAssist
-		// - including keeping up with a moving target.
+		// Turned every frame, like a mouse - sideways only: the pitch is all
+		// yours.
 		if(!isAimActive())
 			return;
 		
-		Rotation camera =
-			new Rotation(MC.player.getYRot(), MC.player.getXRot());
-		
-		// Approaching: sideways only. The crosshair's direction already
-		// crossing the target's footprint counts as on it.
-		boolean flat = approaching;
-		Vec3 look = flat ? new Rotation(camera.yaw(), 0).toLookVec()
-			: camera.toLookVec();
-		
+		Vec3 eyes = CameraAim.getFrameEyes(partialTicks);
 		Vec3 drawnOffset = EntityUtils.getLerpedPos(lockedTarget, partialTicks)
 			.subtract(lockedTarget.position());
-		AABB tickBox =
-			lockedTarget.getBoundingBox().inflate(lockedTarget.getPickRadius());
+		AABB footprint = footprint(lockedTarget.getBoundingBox()
+			.inflate(lockedTarget.getPickRadius()).move(drawnOffset), eyes);
+		Vec3 look = new Rotation(MC.player.getYRot(), 0).toLookVec();
 		
-		// Where the aim is judged from. A hit coming up soon: from where your
-		// eyes will be when it goes out - that's where the server checks it
-		// from, both with the rotation of that tick and the one sent the tick
-		// before. Falling fast, that's a whole tick of motion (or the landing
-		// spot) away from where you are drawn now, and the crosshair has to be
-		// on the target from there, not from here.
-		HitWindow window = flat ? null : getHitWindow();
-		Vec3 eyes;
-		AABB box;
-		Vec3 velocity;
-		if(window != null)
-		{
-			eyes = window.eyes();
-			box = tickBox.move(window.targetShift());
-			velocity = lockedTarget.position()
-				.subtract(lockedTarget.xo, lockedTarget.yo, lockedTarget.zo)
-				.scale(20);
-			
-		}else
-		{
-			eyes = CameraAim.getFrameEyes(partialTicks);
-			box = tickBox.move(drawnOffset);
-			velocity = HumanAim.relativeVelocity(lockedTarget, MC.player);
-		}
+		// On target: your direction crosses its footprint, a little inside
+		// the sides (directly above it, any direction does).
+		AABB band = inset(footprint, ON_TARGET_MARGIN, ON_TARGET_SHARE);
+		boolean onTarget = isRayOn(eyes, look, band);
 		
-		// Already on the hitbox, anywhere on it: the camera stays where it is.
-		if(isOnTarget(eyes, look, box, flat))
+		// Held still while on it. A turn starts once the crosshair has slid
+		// off, and runs until it has settled near the middle - so it neither
+		// stops dead at the edge nor starts and stops along it.
+		if(!turning && onTarget || band.contains(eyes))
 		{
+			turning = false;
 			cameraAim.hold(lockedTarget);
-			aimOffset = null;
 			return;
 		}
 		
-		// Off it: aim for the nearest part of it, picked once per turn.
-		AABB aimBox = inset(flat ? footprint(box, eyes) : box, AIM_POINT_MARGIN,
-			flat ? 0 : AIM_POINT_MARGIN, AIM_POINT_SHARE);
-		if(aimOffset == null || aimOffsetFlat != flat
-			|| aimOffsetTarget != lockedTarget)
+		AABB aimZone = inset(footprint, AIM_ZONE_MARGIN, AIM_ZONE_SHARE);
+		if(!turning || aimOffset == null || aimOffsetTarget != lockedTarget)
 		{
+			// the part of the middle nearest the crosshair, kept relative to
+			// the target for the whole turn (picked afresh every frame, it
+			// would move with the camera and the aim would chase itself)
+			turning = true;
 			aimOffsetTarget = lockedTarget;
-			aimOffset =
-				nearestPointToRay(eyes, look, aimBox).subtract(box.getCenter());
-			aimOffsetFlat = flat;
+			aimOffset = nearestPointToRay(eyes, look, aimZone)
+				.subtract(aimZone.getCenter());
 		}
-		Vec3 point = box.getCenter().add(aimOffset);
+		Vec3 point = aimZone.getCenter().add(aimOffset);
 		
-		boolean humanize = humanizeAim.isChecked();
-		double speed = aimSpeed.getValue();
-		if(window != null && window.ticks() <= URGENT_TICKS)
-		{
-			// The hit is a few ticks away: no reaction delay, and turned in
-			// time - the rotation has to be there when the movement packet
-			// before the hit goes out, at the start of tick number "ticks"
-			// from now (the next one if the hit is the next tick's).
-			humanize = false;
-			// in yaw/pitch degrees, the way the aim turns: looking almost
-			// straight down, a target just beside you can be 135 degrees of
-			// yaw away
-			Rotation needed = RotationUtils.getNeededRotations(eyes, point);
-			double angle =
-				Math.hypot(Mth.wrapDegrees(needed.yaw() - camera.yaw()),
-					needed.pitch() - camera.pitch());
-			double ticks = Math.max(window.ticks(), 1) - partialTicks;
-			double time = Math.max(0.005, ticks * 0.05);
-			speed =
-				Math.min(MAX_FLICK_SPEED, Math.max(speed, angle / time * 1.3));
-		}
+		cameraAim.turnYawSmoothly(lockedTarget, point.subtract(drawnOffset),
+			partialTicks, humanizeAim.isChecked(), aimSpeed.getValue());
 		
-		// how far the crosshair can be from the point and still be on it
-		AABB onBox = inset(box, ON_TARGET_MARGIN, 0, ON_TARGET_SHARE);
-		double slack = Math.max(0.02,
-			Math.min(aimBox.minX - onBox.minX, aimBox.minZ - onBox.minZ));
-		double distance = Math.max(eyes.distanceTo(point), 1);
-		double tolerance = Math.toDegrees(Math.atan(slack / distance));
-		
-		if(flat)
-			cameraAim.pidTurnYawToEntity(lockedTarget,
-				point.subtract(drawnOffset), partialTicks, humanize, speed,
-				tolerance);
-		else
-			cameraAim.pidAim(lockedTarget, eyes, point, velocity, humanize,
-				speed, tolerance, true);
+		// Settled once there and the target isn't sliding across your view;
+		// while it is, the aim keeps following it smoothly instead of
+		// stopping and catching up again.
+		double left = Math.abs(
+			Mth.wrapDegrees(RotationUtils.getNeededRotations(eyes, point).yaw()
+				- MC.player.getYRot()));
+		double sliding = Math.abs(HumanAim.trackingRate(eyes, point,
+			HumanAim.relativeVelocity(lockedTarget, MC.player))[0]);
+		if(left < SETTLED_YAW && sliding < STILL_RATE)
+			turning = false;
 	}
-	
-	/**
-	 * When and from where the next hit on the target can go out, predicted
-	 * once per tick. null = not within {@link #PREDICT_TICKS} ticks.
-	 */
-	private HitWindow getHitWindow()
-	{
-		if(MC.player.tickCount != hitWindowTick
-			|| hitWindowTarget != lockedTarget)
-		{
-			hitWindowTick = MC.player.tickCount;
-			hitWindowTarget = lockedTarget;
-			hitWindow = predictHitWindow(lockedTarget);
-		}
-		
-		return hitWindow;
-	}
-	
-	/**
-	 * Steps your movement forward tick by tick with vanilla's air physics
-	 * (fall speed: minus gravity - the gravity attribute, so any value -
-	 * then times 0.98; sideways speed times 0.91) and the target's along its
-	 * last tick's motion, until your eyes are within reach of its hitbox.
-	 * Lands you on the first block under you near the target's height, so a
-	 * fall too fast to ever be in reach in the air (100s of blocks per tick)
-	 * ends in the landing spot - the hit then goes out the tick after.
-	 *
-	 * <p>
-	 * Index 0 is where you are now: the next tick's attack goes out from
-	 * there, since attacks are sent before the tick's movement.
-	 */
-	private HitWindow predictHitWindow(Entity target)
-	{
-		LocalPlayer player = MC.player;
-		double reach =
-			Math.min(triggerRange.getValue(), player.entityInteractionRange())
-				- REACH_SLACK;
-		AABB box = target.getBoundingBox().inflate(target.getPickRadius());
-		Vec3 targetStep =
-			target.position().subtract(target.xo, target.yo, target.zo);
-		double eyeHeight = player.getEyeHeight();
-		double gravity = player.getGravity();
-		
-		Vec3 pos = player.position();
-		Vec3 velocity = player.getDeltaMovement();
-		// the lowest your feet can be with your eyes still in reach of it
-		double lowest = box.minY - reach - eyeHeight - 0.5;
-		double floor = findFloor(pos, box, reach, lowest);
-		boolean landed = false;
-		
-		for(int ticks = 0; ticks <= PREDICT_TICKS; ticks++)
-		{
-			Vec3 shift = targetStep.scale(ticks);
-			Vec3 eyes = pos.add(0, eyeHeight, 0);
-			if(TriggerSweep.distanceSq(eyes, box.move(shift)) <= reach * reach)
-				return new HitWindow(eyes, shift, ticks);
-			
-			// on the ground / fallen past it
-			if(landed || pos.y < lowest + shift.y && velocity.y <= 0)
-				return null;
-			
-			double y = pos.y + velocity.y;
-			if(!Double.isNaN(floor) && pos.y >= floor && y <= floor)
-			{
-				y = floor;
-				landed = true;
-			}
-			pos = new Vec3(pos.x + velocity.x, y, pos.z + velocity.z);
-			velocity = new Vec3(velocity.x * 0.91,
-				(velocity.y - gravity) * 0.98, velocity.z * 0.91);
-		}
-		
-		return null;
-	}
-	
-	/**
-	 * The top of the first block under you within the heights where you could
-	 * reach the target from, or NaN. Blocks higher up aren't looked at (a
-	 * fall from 10,000 blocks would otherwise mean a 10,000 block raycast
-	 * every tick).
-	 */
-	private double findFloor(Vec3 pos, AABB box, double reach, double lowest)
-	{
-		double top = Math.min(pos.y, box.maxY + reach + 2);
-		double bottom = lowest - 1;
-		if(top <= bottom)
-			return Double.NaN;
-		
-		BlockHitResult hit =
-			MC.level.clip(new ClipContext(new Vec3(pos.x, top, pos.z),
-				new Vec3(pos.x, bottom, pos.z), ClipContext.Block.COLLIDER,
-				ClipContext.Fluid.NONE, MC.player));
-		if(hit.getType() != HitResult.Type.BLOCK)
-			return Double.NaN;
-		
-		return hit.getLocation().y;
-	}
-	
-	/**
-	 * Where your eyes will be when a hit can go out ({@code ticks} ticks from
-	 * the next one), and how far the target will have moved by then.
-	 */
-	private record HitWindow(Vec3 eyes, Vec3 targetShift, int ticks)
-	{}
 	
 	/**
 	 * The target's footprint, stretched up and down to your eye height, for
@@ -837,29 +696,14 @@ public final class MaceAssistHack extends Hack
 	}
 	
 	/**
-	 * Whether the crosshair, looking along {@code look} from {@code eyes}, is
-	 * on the box (far enough inside its sides for a hit to verify). Flat:
-	 * whether the direction crosses its footprint.
+	 * Shrinks the box by {@code side} on each side - never by more than
+	 * {@code maxShare} of its half-size.
 	 */
-	private static boolean isOnTarget(Vec3 eyes, Vec3 look, AABB box,
-		boolean flat)
-	{
-		AABB onBox = inset(flat ? footprint(box, eyes) : box, ON_TARGET_MARGIN,
-			0, ON_TARGET_SHARE);
-		return isRayOn(eyes, look, onBox);
-	}
-	
-	/**
-	 * Shrinks the box by {@code side} on each side and {@code vertical} at the
-	 * top and bottom - never by more than {@code maxShare} of its half-size.
-	 */
-	private static AABB inset(AABB box, double side, double vertical,
-		double maxShare)
+	private static AABB inset(AABB box, double side, double maxShare)
 	{
 		double s = Math.min(side,
 			Math.min(box.getXsize(), box.getZsize()) / 2 * maxShare);
-		double v = Math.min(vertical, box.getYsize() / 2 * maxShare);
-		return box.deflate(s, v, s);
+		return box.deflate(s, 0, s);
 	}
 	
 	/** Whether a ray from the eyes along the look passes through the box. */
@@ -1154,8 +998,7 @@ public final class MaceAssistHack extends Hack
 		aimOffsetTarget = null;
 		approaching = false;
 		releaseForward();
-		hitWindow = null;
-		hitWindowTarget = null;
+		turning = false;
 		losGraceTicks = 0;
 		cameraAim.reset();
 	}
@@ -1535,6 +1378,8 @@ public final class MaceAssistHack extends Hack
 	@Override
 	public void onRightClick(RightClickEvent event)
 	{
+		rightClickedThisTick = true;
+		
 		if(MC.player == null)
 			return;
 		
@@ -1622,13 +1467,10 @@ public final class MaceAssistHack extends Hack
 		windFireDelay = 0;
 	}
 	
+	/** Right-click just pressed, see onUpdate. */
 	private void tickWindRightClick()
 	{
-		boolean usePressed = MC.options.keyUse.isDown();
-		boolean justPressed = usePressed && !wasUsePressed;
-		wasUsePressed = usePressed;
-		
-		if(!justPressed || windActionCooldown > 0)
+		if(windActionCooldown > 0)
 			return;
 		
 		ItemStack held = MC.player.getMainHandItem();
@@ -1653,6 +1495,80 @@ public final class MaceAssistHack extends Hack
 		selectSlot(windSlot);
 		windFireDelay = 2;
 		windActionCooldown = 15;
+	}
+	
+	/**
+	 * Right-click just pressed with a sword, looking at a block: puts a
+	 * cobweb down there, from the hotbar (see {@link #tickCobweb}) or, if
+	 * there's one in the offhand, lets vanilla do it - the sword has no use
+	 * of its own, so vanilla goes on to the offhand.
+	 *
+	 * @return true if the click is the cobweb's (no wind charge then)
+	 */
+	private boolean startCobweb()
+	{
+		// one at a time; a click while one is going down is still its
+		if(cobwebSlot != -1 || cobwebReturnSlot != -1)
+			return true;
+		
+		if(!cobwebOnRightClick.isChecked()
+			|| !isSword(MC.player.getMainHandItem()))
+			return false;
+		
+		if(!(MC.hitResult instanceof BlockHitResult hit)
+			|| hit.getType() != HitResult.Type.BLOCK)
+			return false;
+		
+		if(MC.player.getOffhandItem().is(Items.COBWEB))
+			return true;
+		
+		int slot = findItem(Items.COBWEB);
+		if(slot == -1)
+			return false;
+		
+		cobwebSlot = slot;
+		cobwebReturnSlot = MC.player.getInventory().getSelectedSlot();
+		return true;
+	}
+	
+	/**
+	 * Places the cobweb a tick after the click and switches back the tick
+	 * after that. Vanilla's own right click with the sword goes out in the
+	 * click's tick, and a slot change after it in the same tick is out of
+	 * order (see {@link PacketOrder}); so is switching back right after the
+	 * placement.
+	 */
+	private void tickCobweb()
+	{
+		if(cobwebSlot != -1)
+		{
+			if(!PacketOrder.canChangeSlotNow())
+				return;
+			
+			int slot = cobwebSlot;
+			cobwebSlot = -1;
+			
+			// still looking at a block, no screen open, cobweb still there
+			if(MC.screen != null
+				|| !MC.player.getInventory().getItem(slot).is(Items.COBWEB)
+				|| !(MC.hitResult instanceof BlockHitResult hit)
+				|| hit.getType() != HitResult.Type.BLOCK)
+			{
+				cobwebReturnSlot = -1;
+				return;
+			}
+			
+			selectSlot(slot);
+			InteractionSimulator.rightClickBlock(hit,
+				InteractionHand.MAIN_HAND);
+			return;
+		}
+		
+		if(cobwebReturnSlot != -1 && PacketOrder.canChangeSlotNow())
+		{
+			selectSlot(cobwebReturnSlot);
+			cobwebReturnSlot = -1;
+		}
 	}
 	
 	private void fireWindCharge()
@@ -1848,6 +1764,8 @@ public final class MaceAssistHack extends Hack
 		windSlot = -1;
 		windReturnSlot = -1;
 		windActionCooldown = 0;
+		cobwebSlot = -1;
+		cobwebReturnSlot = -1;
 		wasUsePressed = false;
 		
 		airPotThrown = false;

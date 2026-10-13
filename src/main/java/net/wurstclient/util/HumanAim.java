@@ -473,19 +473,6 @@ public final class HumanAim
 	public void pidStep(float needYaw, float needPitch, double dt, long now,
 		double maxSpeed, double tolerance, boolean humanize)
 	{
-		pidStep(needYaw, needPitch, dt, now, maxSpeed, tolerance, humanize,
-			false);
-	}
-	
-	/**
-	 * {@link #pidStep}; with {@code yawFirst}, the sideways part of the turn
-	 * comes first: while the yaw is still off, the pitch is only corrected at
-	 * a quarter of the pull (see {@link #yawFirstShare}). Following the
-	 * target's motion isn't held back.
-	 */
-	public void pidStep(float needYaw, float needPitch, double dt, long now,
-		double maxSpeed, double tolerance, boolean humanize, boolean yawFirst)
-	{
 		if(dt <= 0)
 			return;
 		
@@ -584,10 +571,6 @@ public final class HumanAim
 			}
 		}
 		
-		if(yawFirst)
-			wantPitch *= yawFirstShare(errYaw * Math.cos(Math.toRadians(pitch)),
-				tolerance);
-		
 		if(humanize && distance > 1e-3)
 		{
 			// curved path that straightens out near the target
@@ -672,26 +655,70 @@ public final class HumanAim
 	}
 	
 	/**
-	 * {@link #pidStep} that only turns sideways: the pitch stays where it is
-	 * (the player's own mouse still moves it, see {@link #shift}).
+	 * Turns only sideways, smoothly, toward {@code needYaw}, in the frame of
+	 * the target's own sideways motion (the tracking rate, see
+	 * {@link #updateTracking}). The pitch is left alone (the player's mouse
+	 * still moves it, see {@link #shift}).
 	 *
 	 * <p>
-	 * The pitch is put back after the step rather than aimed at the current
-	 * pitch: a setpoint that follows the camera would feed its own motion
-	 * back into the feed-forward and keep drifting.
+	 * The speed never jumps: it speeds up and slows down by at most
+	 * {@link #ACCEL_PER_SPEED} times {@code maxSpeed} per second (full speed
+	 * in a twelfth of a second), slows down in time to stop on the target
+	 * rather than past it, and the last bit closes like a critically damped
+	 * spring - rate {@code maxSpeed / 15} per second (12/s at 180 degrees/s,
+	 * at most 60/s), so a faster setting also settles faster. A plain spring
+	 * starts at full speed on a big turn (its pull grows with the gap), which
+	 * looked like a snap. No jitter, no tremor. With {@code humanize}, a new
+	 * turn waits for the reaction delay first.
 	 */
-	public void pidStepYaw(float needYaw, double dt, long now, double maxSpeed,
-		double tolerance, boolean humanize)
+	public void springYawStep(float needYaw, double dt, long now,
+		double maxSpeed, boolean humanize)
 	{
-		float keepPitch = pitch;
-		pidStep(needYaw, keepPitch, dt, now, maxSpeed, tolerance, humanize);
-		pitch = keepPitch;
+		if(dt <= 0)
+			return;
+		
+		// still reacting - the hand hasn't started moving yet
+		if(humanize && now < reactionEndNs)
+			return;
+		
+		double error = Mth.wrapDegrees(needYaw - yaw);
+		double gap = Math.abs(error);
+		double accel = maxSpeed * ACCEL_PER_SPEED;
+		double omega = Mth.clamp(maxSpeed / 15, SPRING_MIN_OMEGA, 60);
+		
+		// the speed it should have: the spring's near the target, never more
+		// than it can still brake from in time (with a margin), at most the
+		// top speed
+		double wanted = Math.min(maxSpeed,
+			Math.min(omega * gap, Math.sqrt(2 * accel * BRAKE_MARGIN * gap)));
+		wanted = Math.copySign(wanted, error);
+		
+		double relVel = velYaw - trackYaw;
+		relVel += Mth.clamp(wanted - relVel, -accel * dt, accel * dt);
+		double move = relVel * dt;
+		
+		// never past the target: land on it
+		if(gap > 0 && Math.signum(move) == Math.signum(error)
+			&& Math.abs(move) >= gap)
+		{
+			move = error;
+			relVel = 0;
+		}
+		
+		velYaw = relVel + trackYaw;
 		velPitch = 0;
-		integPitch = 0;
-		derivPitch = 0;
-		ffPitch = 0;
-		tremorPitch = 0;
+		// plus the target's own motion, one frame ahead (see leadDt)
+		moveBy(move + trackYaw * leadDt(dt), 0);
 	}
+	
+	/** {@link #springYawStep}: speeding up/slowing down, per second. */
+	private static final double ACCEL_PER_SPEED = 12;
+	
+	/** {@link #springYawStep} brakes as if it could only brake this hard. */
+	private static final double BRAKE_MARGIN = 0.8;
+	
+	/** The softest {@link #springYawStep}, per second. */
+	private static final double SPRING_MIN_OMEGA = 6;
 	
 	/**
 	 * How far ahead to follow the target's motion this step: until the next
@@ -705,17 +732,6 @@ public final class HumanAim
 		double lead = Math.min(dt, lastDt > 0 ? lastDt : 1 / 60.0);
 		lastDt = dt;
 		return lead;
-	}
-	
-	/**
-	 * For yaw-first turns: how much of the pitch correction is let through -
-	 * all of it once the yaw is within the target's angular tolerance (at
-	 * least 1 degree), a quarter from 4 times that on, smooth in between.
-	 */
-	static double yawFirstShare(double errYaw, double tolerance)
-	{
-		double on = Math.max(tolerance, 1);
-		return 1 - 0.75 * smoothstep(on, on * 4, Math.abs(errYaw));
 	}
 	
 	/** 0 below {@code edge0}, 1 above {@code edge1}, smooth in between. */

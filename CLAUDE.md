@@ -607,32 +607,41 @@ Design points that were deliberate, don't "fix" them blindly:
   the server never saw (Grim "HITBOX: hit without any intersection", user report 2026-10-02). Now
   `isCrosshairOnTarget`: current eyes, current look, min(Trigger range, `entityInteractionRange()`),
   hitbox + pick radius, block line of sight. Don't bring the prediction back.
-- **Mace aim = PID onto the hitbox, anywhere on it (user, 2026-10-12).** No aim bone: off the
-  hitbox it PIDs (`HumanAim.pidStep`, yaw first - pitch at 25% while the yaw is visibly off,
-  judged as errYaw x cos(pitch)) toward the part of the hitbox nearest the crosshair (picked once
-  per turn, kept relative to the target - re-picking per frame chases the camera); while the
-  crosshair is on it (0.1 inside the sides, like `HitCheck`) the camera doesn't move at all
-  (`CameraAim.hold`, no new reaction delay after). **Approach target**: more than 3 blocks away
-  sideways and reachable before you fall to its height (vanilla air physics) -> yaw-only aim
-  (`pidStepYaw`) and W held until within 3.
-- **Fast dives (riptide, long falls) - user, 2026-10-06 / 10-12:** the hit goes out from the eyes
-  the server has at the *next* tick, and the rotation sent the tick before must hit from there
-  too. So the aim is judged and steered from the predicted eyes of the first tick in reach
-  (`predictHitWindow`: vanilla fall physics with the gravity attribute, up to 40 ticks, landing
-  on the first block under you down to where your eyes could still reach the box), not from the
-  drawn eyes (a tick behind at speed). <= 4 ticks out: no reaction delay, speed = yaw/pitch-degree
-  distance / time left (looking straight down, a target beside you is 135 degrees of *yaw* away -
-  using the on-screen angle there missed the riptide hit). Falling onto a target, aim range counts
-  sideways and the "in front" filter is skipped (a 10k-block drop is never within 15 blocks in
-  the air). Too fast to ever be in reach in the air (gravity 1: ~49 blocks/tick) the hit lands
-  the tick after landing - a normal hit, no smash: the server resets fall distance on the landing
-  packet, and nothing legit gets an airborne position in reach first. The gravity attribute is
-  capped at 1 by vanilla (`base set 50` = 1). `HitCheck`'s post-move check ignores the downward
-  pull while on the ground (with gravity 1 it put the eyes a block low). The hit stays the real
-  once-per-tick check; `TriggerSweep` is now only used for `distanceSq`. Gametest
-  `MaceTriggerTest`: 3.5 blocks/tick dive (one tick in reach, hits in the air) and a 10,000-block
-  drop at max gravity starting 2 blocks to the side looking away (hits after landing). Test mobs
-  need `PersistenceRequired` - hostile mobs despawn instantly >128 blocks (3D) from players.
+- **Mace aim = yaw only, smooth (user, 2026-10-12, second pass).** It never touches pitch (the
+  player aims up/down). A PID onto the 3D hitbox with yaw-first, flick-on-urgent and aiming from
+  predicted eyes was tried first and made macing *worse than off* ("snapping, off target"):
+  urgent flicks up to 3600°/s, aiming from where the eyes would be (looks off on screen), tremor.
+  Now `HumanAim.springYawStep` (via `CameraAim.turnYawSmoothly`): accel-limited (full speed in
+  1/12 s - a plain critically damped spring starts at full speed on a big turn, its pull grows
+  with the gap: 0 -> 126°/s in one frame at 180°/s), brakes in time (sqrt profile), last bit like
+  a spring (omega = speed/15, 6..60/s), lands without overshoot, feed-forward of the target's
+  sideways motion; Humanize = reaction delay on a new target only. `YawSpringTest` checks no
+  overshoot, pitch untouched, no speed jump > speed/3 per frame, 90° in < 0.2 s at 1800,
+  following a 40°/s target within 2°. On target = your horizontal direction crosses the
+  footprint 0.1 inside its sides (directly above: always); held still there; a turn starts
+  once off it, aims for the footprint's middle third, and ends once settled and the target isn't
+  sliding > 5°/s across the view (hysteresis - stopping at the edge made it stop-start). Aim speed
+  0.5-1800. **Approach target**: more than 3 blocks away sideways and reachable before you fall to
+  its height (vanilla air physics) -> W held until within 3.
+- **Fast dives (riptide, long falls):** the hit goes out from the eyes the server has at the next
+  tick, and the rotation sent the tick before must hit from there too - with yaw-only aim the
+  player's pitch decides that. Falling onto a target, aim range counts sideways and the "in front"
+  filter is skipped (a 10k-block drop is never within 15 blocks in the air). Too fast to ever be
+  in reach in the air (gravity 1: ~49 blocks/tick) the hit lands the tick after landing - a
+  normal hit, no smash (the server resets fall distance on the landing packet), and only with
+  "Trigger while falling only" off. The gravity attribute is capped at 1 by vanilla (`base set
+  50` = 1). `HitCheck`'s post-move check ignores the downward pull while on the ground (with
+  gravity 1 it put the eyes a block low). Gametest `MaceTriggerTest` (the test sets the pitch, Aim
+  speed 1800): 40-block 3.5 blocks/tick dive from 1.5 blocks to the side facing 90° away (one
+  tick in reach, hits in the air), a 10,000-block drop at max gravity 2 blocks to the side facing
+  away (hits after landing), and the cobweb. Test mobs need `PersistenceRequired` - hostile mobs
+  despawn instantly >128 blocks (3D) from players.
+- **Cobweb on right click** (default on): a fresh right-click on a block with a sword puts a
+  cobweb there from the hotbar (offhand: vanilla does it, the sword has no use), before Wind on
+  right click. Placed the tick after the click and switched back the tick after that (vanilla's
+  own sword click goes out in the click's tick; `PacketOrder`). Fresh clicks are `keyUse` held now
+  but not last tick **or** a `RightClickEvent` this tick - polling `isDown` alone missed taps
+  shorter than a tick (wind charges had the same blind spot).
 - Item detection uses `ItemTags.SWORDS/AXES/SPEARS/CHEST_ARMOR` (the mod used
   `item.toString().contains("sword")`).
 - **Mannequins**: `net.minecraft.world.entity.decoration.Mannequin extends Avatar`, and in 26.1.2
@@ -680,8 +689,9 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
 - `src/test/java/net/wurstclient/util/` — JUnit tests for `Rotation`, `RotationUtils`, `HumanAim`
   (settling, no overshoot, tracking lag), `BallisticSolver` (hits at range, moving targets) and
   `TargetPredictor` (hit rates against simulated strafers, < 1 ms per tick) and `PidAimTest`
-  (PID aim vs the old ease-out: landing, overshoot, resting, strafers), `PidYawAimTest`
-  (MaceAssist's yaw-only turn, yaw-first, resuming after `hold`).
+  (PID aim vs the old ease-out: landing, overshoot, resting, strafers), `YawSpringTest`
+  (MaceAssist's smooth yaw-only turn: no overshoot or speed jumps, tracking, resuming after
+  `hold`).
 - `src/gametest/` — in-game tests (`AltManagerTest`, `VanillaSpoofTest`, `KeyPresserTest`,
   `PacketBudgetTest`, `AutoMineHackTest`, `FreecamHackTest`, `NoFallHackTest`, `XRayHackTest`, …)
   run via `runClientGameTest` / `runClientGameTestWithMods`; the whole suite passes (exit 0,

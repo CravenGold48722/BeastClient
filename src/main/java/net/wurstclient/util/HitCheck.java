@@ -67,7 +67,12 @@ public enum HitCheck
 		
 		// in the tick, before moving: where the last movement packet put you
 		Vec3 eyes = RotationUtils.getEyesPos();
-		Vec3 eyesAfterMove = eyes.add(player.getDeltaMovement());
+		// on the ground, the downward pull isn't a move: the ground stops it
+		// (with high gravity, it put the post-move eyes a block too low)
+		Vec3 move = player.getDeltaMovement();
+		if(player.onGround() && move.y < 0)
+			move = new Vec3(move.x, 0, move.z);
+		Vec3 eyesAfterMove = eyes.add(move);
 		
 		RotationFaker faker = WurstClient.INSTANCE.getRotationFaker();
 		Rotation now =
@@ -82,7 +87,7 @@ public enum HitCheck
 		// ordinary speeds. Moving fast - riptiding down at a target, a
 		// falling mace slam - the post-move point is already past or below
 		// the target, and requiring it blocked every hit that could land.
-		if(player.getDeltaMovement().lengthSqr() >= FAST_SQ)
+		if(move.lengthSqr() >= FAST_SQ)
 			return true;
 		return rayHits(eyesAfterMove, now, box, reach);
 	}

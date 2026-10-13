@@ -85,11 +85,90 @@ public final class CameraAim
 	public void turnCamera(Object key, Rotation needed, double[] track,
 		boolean humanize, double maxSpeed)
 	{
-		long now = System.nanoTime();
+		long now = GameClock.nanoTime();
 		prepare(key, now, true);
 		step(needed, track, now, humanize, maxSpeed);
-		
+		applyToCamera();
+	}
+	
+	private void applyToCamera()
+	{
 		new Rotation(aim.getYaw(), aim.getPitch()).applyToClientPlayer();
+		lastSetYaw = MC.player.getYRot();
+		lastSetPitch = MC.player.getXRot();
+		lastSetValid = true;
+	}
+	
+	/**
+	 * Turns the camera toward a point with the PID aim
+	 * ({@link HumanAim#pidStep}
+	 * - the one AimAssist uses on auto speed), as seen from the given eyes -
+	 * which don't have to be where you are now: aiming from where you'll be
+	 * when a hit can go out keeps the crosshair right for that moment.
+	 *
+	 * @param key
+	 *            what is being aimed at; a change starts a new turn
+	 * @param velocity
+	 *            how fast the point moves relative to those eyes, blocks per
+	 *            second
+	 * @param tolerance
+	 *            how far (degrees) the crosshair can be from the point and
+	 *            still be on the target
+	 * @param yawFirst
+	 *            sideways first, see {@link HumanAim#pidStep}
+	 */
+	public void pidAim(Object key, Vec3 eyes, Vec3 point, Vec3 velocity,
+		boolean humanize, double maxSpeed, double tolerance, boolean yawFirst)
+	{
+		Rotation needed = RotationUtils.getNeededRotations(eyes, point);
+		double[] track = HumanAim.trackingRate(eyes, point, velocity);
+		
+		long now = GameClock.nanoTime();
+		prepare(key, now, true);
+		float dt = aim.takeDt(now);
+		aim.updateTracking(track[0], track[1], dt);
+		aim.pidStep(needed.yaw(), needed.pitch(), dt, now, maxSpeed, tolerance,
+			humanize, yawFirst);
+		applyToCamera();
+	}
+	
+	/**
+	 * Turns the camera sideways only, with the PID aim, toward a point on an
+	 * entity (given at its tick position). The pitch is left to the player.
+	 */
+	public void pidTurnYawToEntity(Entity target, Vec3 tickAimPoint,
+		float partialTicks, boolean humanize, double maxSpeed, double tolerance)
+	{
+		Vec3 offset = EntityUtils.getLerpedPos(target, partialTicks)
+			.subtract(target.position());
+		Vec3 point = tickAimPoint.add(offset);
+		Vec3 eyes = getFrameEyes(partialTicks);
+		
+		Rotation needed = RotationUtils.getNeededRotations(eyes, point);
+		double[] track = HumanAim.trackingRate(eyes, point,
+			HumanAim.relativeVelocity(target, MC.player));
+		
+		long now = GameClock.nanoTime();
+		prepare(target, now, true);
+		float dt = aim.takeDt(now);
+		aim.updateTracking(track[0], 0, dt);
+		aim.pidStepYaw(needed.yaw(), dt, now, maxSpeed, tolerance, humanize);
+		applyToCamera();
+	}
+	
+	/**
+	 * Leaves the camera alone this frame without ending the turn: the next
+	 * aiming call carries on from wherever the camera is then, with no new
+	 * reaction delay. Does nothing if not aiming.
+	 */
+	public void hold(Object key)
+	{
+		if(!aim.isValid() || key != turnKey)
+			return;
+		
+		aim.hold(MC.player.getYRot(), MC.player.getXRot(),
+			GameClock.nanoTime());
+		// mouse movement until the next call still counts, see prepare()
 		lastSetYaw = MC.player.getYRot();
 		lastSetPitch = MC.player.getXRot();
 		lastSetValid = true;
@@ -103,7 +182,7 @@ public final class CameraAim
 	public Rotation turnSilently(Object key, Rotation needed, double[] track,
 		boolean humanize, double maxSpeed)
 	{
-		long now = System.nanoTime();
+		long now = GameClock.nanoTime();
 		prepare(key, now, false);
 		step(needed, track, now, humanize, maxSpeed);
 		lastSetValid = false;

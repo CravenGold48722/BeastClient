@@ -57,6 +57,14 @@ public final class RecordingModeOtf extends OtherFeature
 		new CheckboxSetting("Hide Beast Options",
 			"Hides the Beast Options button in the pause menu.", true);
 	
+	private final CheckboxSetting hideToggleChat =
+		new CheckboxSetting("Hide chat toggle messages",
+			"Hides the \"[Beast] Toggled X on/off.\" lines in chat.", true);
+	
+	private final CheckboxSetting hideToggleActionBar =
+		new CheckboxSetting("Hide action bar toggle messages",
+			"Hides the \"Toggled X ON/OFF\" text above the hotbar.", true);
+	
 	private final CheckboxSetting chatMessages =
 		new CheckboxSetting("Chat messages",
 			"Tells you in chat when recording mode turns itself on or off.\n"
@@ -93,6 +101,8 @@ public final class RecordingModeOtf extends OtherFeature
 		addSetting(hidePinnedWindows);
 		addSetting(hideEsps);
 		addSetting(hideWurstOptions);
+		addSetting(hideToggleChat);
+		addSetting(hideToggleActionBar);
 		addSetting(chatMessages);
 		addSetting(checkInterval);
 		addSetting(extraApps);
@@ -167,6 +177,16 @@ public final class RecordingModeOtf extends OtherFeature
 	public boolean shouldHideWurstOptions()
 	{
 		return isActive() && hideWurstOptions.isChecked();
+	}
+	
+	public boolean shouldHideToggleChat()
+	{
+		return isActive() && hideToggleChat.isChecked();
+	}
+	
+	public boolean shouldHideToggleActionBar()
+	{
+		return isActive() && hideToggleActionBar.isChecked();
 	}
 	
 	/** Text for the button in Minecraft's own options screen. */

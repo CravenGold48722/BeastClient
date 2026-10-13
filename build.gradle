@@ -114,6 +114,9 @@ fabricApi.configureTests {
 def screenshotTemplateDir = file("src/gametest/screenshot_templates")
 def updateScreenshots = project.hasProperty("updateScreenshots")
 
+// Only some of the gametests: -Ponly=mace,scaffold (see gametest.cmd)
+def onlyTests = project.findProperty("only")
+
 loom {
 	accessWidenerPath = file("src/main/resources/wurst.accesswidener")
 
@@ -121,6 +124,8 @@ loom {
 		clientGameTest {
 			vmArgs.add("-Dfabric.client.gametest.disableNetworkSynchronizer=true")
 			vmArgs.add("-Dwurst.test.templateDir=$screenshotTemplateDir")
+			if (onlyTests)
+				vmArgs.add("-Dwurst.test.only=$onlyTests")
 			if (updateScreenshots)
 				vmArgs.add("-Dwurst.test.updateTemplates=true")
 		}
@@ -137,6 +142,8 @@ loom {
 			vmArgs.add("-Dfabric.client.gametest.disableNetworkSynchronizer=true")
 			vmArgs.add("-Dwurst.test.withMods=true")
 			vmArgs.add("-Dwurst.test.templateDir=$screenshotTemplateDir")
+			if (onlyTests)
+				vmArgs.add("-Dwurst.test.only=$onlyTests")
 			if (updateScreenshots)
 				vmArgs.add("-Dwurst.test.updateTemplates=true")
 			programArgs.add("--username=Wurst-Bot")

@@ -232,6 +232,22 @@ public final class HumanAim
 		resetPid();
 	}
 	
+	/**
+	 * Leaves the aim where the camera is, the hand at rest, without starting
+	 * a new turn: the next step carries on from here with no reaction delay.
+	 * For frames in which the aim deliberately doesn't move (the crosshair is
+	 * already on the target).
+	 */
+	public void hold(float yaw, float pitch, long now)
+	{
+		seed(yaw, pitch, now);
+		velYaw = 0;
+		velPitch = 0;
+		tremorYaw = 0;
+		tremorPitch = 0;
+		resetPid();
+	}
+	
 	/** Forgets the PID's memory (integral, derivative, gain schedule). */
 	private void resetPid()
 	{
@@ -457,6 +473,19 @@ public final class HumanAim
 	public void pidStep(float needYaw, float needPitch, double dt, long now,
 		double maxSpeed, double tolerance, boolean humanize)
 	{
+		pidStep(needYaw, needPitch, dt, now, maxSpeed, tolerance, humanize,
+			false);
+	}
+	
+	/**
+	 * {@link #pidStep}; with {@code yawFirst}, the sideways part of the turn
+	 * comes first: while the yaw is still off, the pitch is only corrected at
+	 * a quarter of the pull (see {@link #yawFirstShare}). Following the
+	 * target's motion isn't held back.
+	 */
+	public void pidStep(float needYaw, float needPitch, double dt, long now,
+		double maxSpeed, double tolerance, boolean humanize, boolean yawFirst)
+	{
 		if(dt <= 0)
 			return;
 		
@@ -555,6 +584,10 @@ public final class HumanAim
 			}
 		}
 		
+		if(yawFirst)
+			wantPitch *= yawFirstShare(errYaw * Math.cos(Math.toRadians(pitch)),
+				tolerance);
+		
 		if(humanize && distance > 1e-3)
 		{
 			// curved path that straightens out near the target
@@ -639,6 +672,28 @@ public final class HumanAim
 	}
 	
 	/**
+	 * {@link #pidStep} that only turns sideways: the pitch stays where it is
+	 * (the player's own mouse still moves it, see {@link #shift}).
+	 *
+	 * <p>
+	 * The pitch is put back after the step rather than aimed at the current
+	 * pitch: a setpoint that follows the camera would feed its own motion
+	 * back into the feed-forward and keep drifting.
+	 */
+	public void pidStepYaw(float needYaw, double dt, long now, double maxSpeed,
+		double tolerance, boolean humanize)
+	{
+		float keepPitch = pitch;
+		pidStep(needYaw, keepPitch, dt, now, maxSpeed, tolerance, humanize);
+		pitch = keepPitch;
+		velPitch = 0;
+		integPitch = 0;
+		derivPitch = 0;
+		ffPitch = 0;
+		tremorPitch = 0;
+	}
+	
+	/**
 	 * How far ahead to follow the target's motion this step: until the next
 	 * step, which is about one normal frame away - not this step's dt.
 	 * After a lag spike, leading by the whole spike put the aim that far
@@ -650,6 +705,17 @@ public final class HumanAim
 		double lead = Math.min(dt, lastDt > 0 ? lastDt : 1 / 60.0);
 		lastDt = dt;
 		return lead;
+	}
+	
+	/**
+	 * For yaw-first turns: how much of the pitch correction is let through -
+	 * all of it once the yaw is within the target's angular tolerance (at
+	 * least 1 degree), a quarter from 4 times that on, smooth in between.
+	 */
+	static double yawFirstShare(double errYaw, double tolerance)
+	{
+		double on = Math.max(tolerance, 1);
+		return 1 - 0.75 * smoothstep(on, on * 4, Math.abs(errYaw));
 	}
 	
 	/** 0 below {@code edge0}, 1 above {@code edge1}, smooth in between. */

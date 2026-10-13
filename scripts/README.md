@@ -1,5 +1,8 @@
 # What These Scripts Do
 
+## `gametest.cmd` (repo root) / `gametest.ps1`
+Runs the in-game tests and shows only each test's progress and a PASSED/FAILED summary with the reason (full output: `build/gametest-output.log`). From the repo root: `.\gametest` (PowerShell) or `gametest` (cmd); `gametest mace scaffold` runs only the tests whose name contains one of those words, `-mods` runs with Sodium etc., `-update` re-records the screenshot templates, `-help` lists this. Don't click or close the game window while it runs.
+
 ## `genSources-eclipse.cmd`
 Performs all the necessary setup so you can use this project in Eclipse. You need to run this script again every time that the Yarn mappings, Fabric loader or Fabric API in [gradle.properties](/gradle.properties) change. (Keep in mind that this also happens every time that you switch to a different Minecraft version.)
 

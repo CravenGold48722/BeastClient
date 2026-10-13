@@ -45,6 +45,7 @@ import net.wurstclient.settings.FaceTargetSetting;
 import net.wurstclient.settings.FaceTargetSetting.FaceTarget;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
+import net.wurstclient.util.GameClock;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.Godbridge;
@@ -564,7 +565,7 @@ public final class ScaffoldWalkHack extends Hack
 	private void springToTarget(boolean humanize, double maxSpeed)
 	{
 		LocalPlayer player = MC.player;
-		long now = System.nanoTime();
+		long now = GameClock.nanoTime();
 		if(!springing)
 		{
 			springing = true;

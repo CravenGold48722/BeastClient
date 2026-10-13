@@ -18,6 +18,7 @@ import net.wurstclient.WurstClient;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.mixinterface.IChatComponent;
 import net.wurstclient.other_feature.OtfList;
+import net.wurstclient.other_features.RecordingModeOtf;
 import net.wurstclient.other_features.ToggleMessagesOtf;
 
 /**
@@ -80,11 +81,14 @@ public enum ToggleAnnouncer
 		
 		String name = hack.getName();
 		
+		RecordingModeOtf recordingMode = otfs.recordingModeOtf;
+		
 		// The action bar is a single slot, so it replaces itself for free.
-		if(settings.isActionBarShown())
+		if(settings.isActionBarShown()
+			&& !recordingMode.shouldHideToggleActionBar())
 			showOnActionBar(name, enabled);
 		
-		if(settings.isChatShown())
+		if(settings.isChatShown() && !recordingMode.shouldHideToggleChat())
 			showInChat(hack, name, enabled);
 	}
 	

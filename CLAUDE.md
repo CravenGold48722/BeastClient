@@ -54,6 +54,8 @@ you which files are fork-custom**. Don't try; judge from content.
 ./gradlew build                # full build + tests
 ./gradlew runClient            # launch the game
 ./gradlew runClientWithMods    # launch with Sodium etc. from modrinth_deps.json
+.\gametest [mace scaffold]     # in-game tests, summary only (gametest.cmd -> scripts/gametest.ps1;
+                               #   = runClientGameTest -Ponly=mace,scaffold; -mods, -update, -help)
 ```
 
 Eclipse launch configs (`Wurst7_client.launch`, …) exist for IDE use. `scripts/` holds
@@ -605,17 +607,32 @@ Design points that were deliberate, don't "fix" them blindly:
   the server never saw (Grim "HITBOX: hit without any intersection", user report 2026-10-02). Now
   `isCrosshairOnTarget`: current eyes, current look, min(Trigger range, `entityInteractionRange()`),
   hitbox + pick radius, block line of sight. Don't bring the prediction back.
-- **Fast dives (riptide, long falls) - user, 2026-10-06:** "check 150 times a tick" would bring the
-  prediction back (positions don't change within a tick; only predicted ones would). Instead
-  `util/TriggerSweep` samples the coming tick 150 times only to *see the hit coming*: while it is,
-  the mace aim leads by half a tick of relative motion (the sent and the current rotation then
-  sit either side of the target, see `HitCheck`), and closing at 1+ block/tick with <= 4 ticks to
-  reach the aim skips the reaction delay and turns fast enough to be on target a tick early. The
-  hit stays the real once-per-tick check. Targets are picked "in front" along the 3D look (by yaw
-  alone a target just behind your yaw while diving straight down was never locked), and
-  `HitCheck` drops its post-move eye check above 1 block/tick (the post-move point is past the
-  target - it blocked every hit). Gametest `MaceTriggerTest`: 3.5 blocks/tick dive at a husk, in
-  reach for one tick, hits.
+- **Mace aim = PID onto the hitbox, anywhere on it (user, 2026-10-12).** No aim bone: off the
+  hitbox it PIDs (`HumanAim.pidStep`, yaw first - pitch at 25% while the yaw is visibly off,
+  judged as errYaw x cos(pitch)) toward the part of the hitbox nearest the crosshair (picked once
+  per turn, kept relative to the target - re-picking per frame chases the camera); while the
+  crosshair is on it (0.1 inside the sides, like `HitCheck`) the camera doesn't move at all
+  (`CameraAim.hold`, no new reaction delay after). **Approach target**: more than 3 blocks away
+  sideways and reachable before you fall to its height (vanilla air physics) -> yaw-only aim
+  (`pidStepYaw`) and W held until within 3.
+- **Fast dives (riptide, long falls) - user, 2026-10-06 / 10-12:** the hit goes out from the eyes
+  the server has at the *next* tick, and the rotation sent the tick before must hit from there
+  too. So the aim is judged and steered from the predicted eyes of the first tick in reach
+  (`predictHitWindow`: vanilla fall physics with the gravity attribute, up to 40 ticks, landing
+  on the first block under you down to where your eyes could still reach the box), not from the
+  drawn eyes (a tick behind at speed). <= 4 ticks out: no reaction delay, speed = yaw/pitch-degree
+  distance / time left (looking straight down, a target beside you is 135 degrees of *yaw* away -
+  using the on-screen angle there missed the riptide hit). Falling onto a target, aim range counts
+  sideways and the "in front" filter is skipped (a 10k-block drop is never within 15 blocks in
+  the air). Too fast to ever be in reach in the air (gravity 1: ~49 blocks/tick) the hit lands
+  the tick after landing - a normal hit, no smash: the server resets fall distance on the landing
+  packet, and nothing legit gets an airborne position in reach first. The gravity attribute is
+  capped at 1 by vanilla (`base set 50` = 1). `HitCheck`'s post-move check ignores the downward
+  pull while on the ground (with gravity 1 it put the eyes a block low). The hit stays the real
+  once-per-tick check; `TriggerSweep` is now only used for `distanceSq`. Gametest
+  `MaceTriggerTest`: 3.5 blocks/tick dive (one tick in reach, hits in the air) and a 10,000-block
+  drop at max gravity starting 2 blocks to the side looking away (hits after landing). Test mobs
+  need `PersistenceRequired` - hostile mobs despawn instantly >128 blocks (3D) from players.
 - Item detection uses `ItemTags.SWORDS/AXES/SPEARS/CHEST_ARMOR` (the mod used
   `item.toString().contains("sword")`).
 - **Mannequins**: `net.minecraft.world.entity.decoration.Mannequin extends Avatar`, and in 26.1.2
@@ -663,7 +680,8 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
 - `src/test/java/net/wurstclient/util/` — JUnit tests for `Rotation`, `RotationUtils`, `HumanAim`
   (settling, no overshoot, tracking lag), `BallisticSolver` (hits at range, moving targets) and
   `TargetPredictor` (hit rates against simulated strafers, < 1 ms per tick) and `PidAimTest`
-  (PID aim vs the old ease-out: landing, overshoot, resting, strafers).
+  (PID aim vs the old ease-out: landing, overshoot, resting, strafers), `PidYawAimTest`
+  (MaceAssist's yaw-only turn, yaw-first, resuming after `hold`).
 - `src/gametest/` — in-game tests (`AltManagerTest`, `VanillaSpoofTest`, `KeyPresserTest`,
   `PacketBudgetTest`, `AutoMineHackTest`, `FreecamHackTest`, `NoFallHackTest`, `XRayHackTest`, …)
   run via `runClientGameTest` / `runClientGameTestWithMods`; the whole suite passes (exit 0,
@@ -672,5 +690,10 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
   clear chat, the action bar (toggle announcements), particles, dropped items / XP, wait ~25 ticks
   for death animations and ~7 ticks after a `tp` rotation. Failed runs keep their PNGs in
   `build/run/clientGameTest/screenshots/` — look at them before guessing.
+  The in-world tests run at `/tick rate` `WurstTest.TICK_RATE` (60), MaceAssist and ScaffoldWalk
+  first. That only works because per-frame aim (`CameraAim`, AimAssist's frame aim, ScaffoldWalk's
+  spring) runs on `util/GameClock` - ticks that actually ran + the frame's partial tick, 50 ms each -
+  not `System.nanoTime`; the test client runs at most one tick per frame, so real time x tick rate
+  would be wrong too. New per-frame aim code must use `GameClock.nanoTime()`.
 - `PacketBudgetTest` is the only automated check of combat-hack behaviour (packets, swings per
   attack, aim settling); feel and accuracy still need a launch of the client.

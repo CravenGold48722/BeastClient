@@ -51,6 +51,7 @@ import net.wurstclient.events.PacketInputListener;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.util.GameClock;
 import net.wurstclient.util.KeyPresser;
 import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.settings.AimAtSetting;
@@ -513,7 +514,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		target = null;
 		switchKeyDownLastTick = false;
 		lastHurtBy.clear();
-		lastFrameTime = System.nanoTime();
+		lastFrameTime = GameClock.nanoTime();
 		resetAimState();
 		comboPhase = ComboPhase.IDLE;
 		attackKeyDownLastTick = false;
@@ -626,7 +627,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			lastAimedTarget = target;
 			smoothCatchUp = target != null;
 			if(smoothCatchUp)
-				aim.startTurn(System.nanoTime());
+				aim.startTurn(GameClock.nanoTime());
 		}
 		
 		if(target == null)
@@ -710,7 +711,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// part-charged weapon and the cooldown branch below then landed a
 		// second hit in the same tick, which is what "AimAssist hits twice"
 		// looked like in practice.
-		if(targetAirborne && !airborneHitDone && distToTargetSq <= 8.999991
+		if(targetAirborne && !airborneHitDone && distToTargetSq <= 9
 			&& MC.player.getAttackStrengthScale(0) >= 1F)
 		{
 			if(attackTarget())
@@ -722,7 +723,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		if(autoCombo.isChecked())
 			updateAutoCombo();
 		else if(MC.player.getAttackStrengthScale(0) >= 1F
-			&& distToTargetSq <= 8.999991)
+			&& distToTargetSq <= 9)
 			attackTarget();
 	}
 	
@@ -747,7 +748,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		boolean forceClient)
 	{
 		Rotation needed = RotationUtils.getNeededRotations(eyes, aimPoint);
-		long now = System.nanoTime();
+		long now = GameClock.nanoTime();
 		
 		if(!aim.isValid())
 		{
@@ -1578,7 +1579,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		if(target == null)
 			return;
 		
-		long now = System.nanoTime();
+		long now = GameClock.nanoTime();
 		float dt = (now - lastFrameTime) / 1_000_000_000F;
 		lastFrameTime = now;
 		dt = Math.min(dt, 0.05F);

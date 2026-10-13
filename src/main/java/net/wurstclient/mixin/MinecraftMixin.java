@@ -33,6 +33,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.util.thread.ReentrantBlockableEventLoop;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
+import net.wurstclient.util.GameClock;
 import net.wurstclient.WurstClient;
 import net.wurstclient.event.EventManager;
 import net.wurstclient.events.HandleBlockBreakingListener.HandleBlockBreakingEvent;
@@ -84,6 +85,12 @@ public abstract class MinecraftMixin
 	 * the <code>overlay == null && currentScreen == null</code> check in
 	 * {@link Minecraft#tick()}.
 	 */
+	@Inject(method = "tick()V", at = @At("HEAD"))
+	private void onTickHead(CallbackInfo ci)
+	{
+		GameClock.onClientTick();
+	}
+	
 	@Inject(method = "tick()V",
 		at = @At(value = "FIELD",
 			target = "Lnet/minecraft/client/Minecraft;overlay:Lnet/minecraft/client/gui/screens/Overlay;",

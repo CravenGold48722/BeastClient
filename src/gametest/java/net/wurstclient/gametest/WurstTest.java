@@ -9,7 +9,9 @@ package net.wurstclient.gametest;
 
 import static net.wurstclient.gametest.WurstClientTestHelper.*;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
@@ -37,6 +39,22 @@ public class WurstTest implements FabricClientGameTest
 {
 	public static final Logger LOGGER = LoggerFactory.getLogger("Wurst Test");
 	
+	/** Ticks per second while the in-world tests run (vanilla: 20). */
+	public static final int TICK_RATE = 60;
+	
+	/**
+	 * {@code -Dwurst.test.only=mace,scaffold} ({@code gametest mace scaffold}):
+	 * only the tests whose class name contains one of these, ignoring case.
+	 * Unset: all of them. The title screen, world and inventory checks always
+	 * run - everything else builds on them.
+	 */
+	private static final List<String> ONLY = Arrays
+		.stream(System.getProperty("wurst.test.only", "")
+			.toLowerCase(Locale.ROOT).split(","))
+		.map(String::trim).filter(s -> !s.isEmpty()).toList();
+	
+	private static int selectedRun;
+	
 	public static final boolean IS_MOD_COMPAT_TEST =
 		System.getProperty("wurst.test.withMods") != null;
 	
@@ -47,6 +65,8 @@ public class WurstTest implements FabricClientGameTest
 			throw new RuntimeException("Network synchronizer is not disabled");
 		
 		LOGGER.info("Starting Wurst Client GameTest");
+		if(!ONLY.isEmpty())
+			LOGGER.info("Only running tests matching {}", ONLY);
 		hideSplashTexts(context);
 		waitForTitleScreenFade(context);
 		
@@ -54,9 +74,13 @@ public class WurstTest implements FabricClientGameTest
 		assertScreenshotEquals(context, "title_screen",
 			"https://i.imgur.com/xSAHDXr.png");
 		
-		AltManagerTest.testAltManagerButton(context);
-		VanillaSpoofTest.testTranslationSpoof(context);
-		VanillaSpoofTest.testPacketFilter(context);
+		if(isSelected("AltManagerTest"))
+			AltManagerTest.testAltManagerButton(context);
+		if(isSelected("VanillaSpoofTest"))
+		{
+			VanillaSpoofTest.testTranslationSpoof(context);
+			VanillaSpoofTest.testPacketFilter(context);
+		}
 		
 		LOGGER.info("Creating test world");
 		TestWorldBuilder worldBuilder = context.worldBuilder();
@@ -74,6 +98,10 @@ public class WurstTest implements FabricClientGameTest
 			testInWorld(context, spContext);
 			LOGGER.info("Exiting test world");
 		}
+		
+		// a typo shouldn't look like a pass
+		if(!ONLY.isEmpty() && selectedRun == 0)
+			throw new RuntimeException("No test matches " + ONLY);
 		
 		LOGGER.info("Test complete");
 	}
@@ -124,32 +152,58 @@ public class WurstTest implements FabricClientGameTest
 			"setmode WurstLogo visibility only_when_outdated");
 		runWurstCommand(context, "setcheckbox HackList animations off");
 		
-		new InGameMenuTest(context, spContext).run();
-		new RecordingModeTest(context, spContext).run();
-		new KeyPresserTest(context, spContext).run();
-		new PacketBudgetTest(context, spContext).run();
+		// Faster ticks, faster tests. Everything below waits in ticks, and the
+		// per-frame aim runs on GameClock (ticks, not real time), so it turns
+		// the same per tick. (The test client runs at most one tick per frame,
+		// so above the frame rate this is "as fast as it renders".)
+		runCommand(server, "tick rate " + TICK_RATE);
+		
+		// the slowest and most fragile ones first
+		run(new MaceTriggerTest(context, spContext));
+		run(new ScaffoldWalkHackTest(context, spContext));
+		
+		run(new InGameMenuTest(context, spContext));
+		run(new RecordingModeTest(context, spContext));
+		run(new KeyPresserTest(context, spContext));
+		run(new PacketBudgetTest(context, spContext));
 		
 		// TODO: Open ClickGUI and Navigator
 		
 		// Test Wurst hacks
-		new AutoMineHackTest(context, spContext).run();
-		new FreecamHackTest(context, spContext).run();
-		new NoFallHackTest(context, spContext).run();
-		new NoWeatherHackTest(context, spContext).run();
-		new ScaffoldWalkHackTest(context, spContext).run();
-		new MaceTriggerTest(context, spContext).run();
-		new RestockHackTest(context, spContext).run();
-		new XRayHackTest(context, spContext).run();
+		run(new AutoMineHackTest(context, spContext));
+		run(new FreecamHackTest(context, spContext));
+		run(new NoFallHackTest(context, spContext));
+		run(new NoWeatherHackTest(context, spContext));
+		run(new RestockHackTest(context, spContext));
+		run(new XRayHackTest(context, spContext));
 		
 		// Test Wurst commands
-		new CopyItemCmdTest(context, spContext).run();
-		new GiveCmdTest(context, spContext).run();
-		new ModifyCmdTest(context, spContext).run();
+		run(new CopyItemCmdTest(context, spContext));
+		run(new GiveCmdTest(context, spContext));
+		run(new ModifyCmdTest(context, spContext));
 		
 		// TODO: Test more Wurst features
 		
 		// Test special cases
-		new PistonTest(context, spContext).run();
+		run(new PistonTest(context, spContext));
+	}
+	
+	private static boolean isSelected(String testName)
+	{
+		if(ONLY.isEmpty())
+			return true;
+		
+		String name = testName.toLowerCase(Locale.ROOT);
+		boolean selected = ONLY.stream().anyMatch(name::contains);
+		if(selected)
+			selectedRun++;
+		return selected;
+	}
+	
+	private static void run(SingleplayerTest test)
+	{
+		if(isSelected(test.getClass().getSimpleName()))
+			test.run();
 	}
 	
 	// because the grass texture is randomized and smooth stone isn't

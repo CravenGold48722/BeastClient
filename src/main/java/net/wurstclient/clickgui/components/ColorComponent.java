@@ -82,7 +82,7 @@ public final class ColorComponent extends Component
 		// box
 		context.fill(x1, y3, x2, y2,
 			setting.getColorI(hovering ? 1F : opacity));
-		ClickGui.drawAccentBorder(context, x1, y3, x2, y2);
+		ClickGui.drawOutline(context, x1, y3, x2, y2);
 		
 		// text
 		String name = setting.getName();

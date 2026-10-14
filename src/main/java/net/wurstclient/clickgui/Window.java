@@ -33,7 +33,7 @@ public class Window
 	private boolean minimizable = true;
 	
 	private boolean pinned;
-	private boolean pinnable = true;
+	private boolean pinnable;
 	
 	private boolean closable;
 	private boolean closing;
@@ -49,6 +49,10 @@ public class Window
 	
 	private boolean draggingScrollbar;
 	private int scrollbarDragOffsetY;
+	
+	private boolean columns;
+	private int titleBarWidth;
+	private int columnWidth;
 	
 	public Window(String title)
 	{
@@ -74,6 +78,10 @@ public class Window
 			return x;
 		
 		int scaledWidth = WurstClient.MC.getWindow().getGuiScaledWidth();
+		// a dropdown that opens wider than its title stays on the screen
+		if(columns)
+			return Mth.clamp(x, 0, Math.max(0, scaledWidth - getWidth()));
+		
 		return Mth.clamp(x, -width + 1, scaledWidth - 1);
 	}
 	
@@ -121,7 +129,8 @@ public class Window
 	
 	public final int getWidth()
 	{
-		return width;
+		// minimized, a column window is just its title bar
+		return columns && minimized ? titleBarWidth : width;
 	}
 	
 	public final void setWidth(int width)
@@ -157,13 +166,21 @@ public class Window
 		maxChildWidth += 4;
 		
 		Font tr = BeastFont.get();
-		int titleBarWidth = tr.width(title) + 4;
+		titleBarWidth = tr.width(title) + 4;
 		if(minimizable)
 			titleBarWidth += 11;
 		if(pinnable)
 			titleBarWidth += 11;
 		if(closable)
 			titleBarWidth += 11;
+		
+		if(columns)
+		{
+			columnWidth = maxChildWidth - 4;
+			invalidate();
+			validate();
+			return;
+		}
 		
 		int childrenHeight = 13;
 		for(Component c : children)
@@ -188,6 +205,13 @@ public class Window
 	{
 		if(valid)
 			return;
+		
+		if(columns)
+		{
+			layOutColumns();
+			valid = true;
+			return;
+		}
 		
 		int offsetY = 2;
 		int cWidth = width - 4;
@@ -217,6 +241,76 @@ public class Window
 			c.setWidth(cWidth);
 		
 		valid = true;
+	}
+	
+	/**
+	 * Lays the children out top to bottom, then in more columns to the right
+	 * once the max height is reached, with the columns evened out. Never
+	 * scrolls.
+	 */
+	private void layOutColumns()
+	{
+		int limit = maxInnerHeight > 0 ? maxInnerHeight : Integer.MAX_VALUE;
+		int columnCount = countColumns(limit);
+		
+		// the lowest column height that still needs no more columns
+		int low = 1;
+		int high = 2;
+		for(Component c : children)
+			high += c.getHeight() + 2;
+		high = Math.min(high, limit);
+		while(low < high)
+		{
+			int mid = (low + high) >>> 1;
+			if(countColumns(mid) <= columnCount)
+				high = mid;
+			else
+				low = mid + 1;
+		}
+		
+		int cWidth =
+			Math.max(columnWidth, (titleBarWidth - 2) / columnCount - 2);
+		
+		int column = 0;
+		int offsetY = 2;
+		innerHeight = 2;
+		for(Component c : children)
+		{
+			if(offsetY > 2 && offsetY + c.getHeight() + 2 > low)
+			{
+				column++;
+				offsetY = 2;
+			}
+			
+			c.setX(2 + column * (cWidth + 2));
+			c.setY(offsetY);
+			c.setWidth(cWidth);
+			offsetY += c.getHeight() + 2;
+			innerHeight = Math.max(innerHeight, offsetY);
+		}
+		
+		width = Math.max(titleBarWidth, 2 + (column + 1) * (cWidth + 2));
+		height = innerHeight + 13;
+		scrollingEnabled = false;
+		scrollOffset = 0;
+	}
+	
+	private int countColumns(int limit)
+	{
+		int count = 1;
+		int offsetY = 2;
+		for(Component c : children)
+		{
+			if(offsetY > 2 && offsetY + c.getHeight() + 2 > limit)
+			{
+				count++;
+				offsetY = 2;
+			}
+			
+			offsetY += c.getHeight() + 2;
+		}
+		
+		return count;
 	}
 	
 	public final void invalidate()
@@ -364,6 +458,27 @@ public class Window
 	public final boolean isFixedWidth()
 	{
 		return fixedWidth;
+	}
+	
+	/** The width of the title and its buttons, as of the last pack(). */
+	public final int getTitleBarWidth()
+	{
+		return titleBarWidth;
+	}
+	
+	public final boolean hasColumns()
+	{
+		return columns;
+	}
+	
+	/**
+	 * Long lists wrap into more columns instead of scrolling, and minimized
+	 * the window is only as wide as its title.
+	 */
+	public final void setColumns(boolean columns)
+	{
+		this.columns = columns;
+		invalidate();
 	}
 	
 	public final void setFixedWidth(boolean fixedWidth)

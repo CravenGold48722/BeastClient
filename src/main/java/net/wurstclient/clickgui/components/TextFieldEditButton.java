@@ -87,7 +87,7 @@ public final class TextFieldEditButton extends Component
 		// box
 		context.fill(x1, y3, x2, y2,
 			RenderUtils.toIntColor(bgColor, opacity * (hBox ? 1.5F : 1)));
-		ClickGui.drawAccentBorder(context, x1, y3, x2, y2);
+		ClickGui.drawOutline(context, x1, y3, x2, y2);
 		
 		// text
 		context.guiRenderState.up();

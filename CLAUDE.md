@@ -23,6 +23,23 @@ the same reasoning twice. Reports cover what changed, what was verified and what
 padding. A subagent asked for a specific answer returns that answer in full, not a survey of the
 codebase.
 
+## When a task is finished: build, commit, push, install (user, 2026-10-14)
+
+Standing permission - don't ask first. Whenever you finish a piece of work (a code change that
+is done and verified, not mid-task and not for questions/read-only work):
+
+1. `./gradlew spotlessApply build -PnoAnticheat` (the anticheat servers aren't needed for the
+   jar). If it fails, fix it or stop and report - never commit or install a broken build.
+2. Commit everything that belongs to the task on `main` (message ends with the
+   `Co-Authored-By` line from the session's attribution reminder) and `git push BeastClient main`.
+3. Move the new jar from `build/libs/` (the highest `Beast-Client-v*.jar`; the build bumps
+   `mod_version` every time) to `%APPDATA%\.minecraft\mods`, deleting the previous
+   `Beast-Client-*.jar` there first - only one Beast jar may be in mods.
+4. Say in the report that it was committed, pushed and installed (with the commit hash and the
+   jar name).
+
+Don't commit unrelated leftovers you didn't make without asking; never force-push.
+
 ## What this repo is
 
 **Beast Client** — a personal fork of [Wurst 7](https://github.com/Wurst-Imperium/Wurst7) by
@@ -277,23 +294,41 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
   Opened by `ClickGuiHack`, which switches itself off immediately after opening the screen.
   **Look (user, 2026-10-14, "modernize, red, not see-through, don't copy"):** solid panels (the
   Opacity sliders are gone, `getOpacity()` is 1; hover = `ClickGui.getFillColor(hovering)`, never
-  opacity x 1.5), drop shadow, outline + title separator drawn last (the solid title bar covered
-  them); feature rows left-aligned with a hairline (`ROW_BORDER`), enabled = dark red row
-  (`SELECTED_TINT`) + gradient outline + gradient bar on the left; checkboxes are switches
-  (`ClickGuiIcons.drawSwitch`), sliders a slim track filled with the wave up to a white knob
-  (`getKnobColor`'s green/blue is no longer drawn). Inspiration was the CevAPI fork's "modern"
-  ClickGUI (`../UI+Feature_Inpirations`) - ideas only, no code copied.
+  opacity x 1.5), drop shadow, **no red outlines anywhere** (user: windows, buttons, tooltips,
+  boxes, enabled rows - `ClickGui.drawOutline` is a gray `ROW_BORDER` hairline; the wave stays
+  in text, the enabled bar, slider fills and the tab underline); no pin button (only Radar's
+  window is pinned, always); title bars `BAR_BG` (near black); feature rows left-aligned with a
+  hairline, enabled = dark red row (`SELECTED_TINT`) + gradient bar on the left; checkboxes are
+  square-cornered switches with a square knob (`ClickGuiIcons.drawSwitch`), sliders a slim track
+  filled with the wave up to a white knob (`getKnobColor`'s green/blue is no longer drawn).
+  Inspiration was the CevAPI fork's "modern" ClickGUI (`../UI+Feature_Inpirations`) - ideas only,
+  no code copied.
   **Important** (that fork's "Favorites"): middle-click a hack -> golden shield
-  (`ClickGuiIcons.drawShield`) and listed in the "Important" window (first window; placed after
-  the last saved one for old `windows.json`); saved in `important-hacks.json`
-  (`hack/ImportantHacksFile`, `Hack.isImportant/setImportant`). Right-click a row = its
-  settings. Gametest `ClickGuiTest` does all of it with the real mouse and leaves
-  `clickgui_settings.png` / `clickgui_rows.png` in the screenshots folder.
+  (`ClickGuiIcons.drawShield`) and listed in the "Important" dropdown; saved in
+  `important-hacks.json` (`hack/ImportantHacksFile`, `Hack.isImportant/setImportant`).
+  Right-click a row = its settings. Gametest `ClickGuiTest` does all of it with the real mouse
+  (tabs included) and leaves `wurstlogo_inverted.png` / `clickgui_bar.png` /
+  `clickgui_settings.png` / `clickgui_rows.png` in the screenshots folder; it also fails on
+  tabs outside the bar/overlapping, a dropdown not right below the bar, off screen, or scrolling.
   **Gradient quads:** `RenderUtils.fillHorizontalGradient2D` must send the corners in vanilla's
   order (TL, BL, BR, TR) - the GUI pipeline culls back faces, and the old order meant every
   gradient border/bar/scrollbar was silently never drawn (found 2026-10-14).
   The wave moves with real time, so the gametests call `BeastColors.freezeWave()` first - the
   HackList in screenshots was a random shade of red and templates failed now and then.
+  **Bar (user, 2026-10-14):** a near-black bar along the top holds a tab per category window
+  (plus Important and UI Settings), centred, by `ClickGui.BY_IMPORTANCE` from the middle out
+  (Important, Combat, Render, Movement, ...; Chat/Fun/UI Settings at the ends); tabs that don't
+  fit wrap into a second bar row. Clicking a tab opens/closes its dropdown, which hangs right
+  below the bar under the tab (or ending at the tab's right edge near the screen's right) -
+  not draggable; an open tab gets a little gradient line under its title. The tab windows'
+  own 13 px title row is the bar's last row and isn't drawn (`renderWindow` returns early).
+  The bar is in front of everything but popups (clicks too). `windows.json` `"_layout":
+  {"version": 2}`; an older file opens with all dropdowns closed. Tab windows are
+  `setColumns(true)`: open they wrap into evened-out columns above the screen bottom and
+  **never scroll** ("Max height" slider removed; settings windows still scroll under "Max
+  settings height"). At GUI scale 4 (~480x252, the user's) all tabs should fit one bar row (they
+  need ~430 px; the 427 px test screen wraps UI Settings) and
+  Render is 3 columns.
 - **Font:** Beast's own UI (ClickGUI, Navigator, TabGUI, HackList, logo text) draws with
   `util/BeastFont.get()`, never `MC.font`: a second `Font` over vanilla's glyph cache that maps the
   default font to `wurst:beast` (`assets/wurst/font/beast.json`: ASCII from the BeastFont
@@ -301,7 +336,12 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
   else falls through to vanilla). Chat, signs and vanilla screens keep the normal font. Needs
   the access-widened `Font.provider`.
 - **TabGui** (`hud/TabGui.java`) and the **HackList HUD** (`hud/HackListHUD.java`) render through
-  `IngameHUD` on `GUIRenderListener`; `WurstLogo` draws `assets/wurst/beast_128.png`.
+  `IngameHUD` on `GUIRenderListener`; `WurstLogo` draws `assets/wurst/beast_128.png` and the
+  version with no background, in the opposite **gray** of each pixel behind it
+  (`util/InvertedText`: BeastFont ASCII glyphs through `WurstShaderPipelines.INVERTED_GRAY_TEXT`,
+  whose shader reads the main framebuffer it draws into - each pixel read and written once by
+  the same fragment; a `copyTextureToTexture` copy came out all black on 26.1.2 with no GL
+  error, cause not found). The logo's Background/Text color settings are gone.
 - **Navigator** (`navigator/`): older searchable list of every feature, ranked by
   `preferences.json` usage counts.
 - **Wurst Options / keybind manager / zoom manager**: `options/`.

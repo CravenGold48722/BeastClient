@@ -80,6 +80,9 @@ public enum BeastColors
 	/** Neutral panel background for the flat, modern look. */
 	public static final int PANEL_BG = 0xFF0E0E10;
 	
+	/** The ClickGUI's bar along the top and the title bars: near black. */
+	public static final int BAR_BG = 0xFF060607;
+	
 	/** Slightly raised background, used for rows and input wells. */
 	public static final int PANEL_BG_LIGHT = 0xFF17171A;
 	

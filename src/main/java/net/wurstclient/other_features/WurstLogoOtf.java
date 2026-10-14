@@ -7,7 +7,6 @@
  */
 package net.wurstclient.other_features;
 
-import java.awt.Color;
 import java.util.function.BooleanSupplier;
 import net.minecraft.resources.Identifier;
 import net.wurstclient.settings.TextFieldSetting;
@@ -15,21 +14,12 @@ import net.wurstclient.settings.TextFieldSetting;
 import net.wurstclient.DontBlock;
 import net.wurstclient.SearchTags;
 import net.wurstclient.other_feature.OtherFeature;
-import net.wurstclient.settings.ColorSetting;
 import net.wurstclient.settings.EnumSetting;
 
 @SearchTags({"wurst logo", "top left corner"})
 @DontBlock
 public final class WurstLogoOtf extends OtherFeature
 {
-	private final ColorSetting bgColor = new ColorSetting("Background",
-		"Background color.\n"
-			+ "Only visible when \u00a76RainbowUI\u00a7r is disabled.",
-		Color.WHITE);
-	
-	private final ColorSetting txtColor =
-		new ColorSetting("Text", "Text color.", Color.BLACK);
-	
 	private final EnumSetting<Visibility> visibility =
 		new EnumSetting<>("Visibility", Visibility.values(), Visibility.ALWAYS);
 	
@@ -40,8 +30,6 @@ public final class WurstLogoOtf extends OtherFeature
 	public WurstLogoOtf()
 	{
 		super("WurstLogo", "Shows the Wurst logo and version on the screen.");
-		addSetting(bgColor);
-		addSetting(txtColor);
 		addSetting(visibility);
 		addSetting(logoTexture);
 	}
@@ -49,16 +37,6 @@ public final class WurstLogoOtf extends OtherFeature
 	public boolean isVisible()
 	{
 		return visibility.getSelected().isVisible();
-	}
-	
-	public int getBackgroundColor()
-	{
-		return bgColor.getColorI(128);
-	}
-	
-	public int getTextColor()
-	{
-		return txtColor.getColorI();
 	}
 	
 	public Identifier getLogoTextureIdentifier()

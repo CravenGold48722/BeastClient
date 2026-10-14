@@ -53,7 +53,8 @@ public enum ClickGuiIcons
 	public static final int SWITCH_WIDTH = 14;
 	
 	/**
-	 * An on/off switch, {@link #SWITCH_WIDTH} x 7 GUI pixels with its top
+	 * A square-cornered on/off switch, {@link #SWITCH_WIDTH} x 7 GUI pixels
+	 * with its top
 	 * left corner at (x, y): the accent wave with the knob on the right when
 	 * on, a dark track with the knob on the left when off.
 	 */
@@ -63,21 +64,17 @@ public enum ClickGuiIcons
 		int x2 = x + SWITCH_WIDTH;
 		int y2 = y + 7;
 		
-		// track
+		// track: a plain rectangle
 		if(on && !grayedOut)
-		{
-			RenderUtils.fillGradient2D(context, x + 1, y, x2 - 1, y2, 1F);
-			RenderUtils.fillGradient2D(context, x, y + 1, x + 1, y2 - 1, 1F);
-			RenderUtils.fillGradient2D(context, x2 - 1, y + 1, x2, y2 - 1, 1F);
-			
-		}else
+			RenderUtils.fillGradient2D(context, x, y, x2, y2, 1F);
+		else
 		{
 			int track;
 			if(grayedOut)
 				track = on ? 0xFF4A2226 : 0xFF1E1E22;
 			else
 				track = hovering ? 0xFF38383F : BeastColors.ROW_BORDER;
-			fillPill(context, x, y, x2, y2, track);
+			context.fill(x, y, x2, y2, track);
 		}
 		
 		// knob
@@ -88,17 +85,9 @@ public enum ClickGuiIcons
 			knob = hovering ? 0xFFFFFFFF : BeastColors.TEXT;
 		else
 			knob = hovering ? BeastColors.TEXT : BeastColors.TEXT_MUTED;
+		// knob: a square, inset by a pixel
 		int kx = on ? x2 - 6 : x + 1;
-		fillPill(context, kx, y + 1, kx + 5, y2 - 1, knob);
-	}
-	
-	/** A rectangle with its corner pixels left out. */
-	private static void fillPill(GuiGraphicsExtractor context, int x1, int y1,
-		int x2, int y2, int color)
-	{
-		context.fill(x1 + 1, y1, x2 - 1, y2, color);
-		context.fill(x1, y1 + 1, x1 + 1, y2 - 1, color);
-		context.fill(x2 - 1, y1 + 1, x2, y2 - 1, color);
+		context.fill(kx, y + 1, kx + 5, y2 - 1, knob);
 	}
 	
 	/**
@@ -139,86 +128,6 @@ public enum ClickGuiIcons
 		// outline
 		int outlineColor = 0x80101010;
 		RenderUtils.drawLineStrip2D(context, arrowVertices, outlineColor);
-	}
-	
-	public static void drawPin(GuiGraphicsExtractor context, float x1, float y1,
-		float x2, float y2, boolean hovering, boolean pinned)
-	{
-		int needleColor = hovering ? 0xFFFFFFFF : 0xFFD9D9D9;
-		int outlineColor = 0x80101010;
-		
-		if(pinned)
-		{
-			float xk1 = x1 + 2;
-			float xk2 = x2 - 2;
-			float xk3 = x1 + 1;
-			float xk4 = x2 - 1;
-			float yk1 = y1 + 2;
-			float yk2 = y2 - 2;
-			float yk3 = y2 - 0.5F;
-			
-			// knob
-			int knobColor = hovering ? BeastColors.ACCENT_RED_HOVER
-				: BeastColors.ACCENT_RED;
-			RenderUtils.fill2D(context, xk1, yk1, xk2, yk2, knobColor);
-			RenderUtils.fill2D(context, xk3, yk2, xk4, yk3, knobColor);
-			
-			float xn1 = x1 + 3.5F;
-			float xn2 = x2 - 3.5F;
-			float yn1 = y2 - 0.5F;
-			float yn2 = y2;
-			
-			// needle
-			RenderUtils.fill2D(context, xn1, yn1, xn2, yn2, needleColor);
-			
-			// outlines
-			RenderUtils.drawBorder2D(context, xk1, yk1, xk2, yk2, outlineColor);
-			RenderUtils.drawBorder2D(context, xk3, yk2, xk4, yk3, outlineColor);
-			RenderUtils.drawBorder2D(context, xn1, yn1, xn2, yn2, outlineColor);
-			
-		}else
-		{
-			float xk1 = x2 - 3.5F;
-			float xk2 = x2 - 0.5F;
-			float xk3 = x2 - 3;
-			float xk4 = x1 + 3;
-			float xk5 = x1 + 2;
-			float xk6 = x2 - 2;
-			float xk7 = x1 + 1;
-			float yk1 = y1 + 0.5F;
-			float yk2 = y1 + 3.5F;
-			float yk3 = y2 - 3;
-			float yk4 = y1 + 3;
-			float yk5 = y1 + 2;
-			float yk6 = y2 - 2;
-			float yk7 = y2 - 1;
-			
-			// knob
-			int knobColor = BeastColors.ICON_BLACK;
-			float[][] knobVertices = {{xk4, yk4}, {xk3, yk3}, {xk2, yk2},
-				{xk1, yk1}, {xk5, yk5}, {xk7, yk4}, {xk3, yk7}, {xk6, yk6}};
-			RenderUtils.fillQuads2D(context, knobVertices, knobColor);
-			
-			float xn1 = x1 + 3;
-			float xn2 = x1 + 4;
-			float xn3 = x1 + 1;
-			float yn1 = y2 - 4;
-			float yn2 = y2 - 3;
-			float yn3 = y2 - 1;
-			
-			// needle
-			float[][] needleVertices = {{xn3, yn3}, {xn2, yn2}, {xn1, yn1}};
-			RenderUtils.fillTriangle2D(context, needleVertices, needleColor);
-			
-			// outlines
-			float[][] knobPart1 = new float[4][2];
-			System.arraycopy(knobVertices, 0, knobPart1, 0, 4);
-			RenderUtils.drawLineStrip2D(context, knobPart1, outlineColor);
-			float[][] knobPart2 = new float[4][2];
-			System.arraycopy(knobVertices, 4, knobPart2, 0, 4);
-			RenderUtils.drawLineStrip2D(context, knobPart2, outlineColor);
-			RenderUtils.drawLineStrip2D(context, needleVertices, outlineColor);
-		}
 	}
 	
 	public static void drawCheck(GuiGraphicsExtractor context, float x1,

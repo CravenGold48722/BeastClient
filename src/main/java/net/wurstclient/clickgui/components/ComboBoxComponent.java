@@ -19,6 +19,7 @@ import net.wurstclient.clickgui.ClickGuiIcons;
 import net.wurstclient.clickgui.ComboBoxPopup;
 import net.wurstclient.clickgui.Component;
 import net.wurstclient.settings.EnumSetting;
+import net.wurstclient.util.BeastColors;
 import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.RenderUtils;
 
@@ -113,8 +114,9 @@ public final class ComboBoxComponent<T extends Enum<T>> extends Component
 		context.guiRenderState.up();
 		
 		// outlines
-		ClickGui.drawAccentBorder(context, x4, y1, x2, y2);
-		RenderUtils.drawGradientVLine2D(context, x3, y1, y2, 1F);
+		ClickGui.drawOutline(context, x4, y1, x2, y2);
+		RenderUtils.drawBorder2D(context, x3, y1, x3 + 1, y2,
+			BeastColors.ROW_BORDER);
 		
 		// arrow
 		ClickGuiIcons.drawMinimizeArrow(context, x3, y1 + 0.5F, x2, y2 - 0.5F,

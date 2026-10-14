@@ -16,7 +16,7 @@ import net.wurstclient.settings.Setting;
 
 public final class SettingsWindow extends Window
 {
-	public SettingsWindow(Feature feature, Window parent, int buttonY)
+	public SettingsWindow(Feature feature, Window parent, Component button)
 	{
 		super(feature.getName() + " Settings");
 		
@@ -28,23 +28,35 @@ public final class SettingsWindow extends Window
 		setMaxHeight(200);
 		pack();
 		
-		setInitialPosition(parent, buttonY);
+		setInitialPosition(parent, button);
 	}
 	
-	private void setInitialPosition(Window parent, int buttonY)
+	/**
+	 * Right of the window, else left of it, else - a wide dropdown on a small
+	 * screen - right or left of the button's own column.
+	 */
+	private void setInitialPosition(Window parent, Component button)
 	{
 		int scroll = parent.isScrollingEnabled() ? parent.getScrollOffset() : 0;
-		int x = parent.getX() + parent.getWidth() + 5;
-		int y = parent.getY() + 12 + buttonY + scroll;
+		int y = parent.getY() + 12 + button.getY() + scroll;
 		
 		com.mojang.blaze3d.platform.Window mcWindow =
 			WurstClient.MC.getWindow();
-		if(x + getWidth() > mcWindow.getGuiScaledWidth())
+		int scaledWidth = mcWindow.getGuiScaledWidth();
+		int buttonX1 = parent.getX() + button.getX();
+		int buttonX2 = buttonX1 + button.getWidth();
+		
+		int x = parent.getX() + parent.getWidth() + 5;
+		if(x + getWidth() > scaledWidth)
 			x = parent.getX() - getWidth() - 5;
+		if(x < 0)
+			x = buttonX2 + 5;
+		if(x + getWidth() > scaledWidth)
+			x = buttonX1 - getWidth() - 5;
 		if(y + getHeight() > mcWindow.getGuiScaledHeight())
 			y -= getHeight() - 14;
 		
-		x = Mth.clamp(x, 0, mcWindow.getGuiScaledWidth());
+		x = Mth.clamp(x, 0, scaledWidth);
 		y = Mth.clamp(y, 0, mcWindow.getGuiScaledHeight());
 		
 		setX(x);

@@ -7,14 +7,12 @@
  */
 package net.wurstclient.hud;
 
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
 import net.wurstclient.WurstClient;
 import net.wurstclient.other_features.WurstLogoOtf;
-import net.wurstclient.util.BeastFont;
-import net.wurstclient.util.RenderUtils;
+import net.wurstclient.util.InvertedText;
 
 public final class WurstLogo
 {
@@ -29,21 +27,9 @@ public final class WurstLogo
 			return;
 		
 		String version = getVersionString();
-		Font tr = BeastFont.get();
-		
-		// background (sized to fit the version text, vertically centered
-		// against the logo so the bigger logo overhangs above and below)
-		int bgColor;
-		if(WURST.getHax().rainbowUiHack.isEnabled())
-			bgColor = RenderUtils.toIntColor(WURST.getGui().getAcColor(), 0.5F);
-		else
-			bgColor = otf.getBackgroundColor();
-		context.fill(0, 14, tr.width(version) + 96, 25, bgColor);
-		
-		context.guiRenderState.up();
-		
-		// version string
-		context.text(tr, version, 94, 16, otf.getTextColor(), false);
+		// version string: no background, the opposite gray of whatever is
+		// behind it, so it reads on any background
+		InvertedText.draw(context, version, 94, 16);
 		
 		// Wurst logo
 		context.blit(RenderPipelines.GUI_TEXTURED, LOGO_TEXTURE, 0, 2, 0, 0, 92,

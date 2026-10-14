@@ -73,6 +73,19 @@ public enum WurstShaderPipelines
 			.withDepthStencilState(Optional.empty()).build());
 	
 	/**
+	 * GUI text in the opposite gray of what's behind it (WurstLogo's version
+	 * text). Sampler1 is the main framebuffer it draws into, see
+	 * {@link net.wurstclient.util.InvertedText}.
+	 */
+	public static final RenderPipeline INVERTED_GRAY_TEXT = RenderPipelines
+		.register(RenderPipeline.builder(RenderPipelines.GUI_TEXTURED_SNIPPET)
+			.withLocation(
+				Identifier.parse("wurst:pipeline/wurst_inverted_gray_text"))
+			.withFragmentShader(
+				Identifier.parse("wurst:core/inverted_gray_text"))
+			.withSampler("Sampler1").build());
+	
+	/**
 	 * Similar to the DEBUG_QUADS ShaderPipeline, but with no depth test.
 	 */
 	public static final RenderPipeline ESP_QUADS_NO_CULLING = RenderPipelines

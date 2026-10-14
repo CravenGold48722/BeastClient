@@ -74,7 +74,7 @@ public final class ComboBoxPopup<T extends Enum<T>> extends Popup
 		if(hovering)
 			GUI.setTooltip("");
 		
-		ClickGui.drawAccentBorder(context, x1, y1, x2, y2);
+		ClickGui.drawOutline(context, x1, y1, x2, y2);
 		
 		int yi1 = y1 - 11;
 		for(T value : setting.getValues())

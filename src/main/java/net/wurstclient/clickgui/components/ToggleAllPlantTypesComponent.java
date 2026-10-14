@@ -109,8 +109,8 @@ public final class ToggleAllPlantTypesComponent extends Component
 		// boxes
 		context.fill(x3, y3, x4, y2, getFillColor(hHarvest));
 		context.fill(x5, y3, x6, y2, getFillColor(hReplant));
-		ClickGui.drawAccentBorder(context, x3, y3, x4, y2);
-		ClickGui.drawAccentBorder(context, x5, y3, x6, y2);
+		ClickGui.drawOutline(context, x3, y3, x4, y2);
+		ClickGui.drawOutline(context, x5, y3, x6, y2);
 		
 		// checks
 		Boolean harvestingEnabled = setting.isHarvestingEnabled();

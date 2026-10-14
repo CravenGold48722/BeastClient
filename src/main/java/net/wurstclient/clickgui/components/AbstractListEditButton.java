@@ -63,7 +63,7 @@ public abstract class AbstractListEditButton extends Component
 		
 		// button
 		context.fill(x3, y1, x2, y2, getFillColor(hBox));
-		ClickGui.drawAccentBorder(context, x3, y1, x2, y2);
+		ClickGui.drawOutline(context, x3, y1, x2, y2);
 		
 		// text
 		context.guiRenderState.up();

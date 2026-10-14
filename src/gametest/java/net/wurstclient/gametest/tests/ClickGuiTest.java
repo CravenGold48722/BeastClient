@@ -10,8 +10,6 @@ package net.wurstclient.gametest.tests;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.List;
 
 import org.lwjgl.glfw.GLFW;
@@ -29,19 +27,16 @@ import net.wurstclient.hack.Hack;
 import net.wurstclient.util.BeastFont;
 
 /**
- * The ClickGUI with the real mouse: a middle click marks a hack as Important
- * (saved, listed in the Important window), a right click opens and closes
- * its settings, a middle click in the Important window unmarks it again.
- * Leaves {@code clickgui_settings.png} and {@code clickgui_rows.png} in the
+ * The ClickGUI with the real mouse: tabs in the bar along the top open and
+ * close their dropdown, a middle click marks a hack as Important (saved,
+ * listed in the Important dropdown), a right click opens and closes its
+ * settings, a middle click in the Important dropdown unmarks it again.
+ * Leaves {@code wurstlogo_inverted.png}, {@code clickgui_bar.png},
+ * {@code clickgui_settings.png} and {@code clickgui_rows.png} in the
  * screenshots folder to look at.
  */
 public final class ClickGuiTest extends SingleplayerTest
 {
-	private static final List<String> OPENED =
-		List.of("Important", "Movement", "Combat");
-	
-	private final Map<Window, int[]> savedPositions = new HashMap<>();
-	
 	public ClickGuiTest(ClientGameTestContext context,
 		TestSingleplayerContext spContext)
 	{
@@ -61,30 +56,22 @@ public final class ClickGuiTest extends SingleplayerTest
 			throw new RuntimeException(
 				"The UI font measures like vanilla's - BeastFont not loaded?");
 		
+		// the version text in the opposite gray of the sky behind it
+		runWurstCommand("setmode WurstLogo visibility always");
+		context.waitTicks(2);
+		context.takeScreenshot("wurstlogo_inverted");
+		runWurstCommand("setmode WurstLogo visibility only_when_outdated");
+		
 		logger.info("Opening the ClickGUI");
 		context.runOnClient(mc -> hax().clickGuiHack.setEnabled(true));
 		context.waitFor(mc -> mc.screen instanceof ClickGuiScreen);
-		// the three windows side by side, nothing else in the way
-		context.runOnClient(mc -> {
-			for(Window window : gui().getWindows())
-			{
-				savedPositions.put(window, new int[]{window.getActualX(),
-					window.getActualY(), window.isInvisible() ? 1 : 0});
-				if(!OPENED.contains(window.getTitle()))
-					window.setInvisible(true);
-			}
-			
-			int x = 5;
-			for(String title : OPENED)
-			{
-				Window window = findWindow(title);
-				window.setMinimized(false);
-				window.setX(x);
-				window.setY(5);
-				x += window.getWidth() + 20;
-			}
-		});
 		context.waitTicks(2);
+		checkBar();
+		
+		logger.info("Opening Combat from its tab");
+		clickTab("Combat");
+		checkDropdown("Combat");
+		context.takeScreenshot("clickgui_bar");
 		
 		logger.info("Marking AimAssist as Important with a middle click");
 		Hack aimAssist = hax().aimAssistHack;
@@ -96,6 +83,13 @@ public final class ClickGuiTest extends SingleplayerTest
 			throw fail("AimAssist isn't in the Important window");
 		if(!readImportantFile().contains("\"AimAssist\""))
 			throw fail("important-hacks.json doesn't list AimAssist");
+		
+		logger.info("Closing Combat and opening Important");
+		clickTab("Combat");
+		if(context.computeOnClient(mc -> !findWindow("Combat").isMinimized()))
+			throw fail("Clicking the tab again didn't close Combat");
+		clickTab("Important");
+		checkDropdown("Important");
 		
 		logger.info("Opening its settings with a right click");
 		clickRow("Important", aimAssist, GLFW.GLFW_MOUSE_BUTTON_RIGHT);
@@ -129,17 +123,11 @@ public final class ClickGuiTest extends SingleplayerTest
 		if(readImportantFile().contains("\"AimAssist\""))
 			throw fail("important-hacks.json still lists AimAssist");
 		
+		clickTab("Important");
 		context.runOnClient(mc -> {
-			Window settings = findWindow("AimAssist Settings");
-			if(settings != null)
-				settings.close();
-			savedPositions.forEach((window, pos) -> {
-				window.setX(pos[0]);
-				window.setY(pos[1]);
-				window.setInvisible(pos[2] == 1);
-				if(OPENED.contains(window.getTitle()))
+			for(Window window : gui().getWindows())
+				if(window.hasColumns())
 					window.setMinimized(true);
-			});
 			hax().clickGuiHack.setEnabled(false);
 		});
 		context.waitFor(mc -> mc.screen == null);
@@ -147,11 +135,90 @@ public final class ClickGuiTest extends SingleplayerTest
 		context.waitTicks(2);
 	}
 	
+	/**
+	 * Every tab inside the bar, on the screen, not overlapping another,
+	 * Important in the middle.
+	 */
+	private void checkBar()
+	{
+		String problem = context.computeOnClient(mc -> {
+			int width = mc.getWindow().getGuiScaledWidth();
+			int barHeight = gui().getBarHeight();
+			List<int[]> tabs =
+				gui().getWindows().stream().filter(Window::hasColumns)
+					.map(w -> gui().getTabBounds(w)).toList();
+			if(tabs.contains(null))
+				return "a window has no tab";
+			
+			for(int[] a : tabs)
+			{
+				if(a[0] < 0 || a[0] + a[2] > width || a[1] < 0
+					|| a[1] + a[3] > barHeight)
+					return "a tab is outside the bar: x " + a[0] + ", y "
+						+ a[1];
+				for(int[] b : tabs)
+					if(a != b && a[0] < b[0] + b[2] && b[0] < a[0] + a[2]
+						&& a[1] < b[1] + b[3] && b[1] < a[1] + a[3])
+						return "two tabs overlap at x " + a[0];
+			}
+			
+			int[] important = gui().getTabBounds(findWindow("Important"));
+			int middle = important[0] + important[2] / 2;
+			if(Math.abs(middle - width / 2) > width / 6)
+				return "Important isn't in the middle (" + middle + " of "
+					+ width + ")";
+			return null;
+		});
+		if(problem != null)
+			throw fail(problem);
+	}
+	
+	/**
+	 * The window is open, right below the bar and on the screen, without a
+	 * scrollbar.
+	 */
+	private void checkDropdown(String title)
+	{
+		String problem = context.computeOnClient(mc -> {
+			int width = mc.getWindow().getGuiScaledWidth();
+			int height = mc.getWindow().getGuiScaledHeight();
+			Window window = findWindow(title);
+			if(window.isMinimized())
+				return "clicking its tab didn't open " + title;
+			window.validate();
+			if(window.getY() + 13 != gui().getBarHeight())
+				return title + " doesn't start below the bar";
+			if(window.isScrollingEnabled())
+				return title + " scrolls";
+			if(window.getX() < 0 || window.getX() + window.getWidth() > width
+				|| window.getY() + window.getHeight() > height)
+				return title + " goes off the screen";
+			return null;
+		});
+		if(problem != null)
+			throw fail(problem);
+	}
+	
 	/** Saves a screenshot of the GUI as it is before failing. */
 	private RuntimeException fail(String message)
 	{
 		context.takeScreenshot("clickgui_failed");
 		return new RuntimeException(message);
+	}
+	
+	/** Left-clicks the window's tab in the bar. */
+	private void clickTab(String title)
+	{
+		double[] pos = context.computeOnClient(mc -> {
+			int[] tab = gui().getTabBounds(findWindow(title));
+			double scale = mc.getWindow().getGuiScale();
+			return new double[]{(tab[0] + tab[2] / 2.0) * scale,
+				(tab[1] + tab[3] / 2.0) * scale};
+		});
+		input.setCursorPos(pos[0], pos[1]);
+		context.waitTicks(1);
+		input.pressMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		context.waitTicks(2);
 	}
 	
 	/** Clicks the hack's row in the given window, left of its arrow. */
@@ -163,11 +230,6 @@ public final class ClickGuiTest extends SingleplayerTest
 			if(window == null || row == null)
 				throw new RuntimeException(
 					hack.getName() + " isn't in " + windowTitle);
-			
-			// scroll it into view
-			int top = row.getY() + window.getScrollOffset();
-			if(top < 0 || top + row.getHeight() > window.getHeight() - 13)
-				window.setScrollOffset(-row.getY());
 			
 			double scale = mc.getWindow().getGuiScale();
 			double x = window.getX() + row.getX() + 8;

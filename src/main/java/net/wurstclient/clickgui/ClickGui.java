@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -56,12 +57,39 @@ public final class ClickGui
 	private static final String IMPORTANT = "Important";
 	private Window importantWindow;
 	
+	/**
+	 * The order the tabs get the middle of the bar in. The ones at the end
+	 * go to its ends.
+	 */
+	private static final List<String> BY_IMPORTANCE =
+		List.of(IMPORTANT, "Combat", "Render", "Movement", "Blocks", "Items",
+			"Other", "Chat", "Fun", "UI Settings");
+	
+	/** Version of the bar layout in windows.json. */
+	private static final String LAYOUT = "_layout";
+	private static final int LAYOUT_VERSION = 2;
+	
+	/** One row of tabs in the bar along the top. */
+	private static final int TAB_HEIGHT = 13;
+	private static final int TAB_PADDING = 5;
+	private final ArrayList<Tab> tabs = new ArrayList<>();
+	private int barHeight = TAB_HEIGHT;
+	
+	/** A window's tab in the bar; the window hangs below it when open. */
+	private record Tab(Window window, int x, int y, int width)
+	{
+		boolean contains(int mouseX, int mouseY)
+		{
+			return mouseX >= x && mouseX < x + width && mouseY >= y
+				&& mouseY < y + TAB_HEIGHT;
+		}
+	}
+	
 	private float[] bgColor = new float[3];
 	private float[] acColor = new float[3];
 	private int txtColor;
 	private float opacity;
 	private float ttOpacity;
-	private int maxHeight;
 	private int maxSettingsHeight;
 	
 	private String tooltip = "";
@@ -108,7 +136,10 @@ public final class ClickGui
 		windows.add(uiSettings);
 		
 		for(Window window : windows)
+		{
 			window.setMinimized(true);
+			window.setColumns(true);
+		}
 		
 		windows.add(WurstClient.INSTANCE.getHax().radarHack.getWindow());
 		
@@ -149,10 +180,13 @@ public final class ClickGui
 			return;
 		}
 		
-		// windows.json from before the Important window existed: put it next
-		// to the last window instead of on top of the first one
-		if(!json.has(IMPORTANT))
-			placeAfterOthers(importantWindow, json, scaledWidth);
+		// windows.json from before the bar: all closed (several dropdowns
+		// that were open would cover each other below the bar)
+		boolean oldLayout = !(json.get(LAYOUT) instanceof JsonObject layout
+			&& layout.get("version") instanceof JsonElement version
+			&& version.isJsonPrimitive()
+			&& version.getAsJsonPrimitive().isNumber()
+			&& version.getAsInt() >= LAYOUT_VERSION);
 		
 		for(Window window : windows)
 		{
@@ -160,22 +194,30 @@ public final class ClickGui
 			if(jsonWindow == null || !jsonWindow.isJsonObject())
 				continue;
 			
-			JsonElement jsonX = jsonWindow.getAsJsonObject().get("x");
-			if(jsonX.isJsonPrimitive() && jsonX.getAsJsonPrimitive().isNumber())
-				window.setX(jsonX.getAsInt());
-			
-			JsonElement jsonY = jsonWindow.getAsJsonObject().get("y");
-			if(jsonY.isJsonPrimitive() && jsonY.getAsJsonPrimitive().isNumber())
-				window.setY(jsonY.getAsInt());
+			// the bar places its own windows
+			if(!window.hasColumns())
+			{
+				JsonElement jsonX = jsonWindow.getAsJsonObject().get("x");
+				if(jsonX.isJsonPrimitive()
+					&& jsonX.getAsJsonPrimitive().isNumber())
+					window.setX(jsonX.getAsInt());
+				
+				JsonElement jsonY = jsonWindow.getAsJsonObject().get("y");
+				if(jsonY.isJsonPrimitive()
+					&& jsonY.getAsJsonPrimitive().isNumber())
+					window.setY(jsonY.getAsInt());
+			}
 			
 			JsonElement jsonMinimized =
 				jsonWindow.getAsJsonObject().get("minimized");
 			if(jsonMinimized.isJsonPrimitive()
-				&& jsonMinimized.getAsJsonPrimitive().isBoolean())
+				&& jsonMinimized.getAsJsonPrimitive().isBoolean()
+				&& !(oldLayout && window.hasColumns()))
 				window.setMinimized(jsonMinimized.getAsBoolean());
 			
+			// only Radar's window is pinned, and it always is
 			JsonElement jsonPinned = jsonWindow.getAsJsonObject().get("pinned");
-			if(jsonPinned.isJsonPrimitive()
+			if(window.isPinnable() && jsonPinned.isJsonPrimitive()
 				&& jsonPinned.getAsJsonPrimitive().isBoolean())
 				window.setPinned(jsonPinned.getAsBoolean());
 		}
@@ -183,47 +225,146 @@ public final class ClickGui
 		saveWindows();
 	}
 	
-	private void placeAfterOthers(Window window, JsonObject json,
-		int scaledWidth)
+	/**
+	 * The tabs side by side in the bar along the top, centred, the most
+	 * important in the middle and the rest further out the less important
+	 * they are. Tabs that don't fit go to a second row of the bar (the less
+	 * important ones), centred the same way. The windows hang below the bar.
+	 */
+	private void layOutTabs(int scaledWidth)
 	{
-		// the lowest, then rightmost saved window
-		int lastX = -1;
-		int lastY = -1;
-		int lastWidth = 0;
-		for(Window other : windows)
+		ArrayList<Window> ranked = new ArrayList<>();
+		for(String title : BY_IMPORTANCE)
+			for(Window window : windows)
+				if(window.hasColumns() && window.getTitle().equals(title))
+					ranked.add(window);
+		for(Window window : windows)
+			if(window.hasColumns() && !ranked.contains(window))
+				ranked.add(window);
+			
+		Font tr = BeastFont.get();
+		tabs.clear();
+		int row = 0;
+		int next = 0;
+		while(next < ranked.size())
 		{
-			if(other == window)
-				continue;
-			
-			JsonElement saved = json.get(other.getTitle());
-			if(saved == null || !saved.isJsonObject())
-				continue;
-			
-			JsonObject pos = saved.getAsJsonObject();
-			if(!pos.has("x") || !pos.has("y"))
-				continue;
-			
-			int ox = pos.get("x").getAsInt();
-			int oy = pos.get("y").getAsInt();
-			if(oy > lastY || oy == lastY && ox > lastX)
+			// as many as fit, most important first, from the middle out
+			ArrayDeque<Window> inRow = new ArrayDeque<>();
+			int rowWidth = 0;
+			for(int i = 0; next < ranked.size(); i++, next++)
 			{
-				lastX = ox;
-				lastY = oy;
-				lastWidth = other.getWidth();
+				Window window = ranked.get(next);
+				int width = tr.width(window.getTitle()) + 2 * TAB_PADDING;
+				if(i > 0 && rowWidth + width > scaledWidth)
+					break;
+				
+				if(i % 2 == 1)
+					inRow.addFirst(window);
+				else
+					inRow.addLast(window);
+				rowWidth += width;
 			}
+			
+			int x = Math.max(0, (scaledWidth - rowWidth) / 2);
+			for(Window window : inRow)
+			{
+				int width = tr.width(window.getTitle()) + 2 * TAB_PADDING;
+				tabs.add(new Tab(window, x, row * TAB_HEIGHT, width));
+				x += width;
+			}
+			
+			row++;
 		}
 		
-		int x = lastX < 0 ? 5 : lastX + lastWidth + 5;
-		int y = lastY < 0 ? 5 : lastY;
+		barHeight = Math.max(1, row) * TAB_HEIGHT;
 		
-		if(x + window.getWidth() + 5 > scaledWidth)
+		// open, a window's content starts right below the bar (its own,
+		// undrawn, title row is the bar's last row)
+		for(Tab tab : tabs)
+			tab.window().setY(barHeight - 13);
+	}
+	
+	/**
+	 * Puts an open window below its tab, or ending at its tab's right edge
+	 * when it would run off the screen there.
+	 */
+	private void placeBelowTab(Tab tab, int scaledWidth)
+	{
+		Window window = tab.window();
+		int x = tab.x();
+		if(x + window.getWidth() > scaledWidth)
+			x = tab.x() + tab.width() - window.getWidth();
+		window.setX(Math.max(0, x));
+	}
+	
+	/** Height of the bar along the top, as of the last frame. */
+	public int getBarHeight()
+	{
+		return barHeight;
+	}
+	
+	/**
+	 * The window's tab in the bar as {x, y, width, height}, as of the last
+	 * frame, or null if it has none.
+	 */
+	public int[] getTabBounds(Window window)
+	{
+		Tab tab = getTab(window);
+		return tab == null ? null
+			: new int[]{tab.x(), tab.y(), tab.width(), TAB_HEIGHT};
+	}
+	
+	private Tab getTab(Window window)
+	{
+		for(Tab tab : tabs)
+			if(tab.window() == window)
+				return tab;
+		return null;
+	}
+	
+	/** Opens or closes a tab's window and brings it to the front. */
+	private void toggleTab(Tab tab)
+	{
+		Window window = tab.window();
+		window.setMinimized(!window.isMinimized());
+		windows.remove(window);
+		windows.add(window);
+		closeInvalidPopups();
+		saveWindows();
+	}
+	
+	private void renderBar(GuiGraphicsExtractor context, int mouseX, int mouseY)
+	{
+		int scaledWidth = MC.getWindow().getGuiScaledWidth();
+		context.guiRenderState.up();
+		context.fill(0, 0, scaledWidth, barHeight, BeastColors.BAR_BG);
+		
+		Font tr = BeastFont.get();
+		for(Tab tab : tabs)
 		{
-			x = 5;
-			y += 18;
+			int x1 = tab.x();
+			int y1 = tab.y();
+			int x2 = x1 + tab.width();
+			int y2 = y1 + TAB_HEIGHT;
+			boolean open = !tab.window().isMinimized();
+			boolean hovering = tab.contains(mouseX, mouseY);
+			
+			if(hovering)
+				context.fill(x1, y1, x2, y2, BeastColors.PANEL_HOVER);
+			else if(open)
+				context.fill(x1, y1, x2, y2, BeastColors.PANEL_BG_LIGHT);
+			
+			if(hovering)
+				tooltip = "";
+			
+			// a little red line under the title of an open one
+			if(open)
+				RenderUtils.fillGradient2D(context, x1 + 3, y2 - 2, x2 - 3,
+					y2 - 1, 1F);
+			
+			drawAccentText(context, tr, tab.window().getTitle(),
+				x1 + TAB_PADDING, y1 + 3);
 		}
-		
-		window.setX(x);
-		window.setY(y);
 	}
 	
 	/**
@@ -268,6 +409,9 @@ public final class ClickGui
 	private void saveWindows()
 	{
 		JsonObject json = new JsonObject();
+		JsonObject layout = new JsonObject();
+		layout.addProperty("version", LAYOUT_VERSION);
+		json.add(LAYOUT, layout);
 		
 		for(Window window : windows)
 		{
@@ -303,6 +447,20 @@ public final class ClickGui
 		
 		boolean popupClicked =
 			handlePopupMouseClick(mouseX, mouseY, mouseButton);
+		
+		// the bar is in front of everything but popups
+		if(!popupClicked && mouseY >= 0 && mouseY < barHeight)
+		{
+			if(mouseButton == GLFW.GLFW_MOUSE_BUTTON_LEFT)
+				for(Tab tab : tabs)
+					if(tab.contains(mouseX, mouseY))
+					{
+						toggleTab(tab);
+						break;
+					}
+				
+			return;
+		}
 		
 		if(!popupClicked)
 		{
@@ -597,6 +755,8 @@ public final class ClickGui
 	{
 		updateColors();
 		
+		layOutTabs(MC.getWindow().getGuiScaledWidth());
+		
 		Matrix3x2fStack matrixStack = context.pose();
 		matrixStack.pushMatrix();
 		
@@ -604,6 +764,10 @@ public final class ClickGui
 		for(Window window : windows)
 		{
 			if(window.isInvisible())
+				continue;
+			
+			// a closed tab window is just its tab in the bar
+			if(window.hasColumns() && window.isMinimized())
 				continue;
 			
 			// dragging
@@ -627,6 +791,7 @@ public final class ClickGui
 			renderWindow(context, window, mouseX, mouseY, partialTicks);
 		}
 		
+		renderBar(context, mouseX, mouseY);
 		renderPopups(context, mouseX, mouseY);
 		renderTooltip(context, mouseX, mouseY);
 		
@@ -692,7 +857,7 @@ public final class ClickGui
 			RenderUtils.toIntColor(bgColor, ttOpacity));
 		
 		// outline
-		drawAccentBorder(context, xt1, yt1, xt2, yt2);
+		drawOutline(context, xt1, yt1, xt2, yt2);
 		
 		// text
 		context.guiRenderState.up();
@@ -723,7 +888,6 @@ public final class ClickGui
 		ttOpacity = clickGui.getTooltipOpacity();
 		bgColor = clickGui.getBackgroundColor();
 		txtColor = clickGui.getTextColor();
-		maxHeight = clickGui.getMaxHeight();
 		maxSettingsHeight = clickGui.getMaxSettingsHeight();
 		
 		if(WurstClient.INSTANCE.getHax().rainbowUiHack.isEnabled())
@@ -735,6 +899,25 @@ public final class ClickGui
 	private void renderWindow(GuiGraphicsExtractor context, Window window,
 		int mouseX, int mouseY, float partialTicks)
 	{
+		// a tab window's title is its tab in the bar: only the dropdown
+		// below it is drawn here
+		boolean inBar = window.hasColumns();
+		if(!window.isMinimized())
+		{
+			// dropdowns end above the bottom of the screen and wrap into
+			// columns instead of scrolling
+			if(inBar)
+				window.setMaxHeight(Math.max(60,
+					MC.getWindow().getGuiScaledHeight() - window.getY() - 4));
+			else if(window instanceof SettingsWindow)
+				window.setMaxHeight(maxSettingsHeight);
+			window.validate();
+			
+			Tab tab = inBar ? getTab(window) : null;
+			if(tab != null)
+				placeBelowTab(tab, MC.getWindow().getGuiScaledWidth());
+		}
+		
 		int x1 = window.getX();
 		int y1 = window.getY();
 		int x2 = x1 + window.getWidth();
@@ -749,18 +932,15 @@ public final class ClickGui
 			y2 = y3;
 		
 		// drop shadow, lifting the window off the world behind it
+		int yShadow = inBar ? y3 : y1;
 		context.fill(x1 + 2, y2, x2 + 2, y2 + 2, BeastColors.SHADOW);
-		context.fill(x2, y1 + 2, x2 + 2, y2, BeastColors.SHADOW);
+		context.fill(x2, yShadow + 2, x2 + 2, y2, BeastColors.SHADOW);
 		
 		if(mouseX >= x1 && mouseY >= y1 && mouseX < x2 && mouseY < y2)
 			tooltip = "";
 		
 		if(!window.isMinimized())
 		{
-			window.setMaxHeight(window instanceof SettingsWindow
-				? maxSettingsHeight : maxHeight);
-			window.validate();
-			
 			// solid window background, everything else is drawn on top
 			context.fill(x1, y3, x2, y2, windowBgColor);
 			
@@ -809,6 +989,9 @@ public final class ClickGui
 			context.disableScissor();
 		}
 		
+		if(inBar)
+			return;
+		
 		// title bar buttons
 		int x3 = x2;
 		int y4 = y1 + 2;
@@ -823,16 +1006,6 @@ public final class ClickGui
 			ClickGuiIcons.drawCross(context, x3, y4, x4, y5, hovering);
 		}
 		
-		if(window.isPinnable())
-		{
-			x3 -= 11;
-			int x4 = x3 + 9;
-			boolean hovering = hoveringY && mouseX >= x3 && mouseX < x4;
-			renderTitleBarButton(context, x3, y4, x4, y5, hovering);
-			ClickGuiIcons.drawPin(context, x3, y4, x4, y5, hovering,
-				window.isPinned());
-		}
-		
 		if(window.isMinimizable())
 		{
 			x3 -= 11;
@@ -845,7 +1018,7 @@ public final class ClickGui
 		
 		// title bar background
 		// above & below buttons
-		int titleBgColor = RenderUtils.toIntColor(acColor, opacity);
+		int titleBgColor = BeastColors.BAR_BG;
 		context.fill(x3, y1, x2, y4, titleBgColor);
 		context.fill(x3, y5, x2, y3, titleBgColor);
 		
@@ -860,12 +1033,6 @@ public final class ClickGui
 			x3 - x1 - 4).getString();
 		context.guiRenderState.up();
 		drawAccentText(context, tr, title, x1 + 3, y1 + 3);
-		
-		// window outline and title bar separator, last so the solid title
-		// bar doesn't cover them
-		drawAccentBorder(context, x1, y1, x2, y2);
-		if(!window.isMinimized())
-			RenderUtils.drawGradientHLine2D(context, x1, x2, y3, 1F);
 	}
 	
 	private void renderTitleBarButton(GuiGraphicsExtractor context, int x1,
@@ -879,11 +1046,7 @@ public final class ClickGui
 		context.fill(x1, y1, x2, y2, buttonBgColor);
 		
 		// background between buttons
-		int windowBgColor = RenderUtils.toIntColor(acColor, opacity);
-		context.fill(x2, y1, x3, y2, windowBgColor);
-		
-		// button outline
-		drawAccentBorder(context, x1, y1, x2, y2);
+		context.fill(x2, y1, x3, y2, BeastColors.BAR_BG);
 	}
 	
 	public float[] getBgColor()
@@ -911,13 +1074,14 @@ public final class ClickGui
 	}
 	
 	/**
-	 * Draws a one-pixel accent-gradient border. Every border in the ClickGUI
-	 * goes through here so the whole interface animates as one wave.
+	 * Draws a one-pixel neutral gray hairline around a control or tooltip.
+	 * Nothing in the ClickGUI has a red outline (user, 2026-10-14).
 	 */
-	public static void drawAccentBorder(GuiGraphicsExtractor context, float x1,
+	public static void drawOutline(GuiGraphicsExtractor context, float x1,
 		float y1, float x2, float y2)
 	{
-		RenderUtils.drawGradientBorder2D(context, x1, y1, x2, y2, 1F);
+		RenderUtils.drawBorder2D(context, x1, y1, x2, y2,
+			BeastColors.ROW_BORDER);
 	}
 	
 	/**

@@ -108,7 +108,7 @@ public final class FeatureButton extends Component
 	{
 		if(!isSettingsWindowOpen())
 		{
-			settingsWindow = new SettingsWindow(feature, getParent(), getY());
+			settingsWindow = new SettingsWindow(feature, getParent(), this);
 			GUI.addWindow(settingsWindow);
 			
 		}else
@@ -155,25 +155,16 @@ public final class FeatureButton extends Component
 		
 		context.guiRenderState.up();
 		
-		// outlines: the accent wave around enabled features, a hairline
-		// around the rest
-		if(enabled)
-		{
-			ClickGui.drawAccentBorder(context, x1, y1, x2, y2);
-			if(hasSettings)
-				RenderUtils.drawGradientVLine2D(context, x3, y1, y2, 1F);
-			
-			// accent bar on the left edge
-			RenderUtils.fillGradient2D(context, x1, y1, x1 + 2, y2, 1F);
-			
-		}else
-		{
-			RenderUtils.drawBorder2D(context, x1, y1, x2, y2,
+		// a gray hairline around every row, no red outline
+		RenderUtils.drawBorder2D(context, x1, y1, x2, y2,
+			BeastColors.ROW_BORDER);
+		if(hasSettings)
+			RenderUtils.drawBorder2D(context, x3, y1, x2, y2,
 				BeastColors.ROW_BORDER);
-			if(hasSettings)
-				RenderUtils.drawBorder2D(context, x3, y1, x2, y2,
-					BeastColors.ROW_BORDER);
-		}
+		
+		// enabled: an accent bar on the left edge
+		if(enabled)
+			RenderUtils.fillGradient2D(context, x1, y1, x1 + 2, y2, 1F);
 		
 		// arrow
 		if(hasSettings)

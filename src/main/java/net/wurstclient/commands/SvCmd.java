@@ -39,10 +39,16 @@ public final class SvCmd extends Command
 		
 		ServerData lastServer = LastServerRememberer.getLastServer();
 		if(lastServer == null)
-			throw new IllegalStateException(
-				"LastServerRememberer doesn't remember the last server!");
+			lastServer = MC.getCurrentServer();
+		// a chat error, not an exception: that crashed the game
+		if(lastServer == null)
+			throw new CmdError("Couldn't tell which server this is.");
 		
-		return lastServer.version.getString();
+		String version = lastServer.version.getString();
+		if(version.isEmpty())
+			throw new CmdError(
+				"The server didn't say (it wasn't pinged before joining).");
+		return version;
 	}
 	
 	@Override

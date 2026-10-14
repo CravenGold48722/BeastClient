@@ -324,6 +324,13 @@ loom {
 				vmArgs.add("-Dwurst.test.grimServer=${new File(anticheatDir, "grim").absolutePath}:${grimPort}")
 			if(useIntave)
 				vmArgs.add("-Dwurst.test.intaveServer=${new File(anticheatDir, "intave").absolutePath}:${intavePort}")
+			// every hack and command takes ~10 min per server
+			if(providers.gradleProperty("noFeatureSweep").isPresent())
+				vmArgs.add("-Dwurst.test.noFeatureSweep=true")
+			// -Pfeatures=blink,criticals: only those features' tests
+			def features = providers.gradleProperty("features").getOrNull()
+			if(features)
+				vmArgs.add("-Dwurst.test.features=$features")
 		}
 	}
 }

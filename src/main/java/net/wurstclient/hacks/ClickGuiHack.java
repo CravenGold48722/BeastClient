@@ -36,12 +36,6 @@ public final class ClickGuiHack extends Hack
 	/** True while the screen itself is driving the hack back to disabled. */
 	private boolean closingScreen;
 	
-	private final SliderSetting opacity = new SliderSetting("Opacity", 0.68,
-		0.15, 0.85, 0.01, ValueDisplay.PERCENTAGE);
-	
-	private final SliderSetting ttOpacity = new SliderSetting("Tooltip opacity",
-		0.75, 0.15, 1, 0.01, ValueDisplay.PERCENTAGE);
-	
 	private final SliderSetting maxHeight = new SliderSetting("Max height",
 		"Maximum window height\n" + "0 = no limit", 200, 0, 1000, 50,
 		ValueDisplay.INTEGER);
@@ -55,8 +49,6 @@ public final class ClickGuiHack extends Hack
 	{
 		super("ClickGUI");
 		addSetting(acColor);
-		addSetting(opacity);
-		addSetting(ttOpacity);
 		addSetting(maxHeight);
 		addSetting(maxSettingsHeight);
 	}
@@ -127,14 +119,18 @@ public final class ClickGuiHack extends Hack
 		return txtColor;
 	}
 	
+	/**
+	 * The UI is solid: nothing in the ClickGUI, Navigator or TabGUI lets the
+	 * world show through (the old "Opacity" sliders are gone).
+	 */
 	public float getOpacity()
 	{
-		return opacity.getValueF();
+		return 1F;
 	}
 	
 	public float getTooltipOpacity()
 	{
-		return ttOpacity.getValueF();
+		return 1F;
 	}
 	
 	public int getMaxHeight()

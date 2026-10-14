@@ -20,13 +20,14 @@ import net.wurstclient.clickgui.Component;
 import net.wurstclient.clickgui.Window;
 import net.wurstclient.clickgui.screens.EditBlockScreen;
 import net.wurstclient.settings.BlockSetting;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.text.WText;
 
 public final class BlockComponent extends Component
 {
 	private static final ClickGui GUI = WURST.getGui();
-	private static final Font TR = MC.font;
+	private static final Font TR = BeastFont.get();
 	private static final int BLOCK_WIDTH = 24;
 	
 	private final BlockSetting setting;

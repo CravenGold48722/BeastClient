@@ -16,6 +16,7 @@ import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.clickgui.Component;
 import net.wurstclient.clickgui.screens.EditColorScreen;
 import net.wurstclient.settings.ColorSetting;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.ColorUtils;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.text.WText;
@@ -23,7 +24,7 @@ import net.wurstclient.util.text.WText;
 public final class ColorComponent extends Component
 {
 	private static final ClickGui GUI = WURST.getGui();
-	private static final Font TR = MC.font;
+	private static final Font TR = BeastFont.get();
 	private static final int TEXT_HEIGHT = 11;
 	
 	private final ColorSetting setting;

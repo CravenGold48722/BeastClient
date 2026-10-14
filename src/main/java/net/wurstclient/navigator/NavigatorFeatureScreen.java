@@ -40,6 +40,7 @@ import net.wurstclient.hacks.TooManyHaxHack;
 import net.wurstclient.keybinds.Keybind;
 import net.wurstclient.keybinds.PossibleKeybind;
 import net.wurstclient.settings.Setting;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.ChatUtils;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.WurstColors;
@@ -318,7 +319,7 @@ public final class NavigatorFeatureScreen extends NavigatorScreen
 		int txtColor = gui.getTxtColor();
 		
 		// title bar
-		context.centeredText(minecraft.font, feature.getName(), middleX, 32,
+		context.centeredText(BeastFont.get(), feature.getName(), middleX, 32,
 			txtColor);
 		
 		// background
@@ -436,7 +437,7 @@ public final class NavigatorFeatureScreen extends NavigatorScreen
 			
 			// text
 			context.guiRenderState.up();
-			context.centeredText(minecraft.font, buttonData.buttonText,
+			context.centeredText(BeastFont.get(), buttonData.buttonText,
 				(x1 + x2) / 2, y1 + (buttonData.height - 10) / 2 + 1,
 				buttonData.isLocked() ? WurstColors.VERY_LIGHT_GRAY
 					: buttonData.textColor);
@@ -447,9 +448,9 @@ public final class NavigatorFeatureScreen extends NavigatorScreen
 		context.guiRenderState.up();
 		for(String line : text.split("\n"))
 		{
-			context.text(minecraft.font, line, bgx1 + 2, textY, txtColor,
+			context.text(BeastFont.get(), line, bgx1 + 2, textY, txtColor,
 				false);
-			textY += minecraft.font.lineHeight;
+			textY += BeastFont.get().lineHeight;
 		}
 		
 		context.disableScissor();
@@ -478,8 +479,8 @@ public final class NavigatorFeatureScreen extends NavigatorScreen
 			// text
 			String buttonText = button.getMessage().getString();
 			context.guiRenderState.up();
-			context.text(minecraft.font, buttonText,
-				(x1 + x2 - minecraft.font.width(buttonText)) / 2, y1 + 5,
+			context.text(BeastFont.get(), buttonText,
+				(x1 + x2 - BeastFont.get().width(buttonText)) / 2, y1 + 5,
 				txtColor, false);
 		}
 		

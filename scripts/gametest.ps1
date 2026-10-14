@@ -2,9 +2,13 @@
 # matters: each test's progress lines while it runs, then PASSED or FAILED
 # with the reason. Started by gametest.cmd in the repo root - see there.
 
+# no positional binding: "gametest anticheat" must not land in -Features
+[CmdletBinding(PositionalBinding = $false)]
 param(
 	[switch]$Update,
 	[switch]$Mods,
+	[switch]$NoSweep,
+	[string]$Features,
 	[switch]$Help,
 	[Parameter(ValueFromRemainingArguments = $true)][string[]]$Tests
 )
@@ -15,6 +19,8 @@ if($Help)
 gametest                   run every in-game test
 gametest mace scaffold     only tests whose name contains "mace" or "scaffold"
 gametest anticheat         only the Grim and Intave servers (or: grim, intave)
+gametest -nosweep          without the per-feature tests on them (~10 min less each)
+gametest grim -features blink,criticals   only those features' tests (names contain)
 gametest -mods             with Sodium etc. installed
 gametest -update           re-record the screenshot templates (check git diff!)
 "@
@@ -37,6 +43,14 @@ if($Tests)
 {
 	$gradleArgs += "-Ponly=" + ($Tests -join ",")
 }
+if($NoSweep)
+{
+	$gradleArgs += "-PnoFeatureSweep"
+}
+if($Features)
+{
+	$gradleArgs += "-Pfeatures=$Features"
+}
 if($Update)
 {
 	$gradleArgs += "-PupdateScreenshots"
@@ -58,6 +72,20 @@ Write-Host "(the game window opens - don't close or click it; full output: build
 $script:complete = $false
 $script:errors = New-Object System.Collections.Generic.List[string]
 $script:nextIsCause = $false
+
+# A test game or test server left over from an earlier run (stopped, hung,
+# a computer restart mid-run...) would log in as the same bot and kick this
+# run's off, or hold the server ports.
+$leftovers = Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
+	Where-Object { $_.CommandLine -match "fabric\.client\.gametest|build[\\/]anticheat|fabric-server\.jar|paper\.jar" }
+foreach($p in $leftovers)
+{
+	Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+}
+if($leftovers)
+{
+	Write-Host "(stopped $(@($leftovers).Count) test game/server process(es) left over from an earlier run)" -ForegroundColor DarkGray
+}
 
 # Native stderr shows up as ErrorRecords in Windows PowerShell; keep going.
 $ErrorActionPreference = "Continue"

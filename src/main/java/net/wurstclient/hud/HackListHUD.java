@@ -21,6 +21,7 @@ import net.wurstclient.hack.Hack;
 import net.wurstclient.other_features.HackListOtf;
 import net.wurstclient.other_features.HackListOtf.Mode;
 import net.wurstclient.other_features.HackListOtf.Position;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.RenderUtils;
 
 public final class HackListHUD implements UpdateListener
@@ -145,7 +146,7 @@ public final class HackListHUD implements UpdateListener
 	
 	private void drawString(GuiGraphicsExtractor context, String s)
 	{
-		Font tr = WurstClient.MC.font;
+		Font tr = BeastFont.get();
 		int posX;
 		
 		if(otf.getPosition() == Position.LEFT)
@@ -172,7 +173,7 @@ public final class HackListHUD implements UpdateListener
 	private void drawWithOffset(GuiGraphicsExtractor context, HackListEntry e,
 		float partialTicks)
 	{
-		Font tr = WurstClient.MC.font;
+		Font tr = BeastFont.get();
 		String s = e.hack.getRenderName();
 		
 		float offset =

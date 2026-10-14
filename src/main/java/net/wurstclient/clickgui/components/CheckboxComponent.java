@@ -16,13 +16,13 @@ import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.clickgui.ClickGuiIcons;
 import net.wurstclient.clickgui.Component;
 import net.wurstclient.settings.CheckboxSetting;
-import net.wurstclient.util.RenderUtils;
+import net.wurstclient.util.BeastFont;
 
+/** A checkbox setting: its name, and a switch on the right. */
 public final class CheckboxComponent extends Component
 {
 	private static final ClickGui GUI = WURST.getGui();
-	private static final Font TR = MC.font;
-	private static final int BOX_SIZE = 11;
+	private static final Font TR = BeastFont.get();
 	
 	private final CheckboxSetting setting;
 	
@@ -55,42 +55,26 @@ public final class CheckboxComponent extends Component
 	{
 		int x1 = getX();
 		int x2 = x1 + getWidth();
-		int x3 = x1 + BOX_SIZE;
 		int y1 = getY();
 		int y2 = y1 + getHeight();
 		
 		boolean hovering = isHovering(mouseX, mouseY);
-		boolean hText = hovering && mouseX >= x3;
-		
-		if(hText)
+		if(hovering)
 			GUI.setTooltip(getTooltip());
 		
 		if(setting.isLocked())
 			hovering = false;
 		
-		// background
-		context.fill(x3, y1, x2, y2, getFillColor(false));
-		
-		// box
-		context.fill(x1, y1, x3, y2, getFillColor(hovering));
-		ClickGui.drawAccentBorder(context, x1, y1, x3, y2);
+		// the whole row lights up under the mouse, it's all clickable
+		if(hovering)
+			context.fill(x1, y1, x2, y2, GUI.getFillColor(true));
 		
 		context.guiRenderState.up();
 		
-		// check
-		if(setting.isChecked())
-			ClickGuiIcons.drawCheck(context, x1, y1, x3, y2, hovering,
-				setting.isLocked());
+		ClickGuiIcons.drawSwitch(context, x2 - ClickGuiIcons.SWITCH_WIDTH - 1,
+			y1 + 2, setting.isChecked(), hovering, setting.isLocked());
 		
-		// text
-		String name = setting.getName();
-		ClickGui.drawAccentText(context, TR, name, x3 + 2, y1 + 2);
-	}
-	
-	private int getFillColor(boolean hovering)
-	{
-		float opacity = GUI.getOpacity() * (hovering ? 1.5F : 1);
-		return RenderUtils.toIntColor(GUI.getBgColor(), opacity);
+		ClickGui.drawAccentText(context, TR, setting.getName(), x1 + 2, y1 + 2);
 	}
 	
 	private String getTooltip()
@@ -108,12 +92,12 @@ public final class CheckboxComponent extends Component
 	@Override
 	public int getDefaultWidth()
 	{
-		return BOX_SIZE + TR.width(setting.getName()) + 2;
+		return TR.width(setting.getName()) + ClickGuiIcons.SWITCH_WIDTH + 8;
 	}
 	
 	@Override
 	public int getDefaultHeight()
 	{
-		return BOX_SIZE;
+		return 11;
 	}
 }

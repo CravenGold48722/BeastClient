@@ -9,7 +9,6 @@ package net.wurstclient.gametest;
 
 import static net.wurstclient.gametest.WurstClientTestHelper.*;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -35,6 +34,7 @@ import net.minecraft.world.level.levelgen.FlatLevelSource;
 import net.minecraft.world.level.levelgen.flat.FlatLayerInfo;
 import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorSettings;
 import net.wurstclient.gametest.tests.*;
+import net.wurstclient.util.BeastColors;
 
 public class WurstTest implements FabricClientGameTest
 {
@@ -66,20 +66,19 @@ public class WurstTest implements FabricClientGameTest
 			throw new RuntimeException("Network synchronizer is not disabled");
 		
 		LOGGER.info("Starting Wurst Client GameTest");
+		// the same shade of red in every screenshot
+		BeastColors.freezeWave();
 		if(!ONLY.isEmpty())
 			LOGGER.info("Only running tests matching {}", ONLY);
 			
-		// Real anticheat servers (gradle/anticheat.gradle), started right
-		// away so they're up by the time the singleplayer tests are done.
-		List<AnticheatServer> servers = new ArrayList<>();
-		for(AnticheatServer server : new AnticheatServer[]{
-			AnticheatServer.grim(), AnticheatServer.intave()})
-			if(server != null && isWanted("AnticheatTest" + server.getName()))
-			{
-				LOGGER.info("Starting the {} server", server.getName());
-				server.start();
-				servers.add(server);
-			}
+		// Real anticheat servers (gradle/anticheat.gradle), one at a time:
+		// two at once (plus the client, Gradle, maybe an IDE) made the test
+		// machine page, and the servers stalled for seconds. The first one
+		// was started when the game launched (AnticheatServers), so it's up
+		// by the time the singleplayer tests are done.
+		List<AnticheatServer> servers = AnticheatServers.get();
+		if(!servers.isEmpty() && !servers.get(0).isStarted())
+			startServer(servers.get(0));
 		
 		try
 		{
@@ -119,8 +118,8 @@ public class WurstTest implements FabricClientGameTest
 		// booting while that world shut down deadlocked the test harness
 		// (Fabric's tick phaser vs. the integrated server's halt, a race that
 		// a busy CPU makes likely).
-		for(AnticheatServer server : servers)
-			server.awaitStarted();
+		if(!servers.isEmpty())
+			servers.get(0).awaitSettled();
 		
 		LOGGER.info("Creating test world");
 		TestWorldBuilder worldBuilder = context.worldBuilder();
@@ -140,9 +139,24 @@ public class WurstTest implements FabricClientGameTest
 		}
 		
 		// joins each server like a player, at the normal 20 ticks/s
-		for(AnticheatServer server : servers)
+		for(int i = 0; i < servers.size(); i++)
+		{
+			AnticheatServer server = servers.get(i);
+			if(i > 0)
+			{
+				servers.get(i - 1).stop();
+				startServer(server);
+				server.awaitSettled();
+			}
 			if(isSelected("AnticheatTest" + server.getName()))
 				new AnticheatTest(context, server).run();
+		}
+	}
+	
+	private static void startServer(AnticheatServer server)
+	{
+		LOGGER.info("Starting the {} server", server.getName());
+		server.start();
 	}
 	
 	private void testInWorld(ClientGameTestContext context,
@@ -202,6 +216,7 @@ public class WurstTest implements FabricClientGameTest
 		run(new ScaffoldWalkHackTest(context, spContext));
 		
 		run(new InGameMenuTest(context, spContext));
+		run(new ClickGuiTest(context, spContext));
 		run(new RecordingModeTest(context, spContext));
 		run(new KeyPresserTest(context, spContext));
 		run(new PacketBudgetTest(context, spContext));
@@ -225,13 +240,6 @@ public class WurstTest implements FabricClientGameTest
 		
 		// Test special cases
 		run(new PistonTest(context, spContext));
-	}
-	
-	/** Like {@link #isSelected}, without counting it as run. */
-	private static boolean isWanted(String testName)
-	{
-		String name = testName.toLowerCase(Locale.ROOT);
-		return ONLY.isEmpty() || ONLY.stream().anyMatch(name::contains);
 	}
 	
 	private static boolean isSelected(String testName)

@@ -12,6 +12,7 @@ import net.minecraft.client.player.AbstractClientPlayer;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.mixinterface.IChatComponent;
 
 @SearchTags({"name protect"})
 public final class NameProtectHack extends Hack
@@ -20,6 +21,27 @@ public final class NameProtectHack extends Hack
 	{
 		super("NameProtect");
 		setCategory(Category.RENDER);
+	}
+	
+	// Chat lines are laid out once, when a message comes in, and drawn from
+	// that layout afterwards: without this, names already in chat stayed
+	// visible after turning it on (and hidden after turning it off).
+	@Override
+	protected void onEnable()
+	{
+		refreshChat();
+	}
+	
+	@Override
+	protected void onDisable()
+	{
+		refreshChat();
+	}
+	
+	private void refreshChat()
+	{
+		if(MC.gui != null)
+			IChatComponent.get(MC.gui.getChat()).refreshTrimmedMessages();
 	}
 	
 	public String protect(String string)

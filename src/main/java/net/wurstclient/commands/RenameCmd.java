@@ -10,6 +10,7 @@ package net.wurstclient.commands;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
+import net.wurstclient.util.InventoryUtils;
 import net.wurstclient.command.CmdError;
 import net.wurstclient.command.CmdException;
 import net.wurstclient.command.CmdSyntaxError;
@@ -45,6 +46,10 @@ public final class RenameCmd extends Command
 			throw new CmdError("There is no item in your hand.");
 		
 		stack.set(DataComponents.CUSTOM_NAME, Component.literal(message));
+		// in creative only what the client sends counts: without this the
+		// server (and everyone else) kept the old item
+		InventoryUtils.setCreativeStack(
+			MC.player.getInventory().getSelectedSlot(), stack);
 		ChatUtils.message("Renamed item to \"\u00a7o" + message + "\u00a7r\".");
 	}
 }

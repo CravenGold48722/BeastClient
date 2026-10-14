@@ -89,6 +89,30 @@ public enum BeastColors
 	/** Muted label color for secondary information. */
 	public static final int TEXT_MUTED = 0xFF9A9A9E;
 	
+	/** {@link #PANEL_BG_LIGHT} under the mouse. */
+	public static final int PANEL_HOVER = 0xFF222227;
+	
+	/** Hairline around rows and controls. */
+	public static final int ROW_BORDER = 0xFF2A2A30;
+	
+	/** Background of an enabled feature's row: a solid, dark red. */
+	public static final int SELECTED_TINT = 0xFF2A1013;
+	
+	/** {@link #SELECTED_TINT} under the mouse. */
+	public static final int SELECTED_TINT_HOVER = 0xFF3A161A;
+	
+	/** Drop shadow under windows (the windows themselves are solid). */
+	public static final int SHADOW = 0x55000000;
+	
+	/** The golden shield that marks Important features. */
+	public static final int GOLD = 0xFFFFC53D;
+	
+	/** Outline and shading of the golden shield. */
+	public static final int GOLD_DARK = 0xFF9A6A0E;
+	
+	/** Highlight on the golden shield. */
+	public static final int GOLD_LIGHT = 0xFFFFE9A6;
+	
 	/**
 	 * How many pixels one full dark-light-dark cycle of the gradient spans.
 	 */
@@ -98,6 +122,18 @@ public enum BeastColors
 	private static final float SCROLL_PIXELS_PER_SECOND = 110F;
 	
 	private static final long START_TIME = System.nanoTime();
+	
+	private static volatile boolean waveFrozen;
+	
+	/**
+	 * Stops the wave where it starts. For the gametests: a moving wave gave
+	 * every screenshot with the HackList in it a random shade of red, and the
+	 * comparison with the template failed now and then.
+	 */
+	public static void freezeWave()
+	{
+		waveFrozen = true;
+	}
 	
 	/**
 	 * Returns how far along the dark-to-light ramp the gradient is at the given
@@ -110,7 +146,8 @@ public enum BeastColors
 	 */
 	public static float rampAt(float screenX)
 	{
-		float seconds = (System.nanoTime() - START_TIME) / 1_000_000_000F;
+		float seconds =
+			waveFrozen ? 0 : (System.nanoTime() - START_TIME) / 1_000_000_000F;
 		float scrolled = screenX - seconds * SCROLL_PIXELS_PER_SECOND;
 		
 		float u = scrolled / CYCLE_PIXELS;

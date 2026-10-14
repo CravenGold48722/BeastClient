@@ -264,6 +264,7 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
 | `keybinds.json` | key → command string |
 | `windows.json` | ClickGUI window positions / pinned / minimized |
 | `preferences.json` | Navigator usage counts |
+| `important-hacks.json` | hacks marked Important (middle-click in the ClickGUI) |
 | `friends.json`, `alts.encrypted_json`, `analytics.json`, `toomanyhax.json` | as named |
 | `autobuild/*.json`, `music/*.wav` | AutoBuild templates; AimAssist music files |
 
@@ -274,6 +275,31 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
   `clickgui/components/` (`CheckboxComponent`, `SliderComponent`, `ComboBoxComponent`,
   `ColorComponent`, `FeatureButton`, list-edit buttons); pop-out editors in `clickgui/screens/`.
   Opened by `ClickGuiHack`, which switches itself off immediately after opening the screen.
+  **Look (user, 2026-10-14, "modernize, red, not see-through, don't copy"):** solid panels (the
+  Opacity sliders are gone, `getOpacity()` is 1; hover = `ClickGui.getFillColor(hovering)`, never
+  opacity x 1.5), drop shadow, outline + title separator drawn last (the solid title bar covered
+  them); feature rows left-aligned with a hairline (`ROW_BORDER`), enabled = dark red row
+  (`SELECTED_TINT`) + gradient outline + gradient bar on the left; checkboxes are switches
+  (`ClickGuiIcons.drawSwitch`), sliders a slim track filled with the wave up to a white knob
+  (`getKnobColor`'s green/blue is no longer drawn). Inspiration was the CevAPI fork's "modern"
+  ClickGUI (`../UI+Feature_Inpirations`) - ideas only, no code copied.
+  **Important** (that fork's "Favorites"): middle-click a hack -> golden shield
+  (`ClickGuiIcons.drawShield`) and listed in the "Important" window (first window; placed after
+  the last saved one for old `windows.json`); saved in `important-hacks.json`
+  (`hack/ImportantHacksFile`, `Hack.isImportant/setImportant`). Right-click a row = its
+  settings. Gametest `ClickGuiTest` does all of it with the real mouse and leaves
+  `clickgui_settings.png` / `clickgui_rows.png` in the screenshots folder.
+  **Gradient quads:** `RenderUtils.fillHorizontalGradient2D` must send the corners in vanilla's
+  order (TL, BL, BR, TR) - the GUI pipeline culls back faces, and the old order meant every
+  gradient border/bar/scrollbar was silently never drawn (found 2026-10-14).
+  The wave moves with real time, so the gametests call `BeastColors.freezeWave()` first - the
+  HackList in screenshots was a random shade of red and templates failed now and then.
+- **Font:** Beast's own UI (ClickGUI, Navigator, TabGUI, HackList, logo text) draws with
+  `util/BeastFont.get()`, never `MC.font`: a second `Font` over vanilla's glyph cache that maps the
+  default font to `wurst:beast` (`assets/wurst/font/beast.json`: ASCII from the BeastFont
+  pack's `ascii.png`, 16 px cells, MIT - `textures/font/beast_ascii_LICENSE.txt`; everything
+  else falls through to vanilla). Chat, signs and vanilla screens keep the normal font. Needs
+  the access-widened `Font.provider`.
 - **TabGui** (`hud/TabGui.java`) and the **HackList HUD** (`hud/HackListHUD.java`) render through
   `IngameHUD` on `GUIRenderListener`; `WurstLogo` draws `assets/wurst/beast_128.png`.
 - **Navigator** (`navigator/`): older searchable list of every feature, ranked by
@@ -342,7 +368,7 @@ does it. When writing or touching a hack:
   angle's own rate, measured per frame) - that last part is what keeps it on A/D strafers;
   the per-tick tracking estimate alone lags each reversal. `PidAimTest` compares it with the old
   aim (strafer 40°/s: 96% vs 81% on target). Within "Smooth aim distance" (once caught up) it snaps; "Smooth aim speed" 360-2000 overrides
-  the PID with a fixed top speed (old humanStep/linearStep), its top end "auto" (blue knob) = PID.
+  the PID with a fixed top speed (old humanStep/linearStep), its top end "auto" (the value reads "auto") = PID.
   While AimAssist has a target and turns the camera, `onMouseUpdate` zeroes your mouse input
   (the old "you moved the mouse >1.5° = steering" release made it let go of targets). Gate attacks on the crosshair actually
   being on the target while turning. All three steps lead the target's motion by one frame
@@ -573,7 +599,9 @@ category you didn't sweep.
 - **`util/BeastColors.java`** — the palette. Accent borders/letters are a dark-red→light-red
   gradient (`0xFF5A0000` → `0xFFFF3A3A`) keyed off **absolute screen X** so one wave sweeps the whole
   UI; `SELECTED_RED`, `SELECTED_RED_HOVER`, `SELECTED_FILL`, `ICON_BLACK`, `BRAND_RED`,
-  `BRACKET_GRAY`. Used by `ClickGuiIcons`, `FeatureButton`, `TabGui`, `WurstLogo`, `RenderUtils`,
+  `BRACKET_GRAY`, solid panel shades (`PANEL_BG`, `PANEL_BG_LIGHT`, `PANEL_HOVER`, `ROW_BORDER`,
+  `SELECTED_TINT(_HOVER)`), `SHADOW`, the shield's `GOLD(_DARK/_LIGHT)`. No blue anywhere in
+  the theme (user). Used by `ClickGuiIcons`, `FeatureButton`, `TabGui`, `WurstLogo`, `RenderUtils`,
   `ChatUtils`, `ToggleAnnouncer`. (Upstream `WurstColors` still exists alongside it.)
 - **`ToggleAnnouncer`** + **`ToggleMessagesOtf`** — "[Beast] Toggled X ON/OFF" in chat and/or the
   action bar, with separate checkboxes for each; only user-initiated toggles announce.
@@ -744,3 +772,82 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
     disconnect reason and connection exception (a silent disconnect used to hang the run).
   First results (2026-10-13): Killaura, MaceAssist (mace hit) and ScaffoldWalk clean on both;
   Intave once noted "halting game ticks" (+0 VL) after the Flight setbacks.
+- **Every feature on both anticheats (`AnticheatFeatureSweep`, user, 2026-10-13):** each hack
+  and command has its own test built for what it does (a pool for Jesus, a ladder for FastLadder,
+  ores for VeinMiner, a still 1024-health husk for the auras...) **and a check that it did it**
+  (husk lost health, bot stayed on the water, vein gone, packets of the right kind sent, server's
+  copy of an item changed, the screen changed). A failed check is "DIDN'T WORK" in the report
+  next to the flags - a clean feature that never acted means nothing. Only the four core
+  scenarios fail the run. `FeatureTestKit` holds the helpers; rules that each cost a round:
+  - Speed: a test runs until its effect shows (timeout), builds only its own scene, and the next
+    test's `begin()` undoes only what this one dirtied (arena, inventory, effects, game mode,
+    time, weather, camera, settings via `set()` restored from JSON). 8 ticks after each for late
+    flags. ~6.5 min for all 204 per server. The first server is started in Fabric's
+    **preLaunch** (`AnticheatServers`), so it boots with the client; settled = 8 quick answers.
+  - Flags before the feature starts (its first `on()`/typed command) are setup (teleports, the
+    last test's leftovers): set aside and listed as "set aside as setup", not counted.
+  - Code inside `waitUntil`/`maxOver` lambdas runs on the client thread: use `rel(mc)`, never
+    `pos()`/`client()` (those call `computeOnClient` and throw there).
+  - `at()` waits for the client's AcceptTeleportation, not the position (in the air it falls at
+    once). Mobs killed by cleanup linger client-side while dying: only count `isAlive()` ones.
+  - Render hacks: `screenChange` = two screenshots off, one on (all with HUD list and toggle
+    messages hidden, toasts and particles cleared); on must differ by > 1.3 x the off/off noise.
+    Both "off" shots come before enabling - Fullbright fades out after it's off. Rain fades for
+    seconds, so NoWeather runs last and cleanup waits for it.
+  - Commands that change items in creative are checked on the **server's** copy too.
+  - **Walking probe** before every test (4 ticks of W): some features leave the anticheat
+    rejecting every move afterwards (Grim after ArrowDMG's packet burst: client normal, every
+    step a Simulation setback) and every later test inherited it. A failed probe notes "couldn't
+    walk after <test>" with the client's state, and the bot reconnects (`AnticheatTest.reconnect`).
+  - Setup must not trip the anticheat itself: rebuild the arena with the bot **outside** it
+    (floor changes reach Grim's world copy and the client a tick apart = 0.0784 Simulation
+    setback), let the bot stop before teleporting (momentum = 0.6 setback), and wait for 3
+    on-ground ticks in a row (a late setback lifted it: "Can't jump/build in mid-air").
+  - Cleanup always re-selects slot 0 **with the sync** (after AutoSwitch the server held another
+    slot: Throw/AirPlace clicked with an empty hand). Keys for jumps are held >= 2 ticks
+    (`pressKey` is press+release inside one tick - never seen as held). Measure an effect while
+    it happens (`maxOver` from the action on): a setback a tick later erased jumps measured
+    afterwards. Many targeting hacks skip hostile mobs by default (AnchorAura, CrystalAura,
+    Follow, RemoteView: "Filter hostile mobs") - set it for the husk.
+  - Failed non-render tests save `ac_<server>_fail_<test>.png` - look before guessing.
+    A failed check with flags reads "DIDN'T WORK (flagged - the anticheat likely undid it)".
+  - **Clean record per feature:** anticheats hold a grudge - Intave reports a movement only once
+    the player's physics VL is past 50, and after the Flight control it sat around 400, so every
+    0.0784 mis-prediction of later features became a flag and a setback. After a test that
+    flagged, the next one reconnects first (`AnticheatTest.lastFlagged`). Results no longer
+    depend on test order.
+  - `lookAt()` turns with real mouse movement (`moveCursor`, whole mouse steps); the server's
+    `/rotate` made the client send an extra rotation packet mid-tick (Grim AimDuplicateLook /
+    TickTimer, Intave "2 packets without client tick end", blamed on the feature). The first
+    mouse move of a run can get lost: it falls back to `Rotation.applyToClientPlayer`.
+  - `-Pfeatures=a,b` / `gametest grim -features a,b`: only those features' tests (plus baseline
+    and control) - ~2-3 min per server instead of ~11. Never compile while a run is loading
+    classes (NoClassDefFoundError mid-run).
+  Found and fixed (2026-10-13/14, verified on both servers):
+  - SkinDerp never told the server (26.1's `Options.setModelPart` only sets the option): now
+    `broadcastOptions()`, and it restores your own skin parts instead of turning all on.
+  - NameProtect didn't hide names already in chat (lines are laid out when they arrive): it
+    re-lays the chat out on toggle (`IChatComponent.refreshTrimmedMessages`).
+  - NoShieldOverlay never moved the raised shield: the blocking hook targeted
+    `applyItemArmTransform` ordinal 3, which in 26.1.2 is the riptide spin - now ordinal 1 (the
+    transform before the `getUseAnimation()` switch).
+  - `.potion/.rename/.author/.enchant` changed the item on the client only: now
+    `InventoryUtils.setCreativeStack` like `.repair`.
+  - `.sv` crashed when the server wasn't joined from the server list: `ConnectScreenMixin`
+    remembers every join (Quick Play, Reconnect, other mods), `.sv` errors instead of throwing.
+    The test joins via `ConnectScreen.startConnecting` and exercises that.
+  - Criticals Mini/Full Jump faked movement (Mini: velocity push) or only jumped after the hit:
+    now the clicked hit is held back (`LeftClickEvent` cancelled), the jump key pressed, and the
+    hit sent on the way down - from the **2nd** falling tick (the hit precedes the tick's
+    movement packet, so on the 1st the server still has you at the peak: no critical on
+    Paper/Intave). Full Jump also waits for a full recharge. Clean criticals on both servers.
+  - Blink held only movement: now everything at the connection level
+    (`ConnectionPacketOutputListener`), switching right after a tick end, released all at once
+    on the next tick - indistinguishable from a lag spike. Clean on both (hack and `.blink`).
+  - Instacart did everything in one tick (two turns the server never saw; the cart went out with
+    the rail selected because `PacketOrder` holds a slot change after a click): now one step per
+    tick - turn + rail slot, rail, cart slot + cart, back. Clean on both. (The test's
+    `tnt_minecart 4` was refused: minecarts stack to 1.)
+  Grim's every-step setbacks of the path-AI walk (FightBot, Protect, AntiAFK) were its grudge
+  from earlier tests: with a clean record they walk and fight on Grim too. Still open: Kaboom,
+  SpeedNuker and `.damage` get the bot kicked (packet spam by design).

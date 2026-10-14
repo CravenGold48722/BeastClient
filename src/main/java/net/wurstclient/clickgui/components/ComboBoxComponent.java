@@ -19,12 +19,13 @@ import net.wurstclient.clickgui.ClickGuiIcons;
 import net.wurstclient.clickgui.ComboBoxPopup;
 import net.wurstclient.clickgui.Component;
 import net.wurstclient.settings.EnumSetting;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.RenderUtils;
 
 public final class ComboBoxComponent<T extends Enum<T>> extends Component
 {
 	private static final ClickGui GUI = WURST.getGui();
-	private static final Font TR = MC.font;
+	private static final Font TR = BeastFont.get();
 	private static final int ARROW_SIZE = 11;
 	
 	private final EnumSetting<T> setting;
@@ -106,9 +107,6 @@ public final class ComboBoxComponent<T extends Enum<T>> extends Component
 		if(hText)
 			GUI.setTooltip(setting.getWrappedDescription(200));
 		
-		// background
-		context.fill(x1, y1, x4, y2, getFillColor(false));
-		
 		// box
 		context.fill(x4, y1, x2, y2, getFillColor(hBox));
 		
@@ -131,8 +129,7 @@ public final class ComboBoxComponent<T extends Enum<T>> extends Component
 	
 	private int getFillColor(boolean hovering)
 	{
-		float opacity = GUI.getOpacity() * (hovering ? 1.5F : 1);
-		return RenderUtils.toIntColor(GUI.getBgColor(), opacity);
+		return GUI.getFillColor(hovering);
 	}
 	
 	@Override

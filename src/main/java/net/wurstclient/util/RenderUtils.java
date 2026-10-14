@@ -1063,6 +1063,12 @@ public enum RenderUtils
 	/**
 	 * Fills an axis-aligned rectangle with a horizontal gradient between two
 	 * explicit colors.
+	 *
+	 * <p>
+	 * The corners go in vanilla's order (top left, bottom left, bottom right,
+	 * top right): the GUI pipeline culls back faces, and the other way round
+	 * the quad was never drawn - every gradient border and bar in the UI was
+	 * invisible.
 	 */
 	public static void fillHorizontalGradient2D(GuiGraphicsExtractor context,
 		float x1, float y1, float x2, float y2, int leftColor, int rightColor)
@@ -1074,8 +1080,8 @@ public enum RenderUtils
 		ScreenRectangle scissor = context.scissorStack.peek();
 		
 		context.guiRenderState.addGuiElement(
-			new CustomQuadRenderState(pose, x1, y1, x2, y1, x2, y2, x1, y2,
-				leftColor, rightColor, rightColor, leftColor, scissor));
+			new CustomQuadRenderState(pose, x1, y1, x1, y2, x2, y2, x2, y1,
+				leftColor, leftColor, rightColor, rightColor, scissor));
 	}
 	
 	/**

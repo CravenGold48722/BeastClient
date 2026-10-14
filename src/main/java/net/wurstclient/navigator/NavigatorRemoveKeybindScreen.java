@@ -25,6 +25,7 @@ import net.minecraft.network.chat.Component;
 import net.wurstclient.WurstClient;
 import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.keybinds.PossibleKeybind;
+import net.wurstclient.util.BeastFont;
 
 public class NavigatorRemoveKeybindScreen extends NavigatorScreen
 {
@@ -130,7 +131,7 @@ public class NavigatorRemoveKeybindScreen extends NavigatorScreen
 		int mouseY, float partialTicks)
 	{
 		ClickGui gui = WurstClient.INSTANCE.getGui();
-		Font tr = minecraft.font;
+		Font tr = BeastFont.get();
 		int txtColor = gui.getTxtColor();
 		
 		// title bar

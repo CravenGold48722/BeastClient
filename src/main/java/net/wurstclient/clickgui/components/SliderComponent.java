@@ -16,13 +16,15 @@ import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.clickgui.Component;
 import net.wurstclient.clickgui.screens.EditSliderScreen;
 import net.wurstclient.settings.SliderSetting;
+import net.wurstclient.util.BeastColors;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.text.WText;
 
 public final class SliderComponent extends Component
 {
 	private static final ClickGui GUI = WURST.getGui();
-	private static final Font TR = MC.font;
+	private static final Font TR = BeastFont.get();
 	private static final int TEXT_HEIGHT = 11;
 	
 	private final SliderSetting setting;
@@ -86,13 +88,13 @@ public final class SliderComponent extends Component
 	{
 		int x1 = getX();
 		int x2 = x1 + getWidth();
-		int x3 = x1 + 2;
-		int x4 = x2 - 2;
+		int x3 = x1 + 3;
+		int x4 = x2 - 3;
 		int y1 = getY();
 		int y2 = y1 + getHeight();
 		int y3 = y1 + TEXT_HEIGHT;
 		int y4 = y3 + 4;
-		int y5 = y2 - 4;
+		int y5 = y4 + 3;
 		
 		handleDragging(mouseX, x3, x4);
 		
@@ -101,8 +103,6 @@ public final class SliderComponent extends Component
 		boolean hSlider = hovering && mouseY >= y3 || dragging;
 		
 		boolean grayedOut = setting.isDisabled() || setting.isLocked();
-		float opacity = GUI.getOpacity();
-		float railOpacity = opacity * (hSlider ? 1.5F : 1);
 		
 		if(hText)
 			GUI.setTooltip(getTextTooltip());
@@ -115,51 +115,53 @@ public final class SliderComponent extends Component
 			hSlider = false;
 		}
 		
-		// background (around the rail)
-		int bgColor = RenderUtils.toIntColor(GUI.getBgColor(), opacity);
-		RenderUtils.fill2D(context, x1, y1, x2, y4, bgColor);
-		RenderUtils.fill2D(context, x1, y5, x2, y2, bgColor);
-		RenderUtils.fill2D(context, x1, y4, x3, y5, bgColor);
-		RenderUtils.fill2D(context, x4, y4, x2, y5, bgColor);
+		// the slider part lights up under the mouse
+		if(hSlider)
+			context.fill(x1, y3, x2, y2, GUI.getFillColor(true));
 		
-		// limit
-		float xl1 = x3;
-		float xl2 = x4;
+		context.guiRenderState.up();
+		
+		// track
+		RenderUtils.fill2D(context, x3, y4, x4, y5, BeastColors.ROW_BORDER);
+		
+		// values outside the usable range
 		if(!grayedOut && setting.isLimited())
 		{
 			double ratio = (x4 - x3) / setting.getRange();
-			xl1 += ratio * (setting.getUsableMin() - setting.getMinimum());
-			xl2 += ratio * (setting.getUsableMax() - setting.getMaximum());
-			
-			int limitColor =
-				RenderUtils.toIntColor(new float[]{1, 0, 0}, railOpacity);
-			RenderUtils.fill2D(context, x3, y4, xl1, y5, limitColor);
-			RenderUtils.fill2D(context, xl2, y4, x4, y5, limitColor);
+			float xl1 = (float)(x3
+				+ ratio * (setting.getUsableMin() - setting.getMinimum()));
+			float xl2 = (float)(x4
+				+ ratio * (setting.getUsableMax() - setting.getMaximum()));
+			RenderUtils.fill2D(context, x3, y4, xl1, y5, 0xFF4A1A1E);
+			RenderUtils.fill2D(context, xl2, y4, x4, y5, 0xFF4A1A1E);
 		}
 		
-		// rail
-		RenderUtils.fill2D(context, xl1, y4, xl2, y5,
-			RenderUtils.toIntColor(GUI.getBgColor(), railOpacity));
-		ClickGui.drawAccentBorder(context, x3, y4, x4, y5);
+		// filled up to the knob with the accent wave
+		float xk = x3 + (x4 - x3) * (float)setting.getPercentage();
+		if(grayedOut)
+			RenderUtils.fill2D(context, x3, y4, xk, y5, 0xFF4A2226);
+		else
+			RenderUtils.fillGradient2D(context, x3, y4, xk, y5, 1F);
 		
 		context.guiRenderState.up();
 		
 		// knob
-		float xk1 = x1 + (x2 - x1 - 8) * (float)setting.getPercentage();
-		float xk2 = xk1 + 8;
-		float yk1 = y3 + 1.5F;
-		float yk2 = y2 - 1.5F;
-		int knobColor = grayedOut ? 0xC0808080 : RenderUtils
-			.toIntColor(setting.getKnobColor(), hSlider ? 1 : 0.75F);
-		RenderUtils.fill2D(context, xk1, yk1, xk2, yk2, knobColor);
-		RenderUtils.drawBorder2D(context, xk1, yk1, xk2, yk2, 0x80101010);
+		int knobColor;
+		if(grayedOut)
+			knobColor = 0xFF5A5A5E;
+		else
+			knobColor = hSlider ? 0xFFFFFFFF : BeastColors.TEXT;
+		RenderUtils.fill2D(context, xk - 2, y4 - 2, xk + 2, y5 + 2, knobColor);
+		RenderUtils.drawBorder2D(context, xk - 2, y4 - 2, xk + 2, y5 + 2,
+			0x80101010);
 		
 		// text
 		String name = setting.getName();
 		String value = setting.getValueString();
 		int valueWidth = TR.width(value);
-		ClickGui.drawAccentText(context, TR, name, x1, y1 + 2);
-		ClickGui.drawAccentText(context, TR, value, x2 - valueWidth, y1 + 2);
+		ClickGui.drawAccentText(context, TR, name, x1 + 2, y1 + 2);
+		ClickGui.drawAccentText(context, TR, value, x2 - valueWidth - 2,
+			y1 + 2);
 	}
 	
 	private String getTextTooltip()
@@ -191,7 +193,7 @@ public final class SliderComponent extends Component
 	{
 		int nameWidth = TR.width(setting.getName());
 		int valueWidth = TR.width(setting.getValueString());
-		return nameWidth + valueWidth + 6;
+		return nameWidth + valueWidth + 10;
 	}
 	
 	@Override

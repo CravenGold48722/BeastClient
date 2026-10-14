@@ -24,6 +24,7 @@ import net.wurstclient.WurstClient;
 import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.clickgui.ClickGuiIcons;
 import net.wurstclient.hacks.TooManyHaxHack;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.ChatUtils;
 import net.wurstclient.util.RenderUtils;
 
@@ -57,7 +58,7 @@ public final class NavigatorMainScreen extends NavigatorScreen
 		ClickGui gui = WurstClient.INSTANCE.getGui();
 		int txtColor = gui.getTxtColor();
 		
-		Font tr = WurstClient.MC.font;
+		Font tr = BeastFont.get();
 		searchBar = new EditBox(tr, 0, 32, 200, 20, Component.literal(""));
 		searchBar.setTextColor(txtColor);
 		searchBar.setBordered(false);
@@ -226,7 +227,7 @@ public final class NavigatorMainScreen extends NavigatorScreen
 		// search bar
 		if(!clickTimerRunning)
 		{
-			context.text(WurstClient.MC.font, "Search: ", middleX - 150, 32,
+			context.text(BeastFont.get(), "Search: ", middleX - 150, 32,
 				txtColor);
 			searchBar.extractRenderState(context, mouseX, mouseY, partialTicks);
 		}
@@ -261,7 +262,7 @@ public final class NavigatorMainScreen extends NavigatorScreen
 			context.guiRenderState.up();
 			
 			String[] lines = tooltip.split("\n");
-			Font tr = minecraft.font;
+			Font tr = BeastFont.get();
 			
 			int tw = 0;
 			int th = lines.length * tr.lineHeight;
@@ -379,7 +380,7 @@ public final class NavigatorMainScreen extends NavigatorScreen
 		// text
 		if(!clickTimerRunning)
 		{
-			Font tr = minecraft.font;
+			Font tr = BeastFont.get();
 			String buttonText = feature.getName();
 			int bx = area.x + 4;
 			int by = area.y + 4;

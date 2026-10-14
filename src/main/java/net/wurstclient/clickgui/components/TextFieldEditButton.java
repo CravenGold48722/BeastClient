@@ -19,13 +19,14 @@ import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.clickgui.Component;
 import net.wurstclient.clickgui.screens.EditTextFieldScreen;
 import net.wurstclient.settings.TextFieldSetting;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.ChatUtils;
 import net.wurstclient.util.RenderUtils;
 
 public final class TextFieldEditButton extends Component
 {
 	private static final ClickGui GUI = WURST.getGui();
-	private static final Font TR = MC.font;
+	private static final Font TR = BeastFont.get();
 	private static final int TEXT_HEIGHT = 11;
 	
 	private final TextFieldSetting setting;

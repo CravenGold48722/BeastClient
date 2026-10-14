@@ -14,7 +14,9 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
 
@@ -33,8 +35,12 @@ import net.wurstclient.Category;
 import net.wurstclient.Feature;
 import net.wurstclient.WurstClient;
 import net.wurstclient.clickgui.components.FeatureButton;
+import net.wurstclient.clickgui.components.HintComponent;
+import net.wurstclient.hack.Hack;
 import net.wurstclient.hacks.ClickGuiHack;
 import net.wurstclient.settings.Setting;
+import net.wurstclient.util.BeastColors;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.json.JsonUtils;
 
@@ -46,6 +52,9 @@ public final class ClickGui
 	private final ArrayList<Window> windows = new ArrayList<>();
 	private final ArrayList<Popup> popups = new ArrayList<>();
 	private final Path windowsFile;
+	
+	private static final String IMPORTANT = "Important";
+	private Window importantWindow;
 	
 	private float[] bgColor = new float[3];
 	private float[] acColor = new float[3];
@@ -67,6 +76,10 @@ public final class ClickGui
 	public void init()
 	{
 		updateColors();
+		
+		importantWindow = new Window(IMPORTANT);
+		fillImportantWindow();
+		windows.add(importantWindow);
 		
 		LinkedHashMap<Category, Window> windowMap = new LinkedHashMap<>();
 		for(Category category : Category.values())
@@ -136,6 +149,11 @@ public final class ClickGui
 			return;
 		}
 		
+		// windows.json from before the Important window existed: put it next
+		// to the last window instead of on top of the first one
+		if(!json.has(IMPORTANT))
+			placeAfterOthers(importantWindow, json, scaledWidth);
+		
 		for(Window window : windows)
 		{
 			JsonElement jsonWindow = json.get(window.getTitle());
@@ -163,6 +181,88 @@ public final class ClickGui
 		}
 		
 		saveWindows();
+	}
+	
+	private void placeAfterOthers(Window window, JsonObject json,
+		int scaledWidth)
+	{
+		// the lowest, then rightmost saved window
+		int lastX = -1;
+		int lastY = -1;
+		int lastWidth = 0;
+		for(Window other : windows)
+		{
+			if(other == window)
+				continue;
+			
+			JsonElement saved = json.get(other.getTitle());
+			if(saved == null || !saved.isJsonObject())
+				continue;
+			
+			JsonObject pos = saved.getAsJsonObject();
+			if(!pos.has("x") || !pos.has("y"))
+				continue;
+			
+			int ox = pos.get("x").getAsInt();
+			int oy = pos.get("y").getAsInt();
+			if(oy > lastY || oy == lastY && ox > lastX)
+			{
+				lastX = ox;
+				lastY = oy;
+				lastWidth = other.getWidth();
+			}
+		}
+		
+		int x = lastX < 0 ? 5 : lastX + lastWidth + 5;
+		int y = lastY < 0 ? 5 : lastY;
+		
+		if(x + window.getWidth() + 5 > scaledWidth)
+		{
+			x = 5;
+			y += 18;
+		}
+		
+		window.setX(x);
+		window.setY(y);
+	}
+	
+	/**
+	 * Lists the Important hacks (golden shield, middle-click to mark) in
+	 * their own window, alphabetically, or a hint while there are none.
+	 */
+	private void fillImportantWindow()
+	{
+		while(importantWindow.countChildren() > 0)
+			importantWindow.remove(0);
+		
+		for(Hack hack : WURST.getHax().getAllHax())
+			if(hack.isImportant())
+				importantWindow.add(new FeatureButton(hack));
+			
+		if(importantWindow.countChildren() == 0)
+			importantWindow.add(new HintComponent("Middle-click a hack"));
+	}
+	
+	/** Called when a hack is marked or unmarked as Important. */
+	public void updateImportantWindow(Hack hack)
+	{
+		if(importantWindow == null)
+			return;
+		
+		fillImportantWindow();
+		
+		// the shield makes the hack's row wider wherever it's listed
+		for(Window window : windows)
+			for(int i = 0; i < window.countChildren(); i++)
+				if(window == importantWindow
+					|| window.getChild(i) instanceof FeatureButton button
+						&& button.getFeature() == hack)
+				{
+					window.pack();
+					break;
+				}
+			
+		closeInvalidPopups();
 	}
 	
 	private void saveWindows()
@@ -567,7 +667,7 @@ public final class ClickGui
 			return;
 		
 		String[] lines = tooltip.split("\n");
-		Font tr = MC.font;
+		Font tr = BeastFont.get();
 		
 		int tw = 0;
 		int th = lines.length * tr.lineHeight;
@@ -648,6 +748,10 @@ public final class ClickGui
 		if(window.isMinimized())
 			y2 = y3;
 		
+		// drop shadow, lifting the window off the world behind it
+		context.fill(x1 + 2, y2, x2 + 2, y2 + 2, BeastColors.SHADOW);
+		context.fill(x2, y1 + 2, x2 + 2, y2, BeastColors.SHADOW);
+		
 		if(mouseX >= x1 && mouseY >= y1 && mouseX < x2 && mouseY < y2)
 			tooltip = "";
 		
@@ -657,12 +761,15 @@ public final class ClickGui
 				? maxSettingsHeight : maxHeight);
 			window.validate();
 			
-			// scrollbar
+			// solid window background, everything else is drawn on top
+			context.fill(x1, y3, x2, y2, windowBgColor);
+			
+			// scrollbar: a dark track with the accent gradient as the thumb,
+			// so it reads as part of the same moving wave as the borders
 			if(window.isScrollingEnabled())
 			{
 				int xs1 = x2 - 3;
 				int xs2 = xs1 + 2;
-				int xs3 = x2;
 				
 				double outerHeight = y2 - y3;
 				double innerHeight = window.getInnerHeight();
@@ -672,64 +779,24 @@ public final class ClickGui
 				double scrollbarHeight =
 					maxScrollbarHeight * outerHeight / innerHeight;
 				
-				int ys1 = y3;
-				int ys2 = y2;
-				int ys3 = ys1 + (int)scrollbarY;
+				int ys3 = y3 + (int)scrollbarY;
 				int ys4 = ys3 + (int)scrollbarHeight;
 				
-				// window background
-				context.fill(xs2, ys1, xs3, ys2, windowBgColor);
-				context.fill(xs1, ys1, xs2, ys3, windowBgColor);
-				context.fill(xs1, ys4, xs2, ys2, windowBgColor);
+				context.fill(xs1, y3 + 1, xs2, y2 - 1, BeastColors.ROW_BORDER);
 				
 				boolean hovering = mouseX >= xs1 && mouseY >= ys3
 					&& mouseX < xs2 && mouseY < ys4;
-				
-				// scrollbar - painted with the accent gradient so it reads as
-				// part of the same moving wave as the borders
 				RenderUtils.fillGradient2D(context, xs1, ys3, xs2, ys4,
 					hovering ? 1F : 0.75F);
 			}
 			
-			int x3 = x1 + 2;
-			int x4 = window.isScrollingEnabled() ? x2 - 3 : x2;
-			int x5 = x4 - 2;
 			int y4 = y3 + window.getScrollOffset();
 			
-			// window background
-			// left & right
-			context.fill(x1, y3, x3, y2, windowBgColor);
-			context.fill(x5, y3, x4, y2, windowBgColor);
-			
 			context.enableScissor(x1, y3, x2, y2);
+			context.guiRenderState.up();
 			
 			matrixStack.pushMatrix();
 			matrixStack.translate(x1, y4);
-			
-			// window background
-			// between children
-			int xc1 = 2;
-			int xc2 = x5 - x1;
-			for(int i = 0; i < window.countChildren(); i++)
-			{
-				int yc1 = window.getChild(i).getY();
-				int yc2 = yc1 - 2;
-				context.fill(xc1, yc2, xc2, yc1, windowBgColor);
-			}
-			
-			// window background
-			// bottom
-			int yc1;
-			if(window.countChildren() == 0)
-				yc1 = 0;
-			else
-			{
-				Component lastChild =
-					window.getChild(window.countChildren() - 1);
-				yc1 = lastChild.getY() + lastChild.getHeight();
-			}
-			int yc2 = yc1 + 2;
-			context.fill(xc1, yc2, xc2, yc1, windowBgColor);
 			
 			// render children
 			int cMouseX = mouseX - x1;
@@ -741,13 +808,6 @@ public final class ClickGui
 			matrixStack.popMatrix();
 			context.disableScissor();
 		}
-		
-		// window outline
-		drawAccentBorder(context, x1, y1, x2, y2);
-		
-		// title bar separator line
-		if(!window.isMinimized())
-			RenderUtils.drawGradientHLine2D(context, x1, x2, y3, 1F);
 		
 		// title bar buttons
 		int x3 = x2;
@@ -794,12 +854,18 @@ public final class ClickGui
 		context.fill(x1, y1, x3, y3, titleBgColor);
 		
 		// window title
-		Font tr = MC.font;
+		Font tr = BeastFont.get();
 		String title = tr.substrByWidth(
 			net.minecraft.network.chat.Component.literal(window.getTitle()),
 			x3 - x1 - 4).getString();
 		context.guiRenderState.up();
 		drawAccentText(context, tr, title, x1 + 3, y1 + 3);
+		
+		// window outline and title bar separator, last so the solid title
+		// bar doesn't cover them
+		drawAccentBorder(context, x1, y1, x2, y2);
+		if(!window.isMinimized())
+			RenderUtils.drawGradientHLine2D(context, x1, x2, y3, 1F);
 	}
 	
 	private void renderTitleBarButton(GuiGraphicsExtractor context, int x1,
@@ -808,8 +874,8 @@ public final class ClickGui
 		int x3 = x2 + 2;
 		
 		// button background
-		int buttonBgColor = RenderUtils.toIntColor(bgColor,
-			hovering ? opacity * 1.5F : opacity);
+		int buttonBgColor = hovering ? BeastColors.PANEL_HOVER
+			: RenderUtils.toIntColor(bgColor, opacity);
 		context.fill(x1, y1, x2, y2, buttonBgColor);
 		
 		// background between buttons
@@ -833,6 +899,15 @@ public final class ClickGui
 	public int getTxtColor()
 	{
 		return txtColor;
+	}
+	
+	/**
+	 * Fill of a control (row, box, button): solid, a step lighter than the
+	 * window behind it, and lighter again under the mouse.
+	 */
+	public int getFillColor(boolean hovering)
+	{
+		return hovering ? BeastColors.PANEL_HOVER : BeastColors.PANEL_BG_LIGHT;
 	}
 	
 	/**
@@ -874,6 +949,11 @@ public final class ClickGui
 	public void addWindow(Window window)
 	{
 		windows.add(window);
+	}
+	
+	public List<Window> getWindows()
+	{
+		return Collections.unmodifiableList(windows);
 	}
 	
 	public void addPopup(Popup popup)

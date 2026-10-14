@@ -21,6 +21,7 @@
     "ClientTelemetryManagerMixin",
     "CommandSuggestionsMixin",
     "ConnectionMixin",
+    "ConnectScreenMixin",
     "ContainerScreenMixin",
     "CreativeModeInventoryScreenMixin",
     "DeathScreenMixin",

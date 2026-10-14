@@ -13,6 +13,7 @@ import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
 import net.wurstclient.WurstClient;
 import net.wurstclient.other_features.WurstLogoOtf;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.RenderUtils;
 
 public final class WurstLogo
@@ -28,7 +29,7 @@ public final class WurstLogo
 			return;
 		
 		String version = getVersionString();
-		Font tr = WurstClient.MC.font;
+		Font tr = BeastFont.get();
 		
 		// background (sized to fit the version text, vertically centered
 		// against the logo so the bigger logo overhangs above and below)

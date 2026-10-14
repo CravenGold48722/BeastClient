@@ -196,15 +196,17 @@ public final class HackList implements UpdateListener
 		new TreeMap<>(String::compareToIgnoreCase);
 	
 	private final EnabledHacksFile enabledHacksFile;
+	private final ImportantHacksFile importantHacksFile;
 	private final Path profilesFolder =
 		WurstClient.INSTANCE.getWurstFolder().resolve("enabled hacks");
 	
 	private final EventManager eventManager =
 		WurstClient.INSTANCE.getEventManager();
 	
-	public HackList(Path enabledHacksFile)
+	public HackList(Path enabledHacksFile, Path importantHacksFile)
 	{
 		this.enabledHacksFile = new EnabledHacksFile(enabledHacksFile);
+		this.importantHacksFile = new ImportantHacksFile(importantHacksFile);
 		
 		try
 		{
@@ -224,6 +226,7 @@ public final class HackList implements UpdateListener
 			throw new ReportedException(report);
 		}
 		
+		this.importantHacksFile.load(this);
 		eventManager.add(UpdateListener.class, this);
 	}
 	
@@ -237,6 +240,11 @@ public final class HackList implements UpdateListener
 	public void saveEnabledHax()
 	{
 		enabledHacksFile.save(this);
+	}
+	
+	public void saveImportantHax()
+	{
+		importantHacksFile.save(this);
 	}
 	
 	public Hack getHackByName(String name)

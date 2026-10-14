@@ -11,6 +11,7 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.WrittenBookContent;
+import net.wurstclient.util.InventoryUtils;
 import net.wurstclient.command.CmdError;
 import net.wurstclient.command.CmdException;
 import net.wurstclient.command.CmdSyntaxError;
@@ -47,5 +48,8 @@ public final class AuthorCmd extends Command
 		WrittenBookContent newData = new WrittenBookContent(oldData.title(),
 			author, oldData.generation(), oldData.pages(), oldData.resolved());
 		heldStack.set(DataComponents.WRITTEN_BOOK_CONTENT, newData);
+		// in creative only what the client sends counts
+		InventoryUtils.setCreativeStack(
+			MC.player.getInventory().getSelectedSlot(), heldStack);
 	}
 }

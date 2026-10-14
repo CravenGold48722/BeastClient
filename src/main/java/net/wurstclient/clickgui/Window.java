@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import net.minecraft.client.gui.Font;
 import net.minecraft.util.Mth;
 import net.wurstclient.WurstClient;
+import net.wurstclient.util.BeastFont;
 
 public class Window
 {
@@ -155,7 +156,7 @@ public class Window
 				maxChildWidth = c.getDefaultWidth();
 		maxChildWidth += 4;
 		
-		Font tr = WurstClient.MC.font;
+		Font tr = BeastFont.get();
 		int titleBarWidth = tr.width(title) + 4;
 		if(minimizable)
 			titleBarWidth += 11;

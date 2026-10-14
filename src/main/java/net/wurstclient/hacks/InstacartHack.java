@@ -144,6 +144,10 @@ public final class InstacartHack extends Hack implements UpdateListener
 	
 	/** Ticks elapsed in the current CHARGING phase. */
 	private int chargingTicks;
+	
+	/** Which step of the placement this tick is (see doPlacement). */
+	private int placingStep;
+	private BlockPlacingParams placingParams;
 	/**
 	 * Target charge duration in ticks for the current shot. 3 ticks = 0.15s
 	 * is the vanilla minimum for a bow to actually fire an arrow (power >
@@ -196,6 +200,8 @@ public final class InstacartHack extends Hack implements UpdateListener
 		usingCrossbow = false;
 		savedSlot = -1;
 		chargingTicks = 0;
+		placingStep = 0;
+		placingParams = null;
 		chargeThreshold = MIN_CHARGE_TICKS;
 		pendingRailHotbar = -1;
 		pendingCartHotbar = -1;
@@ -370,6 +376,7 @@ public final class InstacartHack extends Hack implements UpdateListener
 			
 			InteractionSimulator.rightClickItem(InteractionHand.MAIN_HAND);
 			shotBow = true;
+			placingStep = 0;
 			phase = Phase.PLACING;
 			jump();
 		}else
@@ -411,6 +418,7 @@ public final class InstacartHack extends Hack implements UpdateListener
 		useKeyWasDown = false;
 		
 		shotBow = true;
+		placingStep = 0;
 		phase = Phase.PLACING;
 		jump();
 	}
@@ -425,80 +433,120 @@ public final class InstacartHack extends Hack implements UpdateListener
 			KeyPresser.press(MC.options.keyJump);
 	}
 	
-	// ── Placement (next tick, while projectile is in the air)
+	// ── Placement (the ticks after firing, while projectile is in the air)
 	// ─────────────────
 	
 	/**
-	 * Runs the tick after firing. Places the rail and TNT Minecart at
-	 * {@link #pendingPos} while the projectile is still in flight, then
-	 * equips a totem and completes post-fire actions.
+	 * Runs once per tick after firing and places the rail and TNT Minecart at
+	 * {@link #pendingPos} while the projectile is still in flight - the way a
+	 * player does it, one step per tick:
+	 * <ol>
+	 * <li>take the rail and look at the spot (the rotation goes out with
+	 * this tick's movement packet),</li>
+	 * <li>place the rail, with that rotation already on the server,</li>
+	 * <li>take the cart and put it on the rail (a slot change after a click
+	 * in the same tick is held back by PacketOrder, so it can't be the same
+	 * tick as the rail),</li>
+	 * <li>back to the bow, then the totem and the post-fire actions.</li>
+	 * </ol>
+	 * It all used to happen in one tick: two turns of which the server saw
+	 * neither, and the cart went out with the rail still in hand (Grim
+	 * AirLiquidPlace, no cart).
 	 */
 	private void doPlacement()
 	{
 		if(pendingPos == null)
 		{
-			phase = Phase.IDLE;
+			finishPlacement();
 			return;
 		}
 		
-		BlockPlacingParams params =
-			BlockPlacer.getBlockPlacingParams(pendingPos);
-		
-		if(params != null)
+		switch(placingStep++)
 		{
-			// Place rail: actually look at the spot, then right-click it
-			// (with the swing a real right-click has).
-			MC.player.getInventory().setSelectedSlot(pendingRailHotbar);
-			WURST.getRotationFaker().faceVectorClient(params.hitVec());
-			InteractionSimulator.rightClickBlock(params.toHitResult(),
-				InteractionHand.MAIN_HAND);
-			
-			// Place first TNT Minecart on the rail, looking at the rail's
-			// top surface (a flat rail is 2/16 of a block tall).
-			BlockHitResult railHit = new BlockHitResult(
-				Vec3.atBottomCenterOf(pendingPos).add(0, 0.125, 0),
-				Direction.UP, pendingPos, false);
-			MC.player.getInventory().setSelectedSlot(pendingCartHotbar);
-			WURST.getRotationFaker().faceVectorClient(railHit.getLocation());
-			InteractionSimulator.rightClickBlock(railHit,
-				InteractionHand.MAIN_HAND);
-			
-			// cartOverloading: stack every remaining TNT Minecart onto the
-			// rail.
-			if(cartOverloading.isChecked())
+			case 0 ->
 			{
-				int extra;
-				while((extra =
-					InventoryUtils.indexOf(Items.TNT_MINECART, 36)) != -1)
+				placingParams = BlockPlacer.getBlockPlacingParams(pendingPos);
+				if(placingParams == null)
 				{
-					int extraHotbar =
-						ensureInHotbar(extra, savedSlot, pendingRailHotbar);
-					if(extraHotbar == -1)
-						break;
-					MC.player.getInventory().setSelectedSlot(extraHotbar);
-					int before = MC.player.getMainHandItem().getCount();
-					InteractionSimulator.rightClickBlock(railHit,
-						InteractionHand.MAIN_HAND);
-					
-					// stop if the cart didn't go down, or this never ends
-					if(MC.player.getMainHandItem().getCount() >= before)
-						break;
+					finishPlacement();
+					return;
 				}
+				
+				selectSlot(pendingRailHotbar);
+				WURST.getRotationFaker()
+					.faceVectorClient(placingParams.hitVec());
 			}
 			
-			cartPos = pendingPos;
+			case 1 ->
+			{
+				InteractionSimulator.rightClickBlock(
+					placingParams.toHitResult(), InteractionHand.MAIN_HAND);
+				// the cart goes on the rail's top surface (a flat rail is
+				// 2/16 of a block tall): look there for the next tick
+				WURST.getRotationFaker().faceVectorClient(railTop());
+			}
+			
+			case 2 ->
+			{
+				selectSlot(pendingCartHotbar);
+				BlockHitResult railHit = new BlockHitResult(railTop(),
+					Direction.UP, pendingPos, false);
+				InteractionSimulator.rightClickBlock(railHit,
+					InteractionHand.MAIN_HAND);
+				cartPos = pendingPos;
+				
+				// cartOverloading: stack the other TNT Minecarts onto the rail,
+				// one per tick from here on
+				if(!cartOverloading.isChecked()
+					|| InventoryUtils.indexOf(Items.TNT_MINECART, 36) == -1)
+					placingStep = 4;
+			}
+			
+			case 3 ->
+			{
+				// one more cart (cartOverloading): this tick a slot change at
+				// most, the click next time round
+				int extra = InventoryUtils.indexOf(Items.TNT_MINECART, 36);
+				int extraHotbar = extra == -1 ? -1
+					: ensureInHotbar(extra, savedSlot, pendingRailHotbar);
+				if(extraHotbar == -1)
+				{
+					placingStep = 4;
+					return;
+				}
+				pendingCartHotbar = extraHotbar;
+				placingStep = 2;
+			}
+			
+			default -> finishPlacement();
 		}
-		
-		// Restore weapon slot.
-		MC.player.getInventory().setSelectedSlot(savedSlot);
-		
+	}
+	
+	private Vec3 railTop()
+	{
+		return Vec3.atBottomCenterOf(pendingPos).add(0, 0.125, 0);
+	}
+	
+	/** Selects a hotbar slot and tells the server, like a scroll would. */
+	private void selectSlot(int slot)
+	{
+		if(slot < 0 || MC.player.getInventory().getSelectedSlot() == slot)
+			return;
+		MC.player.getInventory().setSelectedSlot(slot);
+		IMC.getInteractionManager().syncSelectedSlot();
+	}
+	
+	/** Back to the bow, totem, post-fire actions; ready for the next shot. */
+	private void finishPlacement()
+	{
+		selectSlot(savedSlot);
 		equipTotemInOffhand();
 		
-		// Clean up pending state.
 		pendingPos = null;
+		placingParams = null;
+		placingStep = 0;
 		pendingRailHotbar = -1;
 		pendingCartHotbar = -1;
-		
 		onFired();
 		phase = Phase.IDLE;
 	}

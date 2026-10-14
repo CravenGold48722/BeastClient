@@ -36,6 +36,10 @@ import java.util.regex.Pattern;
  */
 public final class AnticheatServer
 {
+	/** Same name as WurstTest.LOGGER, without loading game classes early. */
+	private static final org.slf4j.Logger LOGGER =
+		org.slf4j.LoggerFactory.getLogger("Wurst Test");
+	
 	private static final Pattern FORMATTING =
 		Pattern.compile("\u001B\\[[0-9;]*m|§.");
 	
@@ -50,6 +54,7 @@ public final class AnticheatServer
 	private Process process;
 	private BufferedWriter console;
 	private final CountDownLatch started = new CountDownLatch(1);
+	private final CountDownLatch selfTestsDone = new CountDownLatch(1);
 	private final List<String> flags = new ArrayList<>();
 	private final Map<File, Long> readUpTo = new HashMap<>();
 	private volatile boolean stopping;
@@ -102,9 +107,19 @@ public final class AnticheatServer
 		return name;
 	}
 	
+	public File getDir()
+	{
+		return dir;
+	}
+	
 	public String getAddress()
 	{
 		return "127.0.0.1:" + port;
+	}
+	
+	public boolean isStarted()
+	{
+		return process != null;
 	}
 	
 	/** Starts the server process; doesn't wait for it to finish starting. */
@@ -113,7 +128,13 @@ public final class AnticheatServer
 		String java = ProcessHandle.current().info().command().orElse("java");
 		try
 		{
-			process = new ProcessBuilder(java, "-Xmx2G", "-jar", jar, "nogui")
+			// small heaps: a flat world with one player needs little, and the
+			// test machine paging (client, Gradle, an IDE...) stalled the
+			// servers
+			// for seconds - lag flags everywhere (Intave, a bigger plugin:
+			// more)
+			String heap = flagLogDir != null ? "-Xmx1536M" : "-Xmx1G";
+			process = new ProcessBuilder(java, heap, "-jar", jar, "nogui")
 				.directory(dir).redirectErrorStream(true).start();
 			
 		}catch(IOException e)
@@ -151,19 +172,24 @@ public final class AnticheatServer
 				if(awaited != null && awaited.matcher(line).find())
 					answers.offer(line);
 				
+				// the end of Intave's own integration tests, passed or not
+				if(line.contains("integration tests completed successfully")
+					|| line.matches(".*\\[Intave\\].*Reported an? \\w+: .*"))
+					selfTestsDone.countDown();
+				
 				if(line.contains("Done (") && line.contains("For help"))
 					started.countDown();
 				
 				if(flagLogDir == null && flagLine.matcher(line).find())
 					addFlag(line);
 				else if(line.contains("ERROR") || line.contains("Exception"))
-					WurstTest.LOGGER.warn("[{} server] {}", name, line);
+					LOGGER.warn("[{} server] {}", name, line);
 			}
 			
 		}catch(IOException e)
 		{
 			if(!stopping)
-				WurstTest.LOGGER.warn("[{} server] console closed", name, e);
+				LOGGER.warn("[{} server] console closed", name, e);
 		}
 		
 		started.countDown();
@@ -204,6 +230,73 @@ public final class AnticheatServer
 		}finally
 		{
 			awaitedAnswer = null;
+		}
+	}
+	
+	/**
+	 * Waits until the server is up and has nothing else to do. Intave's
+	 * development build runs its own integration tests on the server thread
+	 * after a start in an environment it hasn't checked yet (a new Intave
+	 * build, an OS update): over 30 seconds of a frozen server and a busy
+	 * CPU, which showed up as lag flags and failed scenarios on the other
+	 * server. They aren't announced, only their end is, so: if the server
+	 * answers console queries slowly, wait for that end.
+	 */
+	public void awaitSettled()
+	{
+		awaitStarted();
+		
+		// settled: eight queries in a row (about two seconds) answered within
+		// half a second each; at most five minutes. (A busy server answers in
+		// seconds or not at all.)
+		long deadline = System.nanoTime() + 300_000_000_000L;
+		boolean busy = false;
+		for(int quick = 0; quick < 8 && System.nanoTime() < deadline;)
+		{
+			long asked = System.nanoTime();
+			String answer =
+				query("time query gametime", Pattern.compile("time is"));
+			if(answer != null && System.nanoTime() - asked < 500_000_000L)
+				quick++;
+			else
+			{
+				quick = 0;
+				if(!busy)
+					LOGGER.info("The {} server is busy - waiting for it", name);
+				busy = true;
+			}
+			sleep(250);
+		}
+		
+		// Intave's tests also run in short pieces with a quick server in
+		// between - once it was busy, wait for their end
+		if(busy && flagLogDir != null)
+			awaitSelfTests();
+	}
+	
+	private void awaitSelfTests()
+	{
+		try
+		{
+			if(!selfTestsDone.await(5, TimeUnit.MINUTES))
+				LOGGER.warn("The {} server was still busy after 5 minutes",
+					name);
+			
+		}catch(InterruptedException e)
+		{
+			throw new RuntimeException(e);
+		}
+	}
+	
+	private static void sleep(long millis)
+	{
+		try
+		{
+			Thread.sleep(millis);
+			
+		}catch(InterruptedException e)
+		{
+			throw new RuntimeException(e);
 		}
 	}
 	
@@ -265,14 +358,14 @@ public final class AnticheatServer
 					
 			}catch(IOException e)
 			{
-				WurstTest.LOGGER.warn("Couldn't read {}", log, e);
+				LOGGER.warn("Couldn't read {}", log, e);
 			}
 		}
 	}
 	
 	private void addFlag(String line)
 	{
-		WurstTest.LOGGER.warn("[{} flag] {}", name, line.trim());
+		LOGGER.warn("[{} flag] {}", name, line.trim());
 		synchronized(flags)
 		{
 			flags.add(line.trim());

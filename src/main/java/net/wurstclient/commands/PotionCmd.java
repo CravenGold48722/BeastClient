@@ -21,6 +21,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.PotionItem;
 import net.minecraft.world.item.alchemy.Potion;
 import net.minecraft.world.item.alchemy.PotionContents;
+import net.wurstclient.util.InventoryUtils;
 import net.wurstclient.command.CmdError;
 import net.wurstclient.command.CmdException;
 import net.wurstclient.command.CmdSyntaxError;
@@ -95,6 +96,9 @@ public final class PotionCmd extends Command
 		
 		stack.set(DataComponents.POTION_CONTENTS, new PotionContents(potion,
 			oldContents.customColor(), effects, oldContents.customName()));
+		// in creative only what the client sends counts
+		InventoryUtils.setCreativeStack(
+			MC.player.getInventory().getSelectedSlot(), stack);
 		ChatUtils.message("Potion modified.");
 	}
 	
@@ -125,6 +129,8 @@ public final class PotionCmd extends Command
 		stack.set(DataComponents.POTION_CONTENTS, new PotionContents(newPotion,
 			oldContents.customColor(), newEffects, oldContents.customName()));
 		
+		InventoryUtils.setCreativeStack(
+			MC.player.getInventory().getSelectedSlot(), stack);
 		ChatUtils.message("Effect removed.");
 	}
 	

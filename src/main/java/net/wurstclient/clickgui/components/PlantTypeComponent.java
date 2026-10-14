@@ -16,13 +16,14 @@ import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.clickgui.ClickGuiIcons;
 import net.wurstclient.clickgui.Component;
 import net.wurstclient.settings.PlantTypeSetting;
+import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.RenderUtils;
 import net.wurstclient.util.text.WText;
 
 public final class PlantTypeComponent extends Component
 {
 	private static final ClickGui GUI = WURST.getGui();
-	private static final Font TR = MC.font;
+	private static final Font TR = BeastFont.get();
 	private static final int BOX_SIZE = 11;
 	private static final int ICON_SIZE = 24;
 	private static final String HARVEST = "Harvest";
@@ -131,8 +132,7 @@ public final class PlantTypeComponent extends Component
 	
 	private int getFillColor(boolean hovering)
 	{
-		float opacity = GUI.getOpacity() * (hovering ? 1.5F : 1);
-		return RenderUtils.toIntColor(GUI.getBgColor(), opacity);
+		return GUI.getFillColor(hovering);
 	}
 	
 	@Override

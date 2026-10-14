@@ -32,7 +32,7 @@ public enum ClickGuiIcons
 		{
 			ya1 = y1 + 3;
 			ya2 = y2 - 2.5F;
-			arrowColor = BeastColors.ICON_BLACK;
+			arrowColor = hovering ? BeastColors.TEXT : BeastColors.TEXT_MUTED;
 			arrowVertices = new float[][]{{xa1, ya1}, {xa2, ya2}, {xa3, ya1}};
 			
 		}else
@@ -48,6 +48,79 @@ public enum ClickGuiIcons
 		// outline
 		int outlineColor = 0x80101010;
 		RenderUtils.drawLineStrip2D(context, arrowVertices, outlineColor);
+	}
+	
+	public static final int SWITCH_WIDTH = 14;
+	
+	/**
+	 * An on/off switch, {@link #SWITCH_WIDTH} x 7 GUI pixels with its top
+	 * left corner at (x, y): the accent wave with the knob on the right when
+	 * on, a dark track with the knob on the left when off.
+	 */
+	public static void drawSwitch(GuiGraphicsExtractor context, int x, int y,
+		boolean on, boolean hovering, boolean grayedOut)
+	{
+		int x2 = x + SWITCH_WIDTH;
+		int y2 = y + 7;
+		
+		// track
+		if(on && !grayedOut)
+		{
+			RenderUtils.fillGradient2D(context, x + 1, y, x2 - 1, y2, 1F);
+			RenderUtils.fillGradient2D(context, x, y + 1, x + 1, y2 - 1, 1F);
+			RenderUtils.fillGradient2D(context, x2 - 1, y + 1, x2, y2 - 1, 1F);
+			
+		}else
+		{
+			int track;
+			if(grayedOut)
+				track = on ? 0xFF4A2226 : 0xFF1E1E22;
+			else
+				track = hovering ? 0xFF38383F : BeastColors.ROW_BORDER;
+			fillPill(context, x, y, x2, y2, track);
+		}
+		
+		// knob
+		int knob;
+		if(grayedOut)
+			knob = 0xFF5A5A5E;
+		else if(on)
+			knob = hovering ? 0xFFFFFFFF : BeastColors.TEXT;
+		else
+			knob = hovering ? BeastColors.TEXT : BeastColors.TEXT_MUTED;
+		int kx = on ? x2 - 6 : x + 1;
+		fillPill(context, kx, y + 1, kx + 5, y2 - 1, knob);
+	}
+	
+	/** A rectangle with its corner pixels left out. */
+	private static void fillPill(GuiGraphicsExtractor context, int x1, int y1,
+		int x2, int y2, int color)
+	{
+		context.fill(x1 + 1, y1, x2 - 1, y2, color);
+		context.fill(x1, y1 + 1, x1 + 1, y2 - 1, color);
+		context.fill(x2 - 1, y1 + 1, x2, y2 - 1, color);
+	}
+	
+	/**
+	 * The golden shield in front of an Important feature's name, 7 x 8 GUI
+	 * pixels with its top left corner at (x, y).
+	 */
+	public static void drawShield(GuiGraphicsExtractor context, int x, int y)
+	{
+		// outline: flat top, straight sides, tapering to a point
+		context.fill(x, y, x + 7, y + 4, BeastColors.GOLD_DARK);
+		context.fill(x + 1, y + 4, x + 6, y + 6, BeastColors.GOLD_DARK);
+		context.fill(x + 2, y + 6, x + 5, y + 7, BeastColors.GOLD_DARK);
+		context.fill(x + 3, y + 7, x + 4, y + 8, BeastColors.GOLD_DARK);
+		
+		// gold face
+		context.fill(x + 1, y + 1, x + 6, y + 4, BeastColors.GOLD);
+		context.fill(x + 2, y + 4, x + 5, y + 6, BeastColors.GOLD);
+		context.fill(x + 3, y + 6, x + 4, y + 7, BeastColors.GOLD);
+		
+		// light from the top left
+		context.fill(x + 1, y + 1, x + 3, y + 2, BeastColors.GOLD_LIGHT);
+		context.fill(x + 1, y + 2, x + 2, y + 4, BeastColors.GOLD_LIGHT);
 	}
 	
 	public static void drawRadarArrow(GuiGraphicsExtractor context, float x1,

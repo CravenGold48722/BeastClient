@@ -30,7 +30,12 @@ public enum PacketTrace
 	;
 	
 	private static volatile boolean recording;
+	private static long windowStart = System.nanoTime();
 	private static final ConcurrentLinkedQueue<long[]> EVENTS =
+		new ConcurrentLinkedQueue<>();
+	
+	/** Every packet sent while recording, for the feature tests to inspect. */
+	private static final ConcurrentLinkedQueue<Sent> SENT =
 		new ConcurrentLinkedQueue<>();
 	
 	private static final long IN = 0;
@@ -39,6 +44,8 @@ public enum PacketTrace
 	public static void start()
 	{
 		EVENTS.clear();
+		SENT.clear();
+		windowStart = System.nanoTime();
 		recording = true;
 	}
 	
@@ -46,12 +53,27 @@ public enum PacketTrace
 	{
 		recording = false;
 		EVENTS.clear();
+		SENT.clear();
 	}
 	
 	public static void sent(Object packet)
 	{
-		if(recording && packet instanceof ServerboundClientTickEndPacket)
-			EVENTS.add(new long[]{System.nanoTime(), TICK_END});
+		if(!recording)
+			return;
+		
+		long now = System.nanoTime();
+		SENT.add(new Sent(now, packet));
+		if(packet instanceof ServerboundClientTickEndPacket)
+			EVENTS.add(new long[]{now, TICK_END});
+	}
+	
+	/** The packets sent since the last call, oldest first. */
+	public static List<Sent> takeSent()
+	{
+		List<Sent> sent = new ArrayList<>();
+		for(Sent s; (s = SENT.poll()) != null;)
+			sent.add(s);
+		return sent;
 	}
 	
 	public static void received(Object packet)
@@ -66,20 +88,24 @@ public enum PacketTrace
 		List<long[]> events = new ArrayList<>();
 		for(long[] e; (e = EVENTS.poll()) != null;)
 			events.add(e);
-		
+			
+		// from the start of the window to its end: a server that sent nothing
+		// at all was silent the whole time
+		long now = System.nanoTime();
 		long serverSilence = 0;
-		long lastIn = -1;
+		long lastIn = windowStart;
 		List<Long> ticks = new ArrayList<>();
 		for(long[] e : events)
 			if(e[1] == IN)
 			{
-				if(lastIn >= 0)
-					serverSilence = Math.max(serverSilence, e[0] - lastIn);
+				serverSilence = Math.max(serverSilence, e[0] - lastIn);
 				lastIn = e[0];
 				
 			}else
 				ticks.add(e[0]);
-			
+		serverSilence = Math.max(serverSilence, now - lastIn);
+		windowStart = now;
+		
 		long tickGap = 0;
 		int fastestSecond = ticks.isEmpty() ? 0 : 1;
 		for(int i = 1, from = 0; i < ticks.size(); i++)
@@ -93,6 +119,10 @@ public enum PacketTrace
 		return new Stats(serverSilence / 1_000_000, tickGap / 1_000_000,
 			fastestSecond);
 	}
+	
+	/** A packet the client sent, and when (System.nanoTime). */
+	public record Sent(long nanos, Object packet)
+	{}
 	
 	/**
 	 * @param serverSilenceMs

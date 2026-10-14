@@ -37,3 +37,4 @@ accessible	field	net/minecraft/client/renderer/ItemInHandRenderer	mainHandHeight
 accessible	field	net/minecraft/client/renderer/ItemInHandRenderer	oMainHandHeight	F
 accessible	field	net/minecraft/network/protocol/game/ClientboundSectionBlocksUpdatePacket	sectionPos	Lnet/minecraft/core/SectionPos;
 accessible	field	net/minecraft/network/protocol/game/ClientboundEntityEventPacket	entityId	I
+accessible	field	net/minecraft/client/gui/Font	provider	Lnet/minecraft/client/gui/Font$Provider;

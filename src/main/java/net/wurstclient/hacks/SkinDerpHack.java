@@ -7,6 +7,7 @@
  */
 package net.wurstclient.hacks;
 
+import java.util.EnumSet;
 import java.util.Random;
 
 import net.minecraft.world.entity.player.PlayerModelPart;
@@ -19,6 +20,9 @@ import net.wurstclient.hack.Hack;
 public final class SkinDerpHack extends Hack implements UpdateListener
 {
 	private final Random random = new Random();
+	/** Your own skin settings, put back when it's turned off. */
+	private final EnumSet<PlayerModelPart> ownParts =
+		EnumSet.noneOf(PlayerModelPart.class);
 	
 	public SkinDerpHack()
 	{
@@ -29,6 +33,11 @@ public final class SkinDerpHack extends Hack implements UpdateListener
 	@Override
 	protected void onEnable()
 	{
+		ownParts.clear();
+		for(PlayerModelPart part : PlayerModelPart.values())
+			if(MC.options.isModelPartEnabled(part))
+				ownParts.add(part);
+			
 		EVENTS.add(UpdateListener.class, this);
 	}
 	
@@ -38,7 +47,8 @@ public final class SkinDerpHack extends Hack implements UpdateListener
 		EVENTS.remove(UpdateListener.class, this);
 		
 		for(PlayerModelPart part : PlayerModelPart.values())
-			MC.options.setModelPart(part, true);
+			MC.options.setModelPart(part, ownParts.contains(part));
+		MC.options.broadcastOptions();
 	}
 	
 	@Override
@@ -49,5 +59,9 @@ public final class SkinDerpHack extends Hack implements UpdateListener
 		
 		for(PlayerModelPart part : PlayerModelPart.values())
 			MC.options.setModelPart(part, !MC.options.isModelPartEnabled(part));
+			
+		// what the skin customization screen does: since 26.1, setModelPart
+		// only changes the option, and nobody else would see it
+		MC.options.broadcastOptions();
 	}
 }

@@ -26,14 +26,17 @@ import net.wurstclient.WurstClient;
 public abstract class ItemInHandRendererMixin
 {
 	/**
-	 * This mixin is injected into the `BLOCK` case of the `item.getUseAction()`
-	 * switch.
+	 * This mixin is injected into the arm transform that a used item without
+	 * its own arm animation gets (in 26.1: right before the
+	 * `getUseAnimation()` switch, where `BLOCK` used to have its own call).
+	 * Ordinal 3 used to be right; in 26.1.2 that's the riptide spin, so the
+	 * raised shield never moved.
 	 */
 	@Inject(
 		method = "renderArmWithItem(Lnet/minecraft/client/player/AbstractClientPlayer;FFLnet/minecraft/world/InteractionHand;FLnet/minecraft/world/item/ItemStack;FLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/SubmitNodeCollector;I)V",
 		at = @At(value = "INVOKE",
 			target = "Lnet/minecraft/client/renderer/ItemInHandRenderer;applyItemArmTransform(Lcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/world/entity/HumanoidArm;F)V",
-			ordinal = 3))
+			ordinal = 1))
 	private void onApplyEquipOffsetBlocking(AbstractClientPlayer player,
 		float tickProgress, float pitch, InteractionHand hand,
 		float swingProgress, ItemStack item, float equipProgress,

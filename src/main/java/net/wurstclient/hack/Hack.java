@@ -23,6 +23,7 @@ public abstract class Hack extends Feature
 	private Category category;
 	
 	private boolean enabled;
+	private boolean important;
 	private final boolean stateSaved =
 		!getClass().isAnnotationPresent(DontSaveState.class);
 	
@@ -171,6 +172,31 @@ public abstract class Hack extends Feature
 	public final boolean isStateSaved()
 	{
 		return stateSaved;
+	}
+	
+	/**
+	 * Whether the user marked this hack as Important: it's then also listed
+	 * in the ClickGUI's "Important" window, with a golden shield.
+	 */
+	public final boolean isImportant()
+	{
+		return important;
+	}
+	
+	public final void setImportant(boolean important)
+	{
+		if(this.important == important)
+			return;
+		
+		this.important = important;
+		WURST.getHax().saveImportantHax();
+		WURST.getGui().updateImportantWindow(this);
+	}
+	
+	/** For {@link ImportantHacksFile}: no saving, no GUI update. */
+	final void loadImportant(boolean important)
+	{
+		this.important = important;
 	}
 	
 	protected void onEnable()

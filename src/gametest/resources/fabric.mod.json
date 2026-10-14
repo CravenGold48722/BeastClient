@@ -6,6 +6,9 @@
   "license": "GPL-3.0-or-later",
   "environment": "client",
   "entrypoints": {
+    "preLaunch": [
+      "net.wurstclient.gametest.AnticheatServers"
+    ],
     "fabric-client-gametest": [
       "net.wurstclient.gametest.WurstTest"
     ]

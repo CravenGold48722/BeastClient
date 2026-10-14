@@ -15,6 +15,7 @@ import net.minecraft.tags.EnchantmentTags;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.Enchantment;
 import net.minecraft.world.item.enchantment.Enchantments;
+import net.wurstclient.util.InventoryUtils;
 import net.wurstclient.command.CmdError;
 import net.wurstclient.command.CmdException;
 import net.wurstclient.command.CmdSyntaxError;
@@ -38,7 +39,12 @@ public final class EnchantCmd extends Command
 		if(args.length > 1)
 			throw new CmdSyntaxError();
 		
-		enchant(getHeldItem(), 127);
+		ItemStack stack = getHeldItem();
+		enchant(stack, 127);
+		// in creative only what the client sends counts
+		int slot = stack == MC.player.getMainHandItem()
+			? MC.player.getInventory().getSelectedSlot() : 40;
+		InventoryUtils.setCreativeStack(slot, stack);
 		ChatUtils.message("Item enchanted.");
 	}
 	

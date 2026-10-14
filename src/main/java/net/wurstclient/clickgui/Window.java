@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import net.minecraft.client.gui.Font;
 import net.minecraft.util.Mth;
 import net.wurstclient.WurstClient;
+import net.wurstclient.util.Anim;
 import net.wurstclient.util.BeastFont;
 
 public class Window
@@ -50,9 +51,9 @@ public class Window
 	private boolean draggingScrollbar;
 	private int scrollbarDragOffsetY;
 	
-	private boolean columns;
-	private int titleBarWidth;
-	private int columnWidth;
+	private boolean inBar;
+	private boolean docked = true;
+	private final Anim openAnim = new Anim(16);
 	
 	public Window(String title)
 	{
@@ -78,10 +79,6 @@ public class Window
 			return x;
 		
 		int scaledWidth = WurstClient.MC.getWindow().getGuiScaledWidth();
-		// a dropdown that opens wider than its title stays on the screen
-		if(columns)
-			return Mth.clamp(x, 0, Math.max(0, scaledWidth - getWidth()));
-		
 		return Mth.clamp(x, -width + 1, scaledWidth - 1);
 	}
 	
@@ -129,8 +126,7 @@ public class Window
 	
 	public final int getWidth()
 	{
-		// minimized, a column window is just its title bar
-		return columns && minimized ? titleBarWidth : width;
+		return width;
 	}
 	
 	public final void setWidth(int width)
@@ -166,21 +162,13 @@ public class Window
 		maxChildWidth += 4;
 		
 		Font tr = BeastFont.get();
-		titleBarWidth = tr.width(title) + 4;
+		int titleBarWidth = tr.width(title) + 4;
 		if(minimizable)
 			titleBarWidth += 11;
 		if(pinnable)
 			titleBarWidth += 11;
 		if(closable)
 			titleBarWidth += 11;
-		
-		if(columns)
-		{
-			columnWidth = maxChildWidth - 4;
-			invalidate();
-			validate();
-			return;
-		}
 		
 		int childrenHeight = 13;
 		for(Component c : children)
@@ -205,13 +193,6 @@ public class Window
 	{
 		if(valid)
 			return;
-		
-		if(columns)
-		{
-			layOutColumns();
-			valid = true;
-			return;
-		}
 		
 		int offsetY = 2;
 		int cWidth = width - 4;
@@ -241,76 +222,6 @@ public class Window
 			c.setWidth(cWidth);
 		
 		valid = true;
-	}
-	
-	/**
-	 * Lays the children out top to bottom, then in more columns to the right
-	 * once the max height is reached, with the columns evened out. Never
-	 * scrolls.
-	 */
-	private void layOutColumns()
-	{
-		int limit = maxInnerHeight > 0 ? maxInnerHeight : Integer.MAX_VALUE;
-		int columnCount = countColumns(limit);
-		
-		// the lowest column height that still needs no more columns
-		int low = 1;
-		int high = 2;
-		for(Component c : children)
-			high += c.getHeight() + 2;
-		high = Math.min(high, limit);
-		while(low < high)
-		{
-			int mid = (low + high) >>> 1;
-			if(countColumns(mid) <= columnCount)
-				high = mid;
-			else
-				low = mid + 1;
-		}
-		
-		int cWidth =
-			Math.max(columnWidth, (titleBarWidth - 2) / columnCount - 2);
-		
-		int column = 0;
-		int offsetY = 2;
-		innerHeight = 2;
-		for(Component c : children)
-		{
-			if(offsetY > 2 && offsetY + c.getHeight() + 2 > low)
-			{
-				column++;
-				offsetY = 2;
-			}
-			
-			c.setX(2 + column * (cWidth + 2));
-			c.setY(offsetY);
-			c.setWidth(cWidth);
-			offsetY += c.getHeight() + 2;
-			innerHeight = Math.max(innerHeight, offsetY);
-		}
-		
-		width = Math.max(titleBarWidth, 2 + (column + 1) * (cWidth + 2));
-		height = innerHeight + 13;
-		scrollingEnabled = false;
-		scrollOffset = 0;
-	}
-	
-	private int countColumns(int limit)
-	{
-		int count = 1;
-		int offsetY = 2;
-		for(Component c : children)
-		{
-			if(offsetY > 2 && offsetY + c.getHeight() + 2 > limit)
-			{
-				count++;
-				offsetY = 2;
-			}
-			
-			offsetY += c.getHeight() + 2;
-		}
-		
-		return count;
 	}
 	
 	public final void invalidate()
@@ -460,25 +371,43 @@ public class Window
 		return fixedWidth;
 	}
 	
-	/** The width of the title and its buttons, as of the last pack(). */
-	public final int getTitleBarWidth()
+	/** Whether the window has a tab in the ClickGUI's bar along the top. */
+	public final boolean isInBar()
 	{
-		return titleBarWidth;
+		return inBar;
 	}
 	
-	public final boolean hasColumns()
+	public final void setInBar(boolean inBar)
 	{
-		return columns;
+		this.inBar = inBar;
 	}
 	
 	/**
-	 * Long lists wrap into more columns instead of scrolling, and minimized
-	 * the window is only as wide as its title.
+	 * Whether a bar window opens right below its tab. Dragging it somewhere
+	 * else undocks it, and it opens where it was left from then on.
 	 */
-	public final void setColumns(boolean columns)
+	public final boolean isDocked()
 	{
-		this.columns = columns;
-		invalidate();
+		return docked;
+	}
+	
+	public final void setDocked(boolean docked)
+	{
+		this.docked = docked;
+	}
+	
+	/**
+	 * How far open the window is drawn, 0-1, gliding towards its minimized
+	 * state.
+	 */
+	public final float updateOpenProgress()
+	{
+		return openAnim.update(minimized ? 0 : 1);
+	}
+	
+	public final float getOpenProgress()
+	{
+		return openAnim.get();
 	}
 	
 	public final void setFixedWidth(boolean fixedWidth)

@@ -307,28 +307,35 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
   (`ClickGuiIcons.drawShield`) and listed in the "Important" dropdown; saved in
   `important-hacks.json` (`hack/ImportantHacksFile`, `Hack.isImportant/setImportant`).
   Right-click a row = its settings. Gametest `ClickGuiTest` does all of it with the real mouse
-  (tabs included) and leaves `wurstlogo_inverted.png` / `clickgui_bar.png` /
-  `clickgui_settings.png` / `clickgui_rows.png` in the screenshots folder; it also fails on
-  tabs outside the bar/overlapping, a dropdown not right below the bar, off screen, or scrolling.
+  (tabs included: dragging Combat's tab onto Render's slot and back, dragging the Combat
+  window and reopening it) and leaves `wurstlogo_inverted.png` / `clickgui_bar.png` /
+  `clickgui_tab_dragged.png` / `clickgui_settings.png` / `clickgui_rows.png` in the
+  screenshots folder; it also fails on tabs outside the bar/overlapping, or a dropdown not
+  right below its tab, not one column, or off screen.
   **Gradient quads:** `RenderUtils.fillHorizontalGradient2D` must send the corners in vanilla's
   order (TL, BL, BR, TR) - the GUI pipeline culls back faces, and the old order meant every
   gradient border/bar/scrollbar was silently never drawn (found 2026-10-14).
   The wave moves with real time, so the gametests call `BeastColors.freezeWave()` first - the
   HackList in screenshots was a random shade of red and templates failed now and then.
-  **Bar (user, 2026-10-14):** a near-black bar along the top holds a tab per category window
-  (plus Important and UI Settings), centred, by `ClickGui.BY_IMPORTANCE` from the middle out
-  (Important, Combat, Render, Movement, ...; Chat/Fun/UI Settings at the ends); tabs that don't
-  fit wrap into a second bar row. Clicking a tab opens/closes its dropdown, which hangs right
-  below the bar under the tab (or ending at the tab's right edge near the screen's right) -
-  not draggable; an open tab gets a little gradient line under its title. The tab windows'
-  own 13 px title row is the bar's last row and isn't drawn (`renderWindow` returns early).
-  The bar is in front of everything but popups (clicks too). `windows.json` `"_layout":
-  {"version": 2}`; an older file opens with all dropdowns closed. Tab windows are
-  `setColumns(true)`: open they wrap into evened-out columns above the screen bottom and
-  **never scroll** ("Max height" slider removed; settings windows still scroll under "Max
-  settings height"). At GUI scale 4 (~480x252, the user's) all tabs should fit one bar row (they
-  need ~430 px; the 427 px test screen wraps UI Settings) and
-  Render is 3 columns.
+  **Bar (user, 2026-10-14):** a near-black bar along the top, one row of equal slots (screen
+  width / 10), one tab per bar window (`Window.isInBar`: the categories, Important, UI
+  Settings). Default order from the middle out by `ClickGui.BY_IMPORTANCE` (Important in the
+  middle; Chat/Fun/UI Settings at the ends); titles too wide for a slot are drawn smaller. Tabs
+  stay put except when you drag one: it follows the mouse and on release swaps with the tab in
+  the slot it's over, both sliding into place; the order is saved (`windows.json` `"_layout":
+  {"version": 3, "order": [...]}`; older files open all closed, docked, default order). A tab
+  click (on release, no drag) opens/closes its window and brings it to the front. Bar windows
+  have their own title bar again (no buttons) and are **one column with a scrollbar**, at most
+  "Max height" (slider back) and never past the bottom of the screen. Docked (default) they
+  open right below their tab; dragging one by its title bar undocks it (`Window.isDocked`,
+  saved) and it reopens where it was left - its tab doesn't move.
+  **Animations** (`util/Anim`: exponential glide by real time, first update snaps;
+  `Anim.ease` = smoothstep): bar windows slide open/closed (scissor reveal, the mouse doesn't
+  reach a closing one), tabs slide between slots, the little gradient line under a tab grows
+  from the middle and shows **only under the front-most open bar window**, enabled hack rows
+  fade their tint/text and grow the left bar, switches slide their knob and fade the wave in.
+  Gametests call `Anim.setInstant(true)` (no half-finished animation in a screenshot), so the
+  animations themselves are only checked by eye.
 - **Font:** Beast's own UI (ClickGUI, Navigator, TabGUI, HackList, logo text) draws with
   `util/BeastFont.get()`, never `MC.font`: a second `Font` over vanilla's glyph cache that maps the
   default font to `wurst:beast` (`assets/wurst/font/beast.json`: ASCII from the BeastFont

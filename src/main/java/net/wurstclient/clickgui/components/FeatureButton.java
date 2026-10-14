@@ -22,6 +22,7 @@ import net.wurstclient.clickgui.SettingsWindow;
 import net.wurstclient.clickgui.Window;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.hacks.TooManyHaxHack;
+import net.wurstclient.util.Anim;
 import net.wurstclient.util.BeastColors;
 import net.wurstclient.util.BeastFont;
 import net.wurstclient.util.ChatUtils;
@@ -44,6 +45,7 @@ public final class FeatureButton extends Component
 	private final boolean hasSettings;
 	
 	private Window settingsWindow;
+	private final Anim enabledAnim = new Anim(14);
 	
 	public FeatureButton(Feature feature)
 	{
@@ -140,15 +142,14 @@ public final class FeatureButton extends Component
 		if(hFeature)
 			GUI.setTooltip(feature.getWrappedDescription(200));
 		
-		boolean enabled = feature.isEnabled();
+		// 0 = off, 1 = on, gliding between the two when toggled
+		float on = Anim.ease(enabledAnim.update(feature.isEnabled() ? 1 : 0));
 		
 		// row - an enabled feature sits on solid dark red
-		int rowColor;
-		if(enabled)
-			rowColor = hFeature ? BeastColors.SELECTED_TINT_HOVER
-				: BeastColors.SELECTED_TINT;
-		else
-			rowColor = GUI.getFillColor(hFeature);
+		int rowColor = BeastColors.lerpColor(
+			GUI.getFillColor(hFeature), hFeature
+				? BeastColors.SELECTED_TINT_HOVER : BeastColors.SELECTED_TINT,
+			on);
 		context.fill(x1, y1, x3, y2, rowColor);
 		if(hasSettings)
 			context.fill(x3, y1, x2, y2, GUI.getFillColor(hSettings));
@@ -162,9 +163,14 @@ public final class FeatureButton extends Component
 			RenderUtils.drawBorder2D(context, x3, y1, x2, y2,
 				BeastColors.ROW_BORDER);
 		
-		// enabled: an accent bar on the left edge
-		if(enabled)
-			RenderUtils.fillGradient2D(context, x1, y1, x1 + 2, y2, 1F);
+		// enabled: an accent bar on the left edge, growing from the middle
+		if(on > 0.01F)
+		{
+			float half = (y2 - y1) / 2F * on;
+			float middle = (y1 + y2) / 2F;
+			RenderUtils.fillGradient2D(context, x1, middle - half, x1 + 2,
+				middle + half, 1F);
+		}
 		
 		// arrow
 		if(hasSettings)
@@ -183,10 +189,14 @@ public final class FeatureButton extends Component
 		// An enabled feature is labelled in flat light red rather than the
 		// moving gradient, so that "this is on" stays readable at a glance.
 		String name = feature.getName();
-		if(enabled)
-			context.text(TR, name, tx, ty, BeastColors.SELECTED_RED, false);
-		else
-			ClickGui.drawAccentText(context, TR, name, tx, ty);
+		// (cross-faded while toggling; vanilla draws text with an alpha near 0
+		// fully opaque, so the faint one is left out)
+		if(on < 0.97F)
+			RenderUtils.drawGradientText(context, TR, name, tx, ty, 1 - on,
+				false);
+		if(on > 0.03F)
+			context.text(TR, name, tx, ty,
+				BeastColors.withOpacity(BeastColors.SELECTED_RED, on), false);
 	}
 	
 	@Override

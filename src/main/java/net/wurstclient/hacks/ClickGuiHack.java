@@ -36,6 +36,10 @@ public final class ClickGuiHack extends Hack
 	/** True while the screen itself is driving the hack back to disabled. */
 	private boolean closingScreen;
 	
+	private final SliderSetting maxHeight = new SliderSetting("Max height",
+		"Maximum window height\n" + "0 = no limit", 200, 0, 1000, 50,
+		ValueDisplay.INTEGER);
+	
 	private final SliderSetting maxSettingsHeight =
 		new SliderSetting("Max settings height",
 			"Maximum height for settings windows\n" + "0 = no limit", 200, 0,
@@ -45,6 +49,7 @@ public final class ClickGuiHack extends Hack
 	{
 		super("ClickGUI");
 		addSetting(acColor);
+		addSetting(maxHeight);
 		addSetting(maxSettingsHeight);
 	}
 	
@@ -126,6 +131,11 @@ public final class ClickGuiHack extends Hack
 	public float getTooltipOpacity()
 	{
 		return 1F;
+	}
+	
+	public int getMaxHeight()
+	{
+		return maxHeight.getValueI();
 	}
 	
 	public int getMaxSettingsHeight()

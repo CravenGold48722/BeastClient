@@ -54,40 +54,37 @@ public enum ClickGuiIcons
 	
 	/**
 	 * A square-cornered on/off switch, {@link #SWITCH_WIDTH} x 7 GUI pixels
-	 * with its top
-	 * left corner at (x, y): the accent wave with the knob on the right when
-	 * on, a dark track with the knob on the left when off.
+	 * with its top left corner at (x, y): the accent wave with the knob on
+	 * the right when on, a dark track with the knob on the left when off.
+	 * {@code on} goes from 0 (off) to 1 (on), so the knob can slide and the
+	 * wave fade in.
 	 */
 	public static void drawSwitch(GuiGraphicsExtractor context, int x, int y,
-		boolean on, boolean hovering, boolean grayedOut)
+		float on, boolean hovering, boolean grayedOut)
 	{
 		int x2 = x + SWITCH_WIDTH;
 		int y2 = y + 7;
 		
-		// track: a plain rectangle
-		if(on && !grayedOut)
-			RenderUtils.fillGradient2D(context, x, y, x2, y2, 1F);
+		// track: a plain rectangle, the wave fading in over the dark one
+		int track;
+		if(grayedOut)
+			track = BeastColors.lerpColor(0xFF1E1E22, 0xFF4A2226, on);
 		else
-		{
-			int track;
-			if(grayedOut)
-				track = on ? 0xFF4A2226 : 0xFF1E1E22;
-			else
-				track = hovering ? 0xFF38383F : BeastColors.ROW_BORDER;
-			context.fill(x, y, x2, y2, track);
-		}
+			track = hovering ? 0xFF38383F : BeastColors.ROW_BORDER;
+		context.fill(x, y, x2, y2, track);
+		if(!grayedOut && on > 0)
+			RenderUtils.fillGradient2D(context, x, y, x2, y2, on);
 		
-		// knob
+		// knob: a square, inset by a pixel, sliding across
 		int knob;
 		if(grayedOut)
 			knob = 0xFF5A5A5E;
-		else if(on)
-			knob = hovering ? 0xFFFFFFFF : BeastColors.TEXT;
 		else
-			knob = hovering ? BeastColors.TEXT : BeastColors.TEXT_MUTED;
-		// knob: a square, inset by a pixel
-		int kx = on ? x2 - 6 : x + 1;
-		context.fill(kx, y + 1, kx + 5, y2 - 1, knob);
+			knob = BeastColors.lerpColor(
+				hovering ? BeastColors.TEXT : BeastColors.TEXT_MUTED,
+				hovering ? 0xFFFFFFFF : BeastColors.TEXT, on);
+		float kx = x + 1 + (SWITCH_WIDTH - 7) * on;
+		RenderUtils.fill2D(context, kx, y + 1, kx + 5, y2 - 1, knob);
 	}
 	
 	/**

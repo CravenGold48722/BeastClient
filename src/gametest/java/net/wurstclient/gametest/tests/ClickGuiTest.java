@@ -73,6 +73,9 @@ public final class ClickGuiTest extends SingleplayerTest
 		checkDropdown("Combat");
 		context.takeScreenshot("clickgui_bar");
 		
+		dragTabTest();
+		dragWindowTest();
+		
 		logger.info("Marking AimAssist as Important with a middle click");
 		Hack aimAssist = hax().aimAssistHack;
 		clickRow("Combat", aimAssist, GLFW.GLFW_MOUSE_BUTTON_MIDDLE);
@@ -126,8 +129,11 @@ public final class ClickGuiTest extends SingleplayerTest
 		clickTab("Important");
 		context.runOnClient(mc -> {
 			for(Window window : gui().getWindows())
-				if(window.hasColumns())
+				if(window.isInBar())
+				{
 					window.setMinimized(true);
+					window.setDocked(true);
+				}
 			hax().clickGuiHack.setEnabled(false);
 		});
 		context.waitFor(mc -> mc.screen == null);
@@ -145,7 +151,7 @@ public final class ClickGuiTest extends SingleplayerTest
 			int width = mc.getWindow().getGuiScaledWidth();
 			int barHeight = gui().getBarHeight();
 			List<int[]> tabs =
-				gui().getWindows().stream().filter(Window::hasColumns)
+				gui().getWindows().stream().filter(Window::isInBar)
 					.map(w -> gui().getTabBounds(w)).toList();
 			if(tabs.contains(null))
 				return "a window has no tab";
@@ -174,8 +180,8 @@ public final class ClickGuiTest extends SingleplayerTest
 	}
 	
 	/**
-	 * The window is open, right below the bar and on the screen, without a
-	 * scrollbar.
+	 * The window is open, right below its tab (docked), one column, and
+	 * ends above the bottom of the screen (scrolling if it has to).
 	 */
 	private void checkDropdown(String title)
 	{
@@ -186,10 +192,14 @@ public final class ClickGuiTest extends SingleplayerTest
 			if(window.isMinimized())
 				return "clicking its tab didn't open " + title;
 			window.validate();
-			if(window.getY() + 13 != gui().getBarHeight())
-				return title + " doesn't start below the bar";
-			if(window.isScrollingEnabled())
-				return title + " scrolls";
+			if(window.getY() != gui().getBarHeight() + 2)
+				return title + " doesn't open right below the bar";
+			int[] tab = gui().getTabBounds(window);
+			if(window.getX() != Math.min(tab[0], width - window.getWidth()))
+				return title + " doesn't open below its tab";
+			for(int i = 0; i < window.countChildren(); i++)
+				if(window.getChild(i).getX() != 2)
+					return title + " isn't one column";
 			if(window.getX() < 0 || window.getX() + window.getWidth() > width
 				|| window.getY() + window.getHeight() > height)
 				return title + " goes off the screen";
@@ -197,6 +207,120 @@ public final class ClickGuiTest extends SingleplayerTest
 		});
 		if(problem != null)
 			throw fail(problem);
+	}
+	
+	/**
+	 * Drags Combat's tab onto Render's slot: they swap, it's saved, and
+	 * the other tabs stay where they were. Then back.
+	 */
+	private void dragTabTest()
+	{
+		logger.info("Dragging Combat's tab onto Render's slot");
+		List<Window> before =
+			context.computeOnClient(mc -> List.copyOf(gui().getSlotOrder()));
+		dragTab("Combat", "Render");
+		List<Window> after =
+			context.computeOnClient(mc -> List.copyOf(gui().getSlotOrder()));
+		int combat = before.indexOf(findWindow("Combat"));
+		int render = before.indexOf(findWindow("Render"));
+		for(int i = 0; i < before.size(); i++)
+		{
+			Window expected = i == combat ? before.get(render)
+				: i == render ? before.get(combat) : before.get(i);
+			if(after.get(i) != expected)
+				throw fail("Dragging the tab didn't swap Combat and Render: "
+					+ after.stream().map(Window::getTitle).toList());
+		}
+		String saved = readWindowsFile();
+		if(saved.indexOf("\"Render\",") > saved.indexOf("\"Combat\","))
+			throw fail("windows.json doesn't have the new order");
+		context.takeScreenshot("clickgui_tab_dragged");
+		
+		dragTab("Combat", "Render");
+		List<Window> back =
+			context.computeOnClient(mc -> List.copyOf(gui().getSlotOrder()));
+		if(!back.equals(before))
+			throw fail("Dragging it back didn't restore the order");
+	}
+	
+	/**
+	 * Drags the open Combat window by its title bar: it moves, its tab
+	 * doesn't, and it opens there again after being closed.
+	 */
+	private void dragWindowTest()
+	{
+		logger.info("Dragging the Combat window");
+		Window combat = context.computeOnClient(mc -> findWindow("Combat"));
+		int[] tabBefore =
+			context.computeOnClient(mc -> gui().getTabBounds(combat));
+		int[] start = context.computeOnClient(
+			mc -> new int[]{combat.getX() + 10, combat.getY() + 6});
+		drag(start[0], start[1], start[0] + 30, start[1] + 25);
+		int[] moved = context
+			.computeOnClient(mc -> new int[]{combat.getX(), combat.getY()});
+		if(moved[0] != start[0] - 10 + 30 || moved[1] != start[1] - 6 + 25)
+			throw fail("The window didn't follow the mouse: " + moved[0] + ", "
+				+ moved[1]);
+		if(context.computeOnClient(mc -> combat.isDocked()))
+			throw fail("A dragged window is still docked to its tab");
+		if(!java.util.Arrays.equals(tabBefore,
+			context.computeOnClient(mc -> gui().getTabBounds(combat))))
+			throw fail("Dragging the window moved its tab");
+		
+		clickTab("Combat");
+		clickTab("Combat");
+		int[] reopened = context
+			.computeOnClient(mc -> new int[]{combat.getX(), combat.getY()});
+		if(!java.util.Arrays.equals(moved, reopened))
+			throw fail("The window didn't reopen where it was left");
+		
+		// docked again for the rest of the test
+		context.runOnClient(mc -> combat.setDocked(true));
+		context.waitTicks(2);
+	}
+	
+	/** Drags one tab onto another's slot with the real mouse. */
+	private void dragTab(String title, String onto)
+	{
+		int[] from = context
+			.computeOnClient(mc -> gui().getTabBounds(findWindow(title)));
+		int[] to =
+			context.computeOnClient(mc -> gui().getTabBounds(findWindow(onto)));
+		drag(from[0] + from[2] / 2, from[1] + from[3] / 2, to[0] + to[2] / 2,
+			to[1] + to[3] / 2);
+	}
+	
+	/** Holds the left button at (x1, y1), moves to (x2, y2), lets go. */
+	private void drag(int x1, int y1, int x2, int y2)
+	{
+		double scale =
+			context.computeOnClient(mc -> mc.getWindow().getGuiScale());
+		input.setCursorPos(x1 * scale, y1 * scale);
+		context.waitTicks(1);
+		input.holdMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		context.waitTicks(1);
+		for(int i = 1; i <= 4; i++)
+		{
+			input.setCursorPos((x1 + (x2 - x1) * i / 4.0) * scale,
+				(y1 + (y2 - y1) * i / 4.0) * scale);
+			context.waitTicks(1);
+		}
+		input.releaseMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		context.waitTicks(2);
+	}
+	
+	private String readWindowsFile()
+	{
+		Path path = context.computeOnClient(mc -> mc.gameDirectory.toPath())
+			.resolve("wurst").resolve("windows.json");
+		try
+		{
+			return Files.readString(path);
+			
+		}catch(IOException e)
+		{
+			throw new RuntimeException(e);
+		}
 	}
 	
 	/** Saves a screenshot of the GUI as it is before failing. */

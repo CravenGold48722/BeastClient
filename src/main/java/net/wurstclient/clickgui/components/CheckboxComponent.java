@@ -16,6 +16,7 @@ import net.wurstclient.clickgui.ClickGui;
 import net.wurstclient.clickgui.ClickGuiIcons;
 import net.wurstclient.clickgui.Component;
 import net.wurstclient.settings.CheckboxSetting;
+import net.wurstclient.util.Anim;
 import net.wurstclient.util.BeastFont;
 
 /** A checkbox setting: its name, and a switch on the right. */
@@ -25,6 +26,7 @@ public final class CheckboxComponent extends Component
 	private static final Font TR = BeastFont.get();
 	
 	private final CheckboxSetting setting;
+	private final Anim checkedAnim = new Anim(16);
 	
 	public CheckboxComponent(CheckboxSetting setting)
 	{
@@ -72,7 +74,8 @@ public final class CheckboxComponent extends Component
 		context.guiRenderState.up();
 		
 		ClickGuiIcons.drawSwitch(context, x2 - ClickGuiIcons.SWITCH_WIDTH - 1,
-			y1 + 2, setting.isChecked(), hovering, setting.isLocked());
+			y1 + 2, Anim.ease(checkedAnim.update(setting.isChecked() ? 1 : 0)),
+			hovering, setting.isLocked());
 		
 		ClickGui.drawAccentText(context, TR, setting.getName(), x1 + 2, y1 + 2);
 	}

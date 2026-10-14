@@ -34,6 +34,7 @@ import net.minecraft.world.level.levelgen.FlatLevelSource;
 import net.minecraft.world.level.levelgen.flat.FlatLayerInfo;
 import net.minecraft.world.level.levelgen.flat.FlatLevelGeneratorSettings;
 import net.wurstclient.gametest.tests.*;
+import net.wurstclient.util.Anim;
 import net.wurstclient.util.BeastColors;
 
 public class WurstTest implements FabricClientGameTest
@@ -68,6 +69,8 @@ public class WurstTest implements FabricClientGameTest
 		LOGGER.info("Starting Wurst Client GameTest");
 		// the same shade of red in every screenshot
 		BeastColors.freezeWave();
+		// and no animation caught halfway
+		Anim.setInstant(true);
 		if(!ONLY.isEmpty())
 			LOGGER.info("Only running tests matching {}", ONLY);
 			

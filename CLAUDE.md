@@ -310,9 +310,9 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
   (tabs included: dragging Combat's tab onto Render's slot and back, dragging the Combat
   window and reopening it) and leaves `wurstlogo_inverted.png` / `clickgui_bar.png` /
   `clickgui_tab_dragged.png` / `clickgui_settings.png` / `clickgui_rows.png` in the
-  screenshots folder; it also fails on tabs outside the bar/overlapping, or a dropdown not
-  inside its tab's slot, not one column, or off screen, and opens all ten at once
-  (`clickgui_all_open.png`) checking none overlaps.
+  screenshots folder; it also fails if a section is shown before its title is clicked, on
+  tabs outside the bar/overlapping, or a dropdown not right below its tab and the bar, not
+  normal size, not one column, or off screen.
   **Gradient quads:** `RenderUtils.fillHorizontalGradient2D` must send the corners in vanilla's
   order (TL, BL, BR, TR) - the GUI pipeline culls back faces, and the old order meant every
   gradient border/bar/scrollbar was silently never drawn (found 2026-10-14).
@@ -328,24 +328,16 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
   click (on release, no drag) opens/closes its window and brings it to the front. Bar windows
   have their own title bar again (no buttons) and are **one column with a scrollbar**, at most
   "Max height" (slider back, on-screen pixels) and never past the bottom of the screen.
-  **All ten can be open at once without overlapping** (user): docked windows are drawn shrunk
-  only if they must (`Window.getScale`): text is the **same size as the bar's tabs whenever
-  it fits** (user). Feature-row windows are drawn at full size, slot wide, and each name
-  that doesn't fit its row goes through `ClickGui.pushFittedText` (narrower at full height
-  down to 60% width, then smaller too) - the same for tab titles, window titles and the
-  hint. Narrow rows (< 60 px) get a slimmer settings arrow (7 px) for more name room. A
-  window that isn't all feature rows (UI Settings, sliders) can't squeeze and is drawn
-  smaller until it fits (33% on the 427 px test screen) and fill
-  their slot exactly, right below the bar (user: "touch the top bar and each other, NOT
-  overlap"): `sizeBarWindows` sets the logical width to slot / scale and fine-tunes the
-  scale so the edges land on the same whole pixels as the tab bounds; rows stretch to it.
-  No right-hand shadow on docked ones (it'd lie on the neighbour). Inside, coordinates stay unscaled: `renderWindow` scales the pose around the
-  window's corner and converts the mouse (`toWindowX/Y`), clicks/scroll/scrollbar do the
-  same, `SettingsWindow` places itself by `getDisplayWidth`. Popups of a shrunk window would
-  be misplaced - none of the bar windows has one (UI Settings' colour opens a screen). At
-  Docked (default) they
-  open right below their tab (touching the bar); dragging one by its title bar undocks it (`Window.isDocked`,
-  saved) and it reopens where it was left - its tab doesn't move.
+  **Like the inspiration's top bar (user, latest):** every section is hidden until its title
+  is clicked, and an open one is a normal window at its normal size and text - free to
+  overlap others. (Before: all ten fitted side by side, shrunk or squeezed into equal slots -
+  the user dropped that. `Window.getScale` / `getDisplayWidth`, the scaled drawing and the
+  mouse conversion (`toWindowX/Y`) are still in place but the scale is always 1;
+  `ClickGui.pushFittedText` still fits tab/window titles and too-long rows.) `windows.json`
+  layout version 4: older files start with every section hidden (version 3 keeps its tab
+  order).
+  Docked (default) they open right below their tab (touching the bar); dragging one by its
+  title bar undocks it (`Window.isDocked`, saved) and it reopens where it was left - its tab doesn't move.
   **Animations** (`util/Anim`: exponential glide by real time, first update snaps;
   `Anim.ease` = smoothstep): bar windows slide open/closed (scissor reveal, the mouse doesn't
   reach a closing one), tabs slide between slots, the little gradient line under a tab grows

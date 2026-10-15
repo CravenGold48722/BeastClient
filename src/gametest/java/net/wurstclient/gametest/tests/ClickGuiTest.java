@@ -67,11 +67,11 @@ public final class ClickGuiTest extends SingleplayerTest
 		context.waitFor(mc -> mc.screen instanceof ClickGuiScreen);
 		context.waitTicks(2);
 		checkBar();
+		checkAllHidden();
 		
 		logger.info("Opening Combat from its tab");
 		clickTab("Combat");
 		checkDropdown("Combat");
-		checkAllOpen();
 		context.takeScreenshot("clickgui_bar");
 		
 		dragTabTest();
@@ -181,58 +181,16 @@ public final class ClickGuiTest extends SingleplayerTest
 	}
 	
 	/**
-	 * Opens every bar window from its tab: all of them side by side, each
-	 * filling its slot right below the bar (so they touch), none overlapping
-	 * another, all on the screen. Then closes all but
-	 * Combat again.
+	 * None of the sections is shown until its title in the bar is clicked
+	 * (like the inspiration's top bar).
 	 */
-	private void checkAllOpen()
+	private void checkAllHidden()
 	{
-		logger.info("Opening every section at once");
-		List<String> titles = context.computeOnClient(
-			mc -> gui().getSlotOrder().stream().map(Window::getTitle).toList());
-		for(String title : titles)
-			if(context.computeOnClient(mc -> findWindow(title).isMinimized()))
-				clickTab(title);
-			
-		String problem = context.computeOnClient(mc -> {
-			int width = mc.getWindow().getGuiScaledWidth();
-			int height = mc.getWindow().getGuiScaledHeight();
-			List<Window> open = gui().getSlotOrder();
-			for(Window a : open)
-			{
-				if(a.isMinimized())
-					return a.getTitle() + " didn't open";
-				a.validate();
-				int ax2 = a.getX() + a.getDisplayWidth();
-				int ay2 = a.getY() + a.getDisplayHeight();
-				if(a.getX() < 0 || ax2 > width || ay2 > height)
-					return a.getTitle() + " goes off the screen";
-				// the slots tile the bar, so filling them = touching
-				int[] tab = gui().getTabBounds(a);
-				if(a.getX() != tab[0] || a.getDisplayWidth() != tab[2]
-					|| a.getY() != gui().getBarHeight())
-					return a.getTitle()
-						+ " doesn't fill its slot below the bar";
-				for(Window b : open)
-					if(a != b && a.getX() < b.getX() + b.getDisplayWidth()
-						&& b.getX() < ax2
-						&& a.getY() < b.getY() + b.getDisplayHeight()
-						&& b.getY() < ay2)
-						return a.getTitle() + " overlaps " + b.getTitle();
-			}
-			logger.info("All open, scales " + open.stream().map(
-				w -> w.getTitle() + " " + Math.round(w.getScale() * 100) + "%")
-				.toList());
-			return null;
-		});
-		context.takeScreenshot("clickgui_all_open");
-		if(problem != null)
-			throw fail(problem);
-		
-		for(String title : titles)
-			if(!title.equals("Combat"))
-				clickTab(title);
+		String shown = context.computeOnClient(
+			mc -> gui().getSlotOrder().stream().filter(w -> !w.isMinimized())
+				.map(Window::getTitle).findFirst().orElse(null));
+		if(shown != null)
+			throw fail(shown + " is shown before its title was clicked");
 	}
 	
 	/**
@@ -251,10 +209,11 @@ public final class ClickGuiTest extends SingleplayerTest
 			if(window.getY() != gui().getBarHeight())
 				return title + " doesn't touch the bar";
 			int[] tab = gui().getTabBounds(window);
-			if(window.getX() != tab[0] || window.getDisplayWidth() != tab[2])
-				return title + " doesn't fill its tab's slot: " + window.getX()
-					+ "+" + window.getDisplayWidth() + " vs " + tab[0] + "+"
-					+ tab[2];
+			if(window.getX() != Math.max(0,
+				Math.min(tab[0], width - window.getDisplayWidth())))
+				return title + " doesn't open below its tab";
+			if(window.getScale() != 1)
+				return title + " isn't normal size";
 			for(int i = 0; i < window.countChildren(); i++)
 				if(window.getChild(i).getX() != 2)
 					return title + " isn't one column";

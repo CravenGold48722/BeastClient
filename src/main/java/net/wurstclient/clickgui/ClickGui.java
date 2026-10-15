@@ -70,7 +70,7 @@ public final class ClickGui
 	
 	/** Version of the bar layout in windows.json. */
 	private static final String LAYOUT = "_layout";
-	private static final int LAYOUT_VERSION = 3;
+	private static final int LAYOUT_VERSION = 4;
 	
 	/** The bar along the top: one row of equal slots, one tab in each. */
 	private static final int TAB_HEIGHT = 13;
@@ -210,12 +210,14 @@ public final class ClickGui
 		// windows.json from before this bar: all closed, below their tabs,
 		// in the default order
 		JsonObject layout = json.get(LAYOUT) instanceof JsonObject o ? o : null;
-		boolean oldLayout = layout == null
-			|| !(layout.get("version") instanceof JsonElement version
-				&& version.isJsonPrimitive()
-				&& version.getAsJsonPrimitive().isNumber()
-				&& version.getAsInt() >= LAYOUT_VERSION);
-		if(!oldLayout)
+		int version =
+			layout != null && layout.get("version") instanceof JsonElement v
+				&& v.isJsonPrimitive() && v.getAsJsonPrimitive().isNumber()
+					? v.getAsInt() : 0;
+		boolean oldLayout = version < LAYOUT_VERSION;
+		// the order is kept from version 3 (the slots); version 4 (normal-size
+		// windows, hidden until clicked) starts with every section hidden
+		if(version >= 3)
 			loadSlotOrder(layout);
 		
 		for(Window window : windows)
@@ -337,50 +339,18 @@ public final class ClickGui
 	}
 	
 	/**
-	 * All of them open at once, side by side right below the bar. Their text
-	 * is the bar's size whenever it fits (user): the windows aren't shrunk,
-	 * and a name too long for its row is squeezed into it
-	 * ({@link #pushFittedText}). A window of other controls (UI Settings,
-	 * with its sliders) can't squeeze, so it is drawn smaller until it fits.
-	 * A docked one fills its slot exactly, so neighbours touch without
-	 * overlapping; its rows stretch to that width.
+	 * Bar windows are normal windows at their normal size (user, like the
+	 * inspiration's top bar: hidden until their title is clicked, free to
+	 * overlap). {@link Window#getScale} stays 1; the scaled drawing and the
+	 * mouse conversion are still there from the fit-all-ten layout.
 	 */
 	private void sizeBarWindows()
 	{
 		for(Window window : slots)
 		{
-			float scale = canSqueeze(window) ? 1 : fitScale(window);
-			Tab tab = tabs.get(window);
-			if(!window.isDocked() || window.isDragging())
-			{
-				window.setWidth(window.getPackedWidth());
-				window.setScale(scale);
-				continue;
-			}
-			
-			// whole pixels on the screen: this slot ends where the next begins
-			int x1 = Math.round(tab.x.get());
-			int x2 = Math.round(tab.x.get() + slotWidth);
-			int width = Math.max(1, Math.round((x2 - x1) / scale));
-			window.setWidth(width);
-			window.setScale((x2 - x1) / (float)width);
+			window.setScale(1);
+			window.setWidth(window.getPackedWidth());
 		}
-	}
-	
-	/** Only feature rows (and the hint) can squeeze a too long name. */
-	private static boolean canSqueeze(Window window)
-	{
-		for(int i = 0; i < window.countChildren(); i++)
-			if(!(window.getChild(i) instanceof FeatureButton
-				|| window.getChild(i) instanceof HintComponent))
-				return false;
-		return true;
-	}
-	
-	/** The scale at which the window just fits its slot. */
-	private float fitScale(Window window)
-	{
-		return Math.min(1, slotWidth / Math.max(1, window.getPackedWidth()));
 	}
 	
 	/** Puts the dragged tab into the slot it's over, swapping. */
@@ -408,8 +378,10 @@ public final class ClickGui
 		if(tab == null || !window.isDocked() || window.isDragging())
 			return;
 		
-		// filling its slot, touching the bar
-		window.setX(Math.round(tab.x.get()));
+		// below its tab, touching the bar, on the screen
+		int scaledWidth = MC.getWindow().getGuiScaledWidth();
+		window.setX(Math.max(0, Math.min(Math.round(tab.x.get()),
+			scaledWidth - window.getDisplayWidth())));
 		window.setY(TAB_HEIGHT);
 	}
 	
@@ -1199,12 +1171,8 @@ public final class ClickGui
 				y1 + Math.round((y2 + 2 - y1) * open));
 		
 		// drop shadow, lifting the window off the world behind it
-		boolean docked = inBar && window.isDocked();
-		context.fill(docked ? x1 : x1 + 2, y2, docked ? x2 : x2 + 2, y2 + 2,
-			BeastColors.SHADOW);
-		// (not on the right of a docked one: that's its neighbour)
-		if(!docked)
-			context.fill(x2, y1 + 2, x2 + 2, y2, BeastColors.SHADOW);
+		context.fill(x1 + 2, y2, x2 + 2, y2 + 2, BeastColors.SHADOW);
+		context.fill(x2, y1 + 2, x2 + 2, y2, BeastColors.SHADOW);
 		
 		if(mouseX >= x1 && mouseY >= y1 && mouseX < x2 && mouseY < y2)
 			tooltip = "";

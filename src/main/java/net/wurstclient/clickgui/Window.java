@@ -53,6 +53,7 @@ public class Window
 	
 	private boolean inBar;
 	private boolean docked = true;
+	private float scale = 1;
 	private final Anim openAnim = new Anim(16);
 	
 	public Window(String title)
@@ -408,6 +409,33 @@ public class Window
 	public final float getOpenProgress()
 	{
 		return openAnim.get();
+	}
+	
+	/**
+	 * How big the window is drawn: 1 = normal. Bar windows shrink so that
+	 * all of them fit side by side below the bar. Everything inside keeps
+	 * its unscaled coordinates; only drawing and the mouse are converted.
+	 */
+	public final float getScale()
+	{
+		return scale;
+	}
+	
+	public final void setScale(float scale)
+	{
+		this.scale = scale;
+	}
+	
+	/** The width it takes up on the screen. */
+	public final int getDisplayWidth()
+	{
+		return Math.round(width * scale);
+	}
+	
+	/** The height it takes up on the screen. */
+	public final int getDisplayHeight()
+	{
+		return Math.round(height * scale);
 	}
 	
 	public final void setFixedWidth(boolean fixedWidth)

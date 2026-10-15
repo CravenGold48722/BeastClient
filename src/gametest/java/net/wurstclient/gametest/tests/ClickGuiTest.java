@@ -71,6 +71,7 @@ public final class ClickGuiTest extends SingleplayerTest
 		logger.info("Opening Combat from its tab");
 		clickTab("Combat");
 		checkDropdown("Combat");
+		checkAllOpen();
 		context.takeScreenshot("clickgui_bar");
 		
 		dragTabTest();
@@ -180,6 +181,54 @@ public final class ClickGuiTest extends SingleplayerTest
 	}
 	
 	/**
+	 * Opens every bar window from its tab: all of them fit side by side,
+	 * none overlapping another, all on the screen. Then closes all but
+	 * Combat again.
+	 */
+	private void checkAllOpen()
+	{
+		logger.info("Opening every section at once");
+		List<String> titles = context.computeOnClient(
+			mc -> gui().getSlotOrder().stream().map(Window::getTitle).toList());
+		for(String title : titles)
+			if(context.computeOnClient(mc -> findWindow(title).isMinimized()))
+				clickTab(title);
+			
+		String problem = context.computeOnClient(mc -> {
+			int width = mc.getWindow().getGuiScaledWidth();
+			int height = mc.getWindow().getGuiScaledHeight();
+			List<Window> open = gui().getSlotOrder();
+			for(Window a : open)
+			{
+				if(a.isMinimized())
+					return a.getTitle() + " didn't open";
+				a.validate();
+				int ax2 = a.getX() + a.getDisplayWidth();
+				int ay2 = a.getY() + a.getDisplayHeight();
+				if(a.getX() < 0 || ax2 > width || ay2 > height)
+					return a.getTitle() + " goes off the screen";
+				for(Window b : open)
+					if(a != b && a.getX() < b.getX() + b.getDisplayWidth()
+						&& b.getX() < ax2
+						&& a.getY() < b.getY() + b.getDisplayHeight()
+						&& b.getY() < ay2)
+						return a.getTitle() + " overlaps " + b.getTitle();
+			}
+			logger.info("All open, drawn at " + open.get(0).getScale()
+				+ "x, widths " + open.stream()
+					.map(w -> w.getTitle() + " " + w.getWidth()).toList());
+			return null;
+		});
+		context.takeScreenshot("clickgui_all_open");
+		if(problem != null)
+			throw fail(problem);
+		
+		for(String title : titles)
+			if(!title.equals("Combat"))
+				clickTab(title);
+	}
+	
+	/**
 	 * The window is open, right below its tab (docked), one column, and
 	 * ends above the bottom of the screen (scrolling if it has to).
 	 */
@@ -195,13 +244,15 @@ public final class ClickGuiTest extends SingleplayerTest
 			if(window.getY() != gui().getBarHeight() + 2)
 				return title + " doesn't open right below the bar";
 			int[] tab = gui().getTabBounds(window);
-			if(window.getX() != Math.min(tab[0], width - window.getWidth()))
-				return title + " doesn't open below its tab";
+			if(window.getX() < tab[0]
+				|| window.getX() + window.getDisplayWidth() > tab[0] + tab[2])
+				return title + " doesn't open within its tab's slot";
 			for(int i = 0; i < window.countChildren(); i++)
 				if(window.getChild(i).getX() != 2)
 					return title + " isn't one column";
-			if(window.getX() < 0 || window.getX() + window.getWidth() > width
-				|| window.getY() + window.getHeight() > height)
+			if(window.getX() < 0
+				|| window.getX() + window.getDisplayWidth() > width
+				|| window.getY() + window.getDisplayHeight() > height)
 				return title + " goes off the screen";
 			return null;
 		});
@@ -254,11 +305,11 @@ public final class ClickGuiTest extends SingleplayerTest
 		int[] tabBefore =
 			context.computeOnClient(mc -> gui().getTabBounds(combat));
 		int[] start = context.computeOnClient(
-			mc -> new int[]{combat.getX() + 10, combat.getY() + 6});
+			mc -> new int[]{combat.getX() + 10, combat.getY() + 2});
 		drag(start[0], start[1], start[0] + 30, start[1] + 25);
 		int[] moved = context
 			.computeOnClient(mc -> new int[]{combat.getX(), combat.getY()});
-		if(moved[0] != start[0] - 10 + 30 || moved[1] != start[1] - 6 + 25)
+		if(moved[0] != start[0] - 10 + 30 || moved[1] != start[1] - 2 + 25)
 			throw fail("The window didn't follow the mouse: " + moved[0] + ", "
 				+ moved[1]);
 		if(context.computeOnClient(mc -> combat.isDocked()))
@@ -356,9 +407,11 @@ public final class ClickGuiTest extends SingleplayerTest
 					hack.getName() + " isn't in " + windowTitle);
 			
 			double scale = mc.getWindow().getGuiScale();
-			double x = window.getX() + row.getX() + 8;
-			double y = window.getY() + 13 + window.getScrollOffset()
-				+ row.getY() + row.getHeight() / 2.0;
+			// the window may be drawn shrunk
+			float s = window.getScale();
+			double x = window.getX() + (row.getX() + 8) * s;
+			double y = window.getY() + (13 + window.getScrollOffset()
+				+ row.getY() + row.getHeight() / 2.0) * s;
 			return new double[]{x * scale, y * scale};
 		});
 		input.setCursorPos(pos[0], pos[1]);

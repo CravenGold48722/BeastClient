@@ -316,6 +316,21 @@ public final class ClickGui
 	{
 		slotWidth = scaledWidth / (float)Math.max(1, slots.size());
 		
+		// all of them open at once, side by side below their tabs: drawn at
+		// one size, small enough for the widest to fit its slot - except an
+		// unusually wide one (UI Settings, with its sliders), which shrinks a
+		// bit more on its own instead of shrinking all the others
+		int[] widths =
+			slots.stream().mapToInt(Window::getWidth).sorted().toArray();
+		int usual = widths.length == 0 ? 1
+			: Math.round(widths[widths.length / 2] * 1.15F);
+		float barScale = 1;
+		for(Window window : slots)
+			if(window.getWidth() <= usual)
+				barScale = Math.min(barScale, fitScale(window));
+		for(Window window : slots)
+			window.setScale(Math.min(barScale, fitScale(window)));
+		
 		if(pressedTab != null && !leftMouseButtonPressed)
 			pressedTab = null;
 		if(pressedTab != null && !draggingTab && Math.abs(mouseX - pressX) > 3)
@@ -332,6 +347,12 @@ public final class ClickGui
 			else
 				tab.x.update(i * slotWidth);
 		}
+	}
+	
+	/** The scale at which the window just fits its slot. */
+	private float fitScale(Window window)
+	{
+		return Math.min(1, (slotWidth - 2) / Math.max(1, window.getWidth()));
 	}
 	
 	/** Puts the dragged tab into the slot it's over, swapping. */
@@ -359,8 +380,11 @@ public final class ClickGui
 		if(tab == null || !window.isDocked() || window.isDragging())
 			return;
 		
-		int x = Math.round(tab.x.get());
-		window.setX(Math.max(0, Math.min(x, scaledWidth - window.getWidth())));
+		// centred in its slot, so no two of them overlap
+		int x = Math
+			.round(tab.x.get() + (slotWidth - window.getDisplayWidth()) / 2);
+		window.setX(
+			Math.max(0, Math.min(x, scaledWidth - window.getDisplayWidth())));
 		window.setY(TAB_HEIGHT + 2);
 	}
 	
@@ -641,10 +665,12 @@ public final class ClickGui
 				|| window.isInvisible())
 				continue;
 			
-			if(mouseX < window.getX() || mouseY < window.getY() + 13)
+			int wx = toWindowX(window, mouseX);
+			int wy = toWindowY(window, mouseY);
+			if(wx < window.getX() || wy < window.getY() + 13)
 				continue;
-			if(mouseX >= window.getX() + window.getWidth()
-				|| mouseY >= window.getY() + window.getHeight())
+			if(wx >= window.getX() + window.getWidth()
+				|| wy >= window.getY() + window.getHeight())
 				continue;
 			
 			int scroll = window.getScrollOffset() + dWheel;
@@ -772,27 +798,40 @@ public final class ClickGui
 			if(window.isInBar() && window.isMinimized())
 				continue;
 			
+			// in the window's own coordinates (a shrunk window is scaled)
+			int wx = toWindowX(window, mouseX);
+			int wy = toWindowY(window, mouseY);
+			
 			int x1 = window.getX();
 			int y1 = window.getY();
 			int x2 = x1 + window.getWidth();
 			int y2 = y1 + window.getHeight();
 			int y3 = y1 + 13;
 			
-			if(mouseX < x1 || mouseY < y1)
+			if(wx < x1 || wy < y1)
 				continue;
-			if(mouseX >= x2 || mouseY >= y2)
+			if(wx >= x2 || wy >= y2)
 				continue;
 			
-			if(mouseY < y3)
-				handleTitleBarMouseClick(window, mouseX, mouseY, mouseButton);
-			else if(!window.isMinimized())
+			if(wy < y3)
+			{
+				// a shrunk window has no title bar buttons, and dragging
+				// works in screen coordinates
+				if(window.getScale() != 1)
+				{
+					if(mouseButton == GLFW.GLFW_MOUSE_BUTTON_LEFT)
+						startDragging(window, mouseX, mouseY);
+				}else
+					handleTitleBarMouseClick(window, mouseX, mouseY,
+						mouseButton);
+			}else if(!window.isMinimized())
 			{
 				window.validate();
 				
-				int cMouseX = mouseX - x1;
-				int cMouseY = mouseY - y3;
+				int cMouseX = wx - x1;
+				int cMouseY = wy - y3;
 				
-				if(window.isScrollingEnabled() && mouseX >= x2 - 3)
+				if(window.isScrollingEnabled() && wx >= x2 - 3)
 					handleScrollbarMouseClick(window, cMouseX, cMouseY,
 						mouseButton);
 				else
@@ -949,7 +988,7 @@ public final class ClickGui
 			// scrollbar dragging
 			if(window.isDraggingScrollbar())
 				if(leftMouseButtonPressed)
-					window.dragScrollbarTo(mouseY);
+					window.dragScrollbarTo(toWindowY(window, mouseY));
 				else
 					window.stopDraggingScrollbar();
 				
@@ -1086,9 +1125,12 @@ public final class ClickGui
 			{
 				int y = window.isDocked() && !window.isDragging()
 					? TAB_HEIGHT + 2 : window.getY();
-				int limit = Math.max(40, scaledHeight - y - 4);
-				window.setMaxHeight(
-					maxHeight > 0 ? Math.min(maxHeight, limit) : limit);
+				int limit = Math.max(40,
+					Math.round((scaledHeight - y - 4) / window.getScale()));
+				// "Max height" is on the screen, not in the shrunk window
+				window.setMaxHeight(maxHeight > 0
+					? Math.min(Math.round(maxHeight / window.getScale()), limit)
+					: limit);
 			}else if(window instanceof SettingsWindow)
 				window.setMaxHeight(maxSettingsHeight);
 			else
@@ -1108,6 +1150,23 @@ public final class ClickGui
 		int windowBgColor = RenderUtils.toIntColor(bgColor, opacity);
 		
 		Matrix3x2fStack matrixStack = context.pose();
+		
+		// a shrunk window: drawn scaled around its top left corner, with the
+		// mouse converted into its own, unscaled coordinates
+		float scale = window.getScale();
+		boolean scaled = scale != 1;
+		if(scaled)
+		{
+			matrixStack.pushMatrix();
+			matrixStack.translate(x1, y1);
+			matrixStack.scale(scale);
+			matrixStack.translate(-x1, -y1);
+			if(mouseX != Integer.MIN_VALUE)
+			{
+				mouseX = toWindowX(window, mouseX);
+				mouseY = toWindowY(window, mouseY);
+			}
+		}
 		
 		if(minimized)
 			y2 = y3;
@@ -1218,6 +1277,23 @@ public final class ClickGui
 		
 		if(revealing)
 			context.disableScissor();
+		
+		if(scaled)
+			matrixStack.popMatrix();
+	}
+	
+	/** The mouse X in a (shrunk) window's own coordinates. */
+	private static int toWindowX(Window window, double mouseX)
+	{
+		int x1 = window.getX();
+		return (int)Math.floor(x1 + (mouseX - x1) / window.getScale());
+	}
+	
+	/** The mouse Y in a (shrunk) window's own coordinates. */
+	private static int toWindowY(Window window, double mouseY)
+	{
+		int y1 = window.getY();
+		return (int)Math.floor(y1 + (mouseY - y1) / window.getScale());
 	}
 	
 	private void renderTitleBarButton(GuiGraphicsExtractor context, int x1,

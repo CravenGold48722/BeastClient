@@ -38,15 +38,18 @@ public final class SettingsWindow extends Window
 	private void setInitialPosition(Window parent, Component button)
 	{
 		int scroll = parent.isScrollingEnabled() ? parent.getScrollOffset() : 0;
-		int y = parent.getY() + 12 + button.getY() + scroll;
+		// (the parent may be shrunk: its buttons are where it draws them)
+		float scale = parent.getScale();
+		int y =
+			parent.getY() + Math.round((12 + button.getY() + scroll) * scale);
 		
 		com.mojang.blaze3d.platform.Window mcWindow =
 			WurstClient.MC.getWindow();
 		int scaledWidth = mcWindow.getGuiScaledWidth();
-		int buttonX1 = parent.getX() + button.getX();
-		int buttonX2 = buttonX1 + button.getWidth();
+		int buttonX1 = parent.getX() + Math.round(button.getX() * scale);
+		int buttonX2 = buttonX1 + Math.round(button.getWidth() * scale);
 		
-		int x = parent.getX() + parent.getWidth() + 5;
+		int x = parent.getX() + parent.getDisplayWidth() + 5;
 		if(x + getWidth() > scaledWidth)
 			x = parent.getX() - getWidth() - 5;
 		if(x < 0)

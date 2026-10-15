@@ -329,14 +329,20 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
   have their own title bar again (no buttons) and are **one column with a scrollbar**, at most
   "Max height" (slider back, on-screen pixels) and never past the bottom of the screen.
   **All ten can be open at once without overlapping** (user): docked windows are drawn shrunk
-  (`Window.getScale`, one shared scale small enough for the widest to fit its slot; a window
-  wider than 1.15 x the median - UI Settings - shrinks on its own instead) and centred in
-  their slot. Inside, coordinates stay unscaled: `renderWindow` scales the pose around the
+  (`Window.getScale`). The shared scale lets the 85th-percentile row fit a slot (user: "make
+  the text larger" - fitting the single longest name made it ~20% smaller); longer names
+  are squeezed into their row (`FeatureButton`/`HintComponent` scale just that text). A
+  window that isn't all feature rows (UI Settings, sliders) can't squeeze and shrinks on its
+  own until it fits. Test screen 427 px: 49%; the user's ~480: ~55% and fill
+  their slot exactly, right below the bar (user: "touch the top bar and each other, NOT
+  overlap"): `sizeBarWindows` sets the logical width to slot / scale and fine-tunes the
+  scale so the edges land on the same whole pixels as the tab bounds; rows stretch to it.
+  No right-hand shadow on docked ones (it'd lie on the neighbour). Inside, coordinates stay unscaled: `renderWindow` scales the pose around the
   window's corner and converts the mouse (`toWindowX/Y`), clicks/scroll/scrollbar do the
   same, `SettingsWindow` places itself by `getDisplayWidth`. Popups of a shrunk window would
   be misplaced - none of the bar windows has one (UI Settings' colour opens a screen). At
-  427 px wide (test) the scale is ~0.38; at the user's ~480 ~0.43. Docked (default) they
-  open right below their tab; dragging one by its title bar undocks it (`Window.isDocked`,
+  Docked (default) they
+  open right below their tab (touching the bar); dragging one by its title bar undocks it (`Window.isDocked`,
   saved) and it reopens where it was left - its tab doesn't move.
   **Animations** (`util/Anim`: exponential glide by real time, first update snaps;
   `Anim.ease` = smoothstep): bar windows slide open/closed (scissor reveal, the mouse doesn't

@@ -181,8 +181,9 @@ public final class ClickGuiTest extends SingleplayerTest
 	}
 	
 	/**
-	 * Opens every bar window from its tab: all of them fit side by side,
-	 * none overlapping another, all on the screen. Then closes all but
+	 * Opens every bar window from its tab: all of them side by side, each
+	 * filling its slot right below the bar (so they touch), none overlapping
+	 * another, all on the screen. Then closes all but
 	 * Combat again.
 	 */
 	private void checkAllOpen()
@@ -207,6 +208,12 @@ public final class ClickGuiTest extends SingleplayerTest
 				int ay2 = a.getY() + a.getDisplayHeight();
 				if(a.getX() < 0 || ax2 > width || ay2 > height)
 					return a.getTitle() + " goes off the screen";
+				// the slots tile the bar, so filling them = touching
+				int[] tab = gui().getTabBounds(a);
+				if(a.getX() != tab[0] || a.getDisplayWidth() != tab[2]
+					|| a.getY() != gui().getBarHeight())
+					return a.getTitle()
+						+ " doesn't fill its slot below the bar";
 				for(Window b : open)
 					if(a != b && a.getX() < b.getX() + b.getDisplayWidth()
 						&& b.getX() < ax2
@@ -214,9 +221,9 @@ public final class ClickGuiTest extends SingleplayerTest
 						&& b.getY() < ay2)
 						return a.getTitle() + " overlaps " + b.getTitle();
 			}
-			logger.info("All open, drawn at " + open.get(0).getScale()
-				+ "x, widths " + open.stream()
-					.map(w -> w.getTitle() + " " + w.getWidth()).toList());
+			logger.info("All open, scales " + open.stream().map(
+				w -> w.getTitle() + " " + Math.round(w.getScale() * 100) + "%")
+				.toList());
 			return null;
 		});
 		context.takeScreenshot("clickgui_all_open");
@@ -241,12 +248,13 @@ public final class ClickGuiTest extends SingleplayerTest
 			if(window.isMinimized())
 				return "clicking its tab didn't open " + title;
 			window.validate();
-			if(window.getY() != gui().getBarHeight() + 2)
-				return title + " doesn't open right below the bar";
+			if(window.getY() != gui().getBarHeight())
+				return title + " doesn't touch the bar";
 			int[] tab = gui().getTabBounds(window);
-			if(window.getX() < tab[0]
-				|| window.getX() + window.getDisplayWidth() > tab[0] + tab[2])
-				return title + " doesn't open within its tab's slot";
+			if(window.getX() != tab[0] || window.getDisplayWidth() != tab[2])
+				return title + " doesn't fill its tab's slot: " + window.getX()
+					+ "+" + window.getDisplayWidth() + " vs " + tab[0] + "+"
+					+ tab[2];
 			for(int i = 0; i < window.countChildren(); i++)
 				if(window.getChild(i).getX() != 2)
 					return title + " isn't one column";

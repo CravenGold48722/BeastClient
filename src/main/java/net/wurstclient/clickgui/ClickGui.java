@@ -316,21 +316,6 @@ public final class ClickGui
 	{
 		slotWidth = scaledWidth / (float)Math.max(1, slots.size());
 		
-		// all of them open at once, side by side below their tabs: drawn at
-		// one size, small enough for the widest to fit its slot - except an
-		// unusually wide one (UI Settings, with its sliders), which shrinks a
-		// bit more on its own instead of shrinking all the others
-		int[] widths =
-			slots.stream().mapToInt(Window::getWidth).sorted().toArray();
-		int usual = widths.length == 0 ? 1
-			: Math.round(widths[widths.length / 2] * 1.15F);
-		float barScale = 1;
-		for(Window window : slots)
-			if(window.getWidth() <= usual)
-				barScale = Math.min(barScale, fitScale(window));
-		for(Window window : slots)
-			window.setScale(Math.min(barScale, fitScale(window)));
-		
 		if(pressedTab != null && !leftMouseButtonPressed)
 			pressedTab = null;
 		if(pressedTab != null && !draggingTab && Math.abs(mouseX - pressX) > 3)
@@ -347,12 +332,72 @@ public final class ClickGui
 			else
 				tab.x.update(i * slotWidth);
 		}
+		
+		sizeBarWindows();
+	}
+	
+	/**
+	 * All of them open at once, side by side right below the bar, at one
+	 * size: as big as lets a typical row fit its slot (85% of the rows -
+	 * the few longer names are squeezed to fit, see
+	 * {@link FeatureButton}). A window of other controls (UI Settings, with
+	 * its sliders) can't squeeze, so it shrinks on its own until it fits. A
+	 * docked one then fills its slot exactly, so neighbours touch without
+	 * overlapping; its rows stretch to that width.
+	 */
+	private void sizeBarWindows()
+	{
+		ArrayList<Integer> rowWidths = new ArrayList<>();
+		for(Window window : slots)
+			if(canSqueeze(window))
+				for(int i = 0; i < window.countChildren(); i++)
+					rowWidths.add(window.getChild(i).getDefaultWidth());
+		Collections.sort(rowWidths);
+		
+		float barScale = 1;
+		if(!rowWidths.isEmpty())
+		{
+			// + window padding and the scrollbar
+			int typical =
+				rowWidths.get((int)(0.85F * (rowWidths.size() - 1))) + 7;
+			barScale = Math.min(1, slotWidth / typical);
+		}
+		
+		for(Window window : slots)
+		{
+			float scale = canSqueeze(window) ? barScale
+				: Math.min(barScale, fitScale(window));
+			Tab tab = tabs.get(window);
+			if(!window.isDocked() || window.isDragging())
+			{
+				window.setWidth(window.getPackedWidth());
+				window.setScale(scale);
+				continue;
+			}
+			
+			// whole pixels on the screen: this slot ends where the next begins
+			int x1 = Math.round(tab.x.get());
+			int x2 = Math.round(tab.x.get() + slotWidth);
+			int width = Math.max(1, Math.round((x2 - x1) / scale));
+			window.setWidth(width);
+			window.setScale((x2 - x1) / (float)width);
+		}
+	}
+	
+	/** Only feature rows (and the hint) can squeeze a too long name. */
+	private static boolean canSqueeze(Window window)
+	{
+		for(int i = 0; i < window.countChildren(); i++)
+			if(!(window.getChild(i) instanceof FeatureButton
+				|| window.getChild(i) instanceof HintComponent))
+				return false;
+		return true;
 	}
 	
 	/** The scale at which the window just fits its slot. */
 	private float fitScale(Window window)
 	{
-		return Math.min(1, (slotWidth - 2) / Math.max(1, window.getWidth()));
+		return Math.min(1, slotWidth / Math.max(1, window.getPackedWidth()));
 	}
 	
 	/** Puts the dragged tab into the slot it's over, swapping. */
@@ -374,18 +419,15 @@ public final class ClickGui
 	 * A docked window opens right below its tab, ending at the right edge
 	 * of the screen at the latest.
 	 */
-	private void placeBelowTab(Window window, int scaledWidth)
+	private void placeBelowTab(Window window)
 	{
 		Tab tab = tabs.get(window);
 		if(tab == null || !window.isDocked() || window.isDragging())
 			return;
 		
-		// centred in its slot, so no two of them overlap
-		int x = Math
-			.round(tab.x.get() + (slotWidth - window.getDisplayWidth()) / 2);
-		window.setX(
-			Math.max(0, Math.min(x, scaledWidth - window.getDisplayWidth())));
-		window.setY(TAB_HEIGHT + 2);
+		// filling its slot, touching the bar
+		window.setX(Math.round(tab.x.get()));
+		window.setY(TAB_HEIGHT);
 	}
 	
 	/** Height of the bar along the top. */
@@ -1123,8 +1165,8 @@ public final class ClickGui
 			int scaledHeight = MC.getWindow().getGuiScaledHeight();
 			if(inBar)
 			{
-				int y = window.isDocked() && !window.isDragging()
-					? TAB_HEIGHT + 2 : window.getY();
+				int y = window.isDocked() && !window.isDragging() ? TAB_HEIGHT
+					: window.getY();
 				int limit = Math.max(40,
 					Math.round((scaledHeight - y - 4) / window.getScale()));
 				// "Max height" is on the screen, not in the shrunk window
@@ -1138,7 +1180,7 @@ public final class ClickGui
 			window.validate();
 			
 			if(inBar)
-				placeBelowTab(window, MC.getWindow().getGuiScaledWidth());
+				placeBelowTab(window);
 		}
 		
 		int x1 = window.getX();
@@ -1177,8 +1219,12 @@ public final class ClickGui
 				y1 + Math.round((y2 + 2 - y1) * open));
 		
 		// drop shadow, lifting the window off the world behind it
-		context.fill(x1 + 2, y2, x2 + 2, y2 + 2, BeastColors.SHADOW);
-		context.fill(x2, y1 + 2, x2 + 2, y2, BeastColors.SHADOW);
+		boolean docked = inBar && window.isDocked();
+		context.fill(docked ? x1 : x1 + 2, y2, docked ? x2 : x2 + 2, y2 + 2,
+			BeastColors.SHADOW);
+		// (not on the right of a docked one: that's its neighbour)
+		if(!docked)
+			context.fill(x2, y1 + 2, x2 + 2, y2, BeastColors.SHADOW);
 		
 		if(mouseX >= x1 && mouseY >= y1 && mouseX < x2 && mouseY < y2)
 			tooltip = "";

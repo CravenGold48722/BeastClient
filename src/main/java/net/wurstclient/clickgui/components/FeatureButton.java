@@ -9,6 +9,7 @@ package net.wurstclient.clickgui.components;
 
 import java.util.Objects;
 
+import org.joml.Matrix3x2fStack;
 import org.lwjgl.glfw.GLFW;
 
 import net.minecraft.client.gui.Font;
@@ -189,14 +190,25 @@ public final class FeatureButton extends Component
 		// An enabled feature is labelled in flat light red rather than the
 		// moving gradient, so that "this is on" stays readable at a glance.
 		String name = feature.getName();
+		
+		// a name too long for a narrow (bar) window is squeezed to fit
+		int nameWidth = TR.width(name);
+		float squeeze =
+			Math.min(1, (x3 - 2 - tx) / (float)Math.max(1, nameWidth));
+		Matrix3x2fStack pose = context.pose();
+		pose.pushMatrix();
+		pose.translate(tx, ty + (8 - 8 * squeeze) / 2);
+		pose.scale(squeeze);
+		
 		// (cross-faded while toggling; vanilla draws text with an alpha near 0
 		// fully opaque, so the faint one is left out)
 		if(on < 0.97F)
-			RenderUtils.drawGradientText(context, TR, name, tx, ty, 1 - on,
+			RenderUtils.drawGradientText(context, TR, name, 0, 0, 1 - on,
 				false);
 		if(on > 0.03F)
-			context.text(TR, name, tx, ty,
+			context.text(TR, name, 0, 0,
 				BeastColors.withOpacity(BeastColors.SELECTED_RED, on), false);
+		pose.popMatrix();
 	}
 	
 	@Override

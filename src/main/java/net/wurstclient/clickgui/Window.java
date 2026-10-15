@@ -190,6 +190,28 @@ public class Window
 		validate();
 	}
 	
+	/**
+	 * The width {@link #pack()} would give it: the widest child or the title
+	 * bar, plus room for the scrollbar while it scrolls.
+	 */
+	public final int getPackedWidth()
+	{
+		int maxChildWidth = 0;
+		for(Component c : children)
+			maxChildWidth = Math.max(maxChildWidth, c.getDefaultWidth());
+		maxChildWidth += scrollingEnabled ? 7 : 4;
+		
+		int titleBarWidth = BeastFont.get().width(title) + 4;
+		if(minimizable)
+			titleBarWidth += 11;
+		if(pinnable)
+			titleBarWidth += 11;
+		if(closable)
+			titleBarWidth += 11;
+		
+		return Math.max(maxChildWidth, titleBarWidth);
+	}
+	
 	public final void validate()
 	{
 		if(valid)

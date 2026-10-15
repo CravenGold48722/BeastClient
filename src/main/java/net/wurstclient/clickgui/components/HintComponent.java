@@ -7,6 +7,8 @@
  */
 package net.wurstclient.clickgui.components;
 
+import org.joml.Matrix3x2fStack;
+
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.wurstclient.clickgui.Component;
@@ -31,8 +33,15 @@ public final class HintComponent extends Component
 	public void render(GuiGraphicsExtractor context, int mouseX, int mouseY,
 		float partialTicks)
 	{
-		context.text(TR, text, getX() + 3, getY() + 2, BeastColors.TEXT_MUTED,
-			false);
+		// squeezed to fit a narrow (bar) window
+		float squeeze =
+			Math.min(1, (getWidth() - 5) / (float)Math.max(1, TR.width(text)));
+		Matrix3x2fStack pose = context.pose();
+		pose.pushMatrix();
+		pose.translate(getX() + 3, getY() + 2 + (8 - 8 * squeeze) / 2);
+		pose.scale(squeeze);
+		context.text(TR, text, 0, 0, BeastColors.TEXT_MUTED, false);
+		pose.popMatrix();
 	}
 	
 	@Override

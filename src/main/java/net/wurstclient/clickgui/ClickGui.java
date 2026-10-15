@@ -337,36 +337,19 @@ public final class ClickGui
 	}
 	
 	/**
-	 * All of them open at once, side by side right below the bar, at one
-	 * size: as big as lets a typical row fit its slot (85% of the rows -
-	 * the few longer names are squeezed to fit, see
-	 * {@link FeatureButton}). A window of other controls (UI Settings, with
-	 * its sliders) can't squeeze, so it shrinks on its own until it fits. A
-	 * docked one then fills its slot exactly, so neighbours touch without
+	 * All of them open at once, side by side right below the bar. Their text
+	 * is the bar's size whenever it fits (user): the windows aren't shrunk,
+	 * and a name too long for its row is squeezed into it
+	 * ({@link #pushFittedText}). A window of other controls (UI Settings,
+	 * with its sliders) can't squeeze, so it is drawn smaller until it fits.
+	 * A docked one fills its slot exactly, so neighbours touch without
 	 * overlapping; its rows stretch to that width.
 	 */
 	private void sizeBarWindows()
 	{
-		ArrayList<Integer> rowWidths = new ArrayList<>();
-		for(Window window : slots)
-			if(canSqueeze(window))
-				for(int i = 0; i < window.countChildren(); i++)
-					rowWidths.add(window.getChild(i).getDefaultWidth());
-		Collections.sort(rowWidths);
-		
-		float barScale = 1;
-		if(!rowWidths.isEmpty())
-		{
-			// + window padding and the scrollbar
-			int typical =
-				rowWidths.get((int)(0.85F * (rowWidths.size() - 1))) + 7;
-			barScale = Math.min(1, slotWidth / typical);
-		}
-		
 		for(Window window : slots)
 		{
-			float scale = canSqueeze(window) ? barScale
-				: Math.min(barScale, fitScale(window));
+			float scale = canSqueeze(window) ? 1 : fitScale(window);
 			Tab tab = tabs.get(window);
 			if(!window.isDocked() || window.isDragging())
 			{
@@ -527,18 +510,15 @@ public final class ClickGui
 				BeastColors.withOpacity(BeastColors.PANEL_BG_LIGHT,
 					tab.window.getOpenProgress()));
 		
-		// the title, centred, shrunk if the slot is too narrow for it
+		// the title, centred, squeezed if the slot is too narrow for it
 		Font tr = BeastFont.get();
 		String title = tab.window.getTitle();
 		int textWidth = tr.width(title);
 		float scale = Math.min(1, (slotWidth - 4) / textWidth);
 		float textX = x1 + (slotWidth - textWidth * scale) / 2;
-		Matrix3x2fStack matrixStack = context.pose();
-		matrixStack.pushMatrix();
-		matrixStack.translate(textX, (TAB_HEIGHT - 8 * scale) / 2F);
-		matrixStack.scale(scale);
+		pushFittedText(context, tr, title, textX, 2.5F, slotWidth - 4);
 		drawAccentText(context, tr, title, 0, 0);
-		matrixStack.popMatrix();
+		context.pose().popMatrix();
 		
 		// a little red line under the title of the one in front, growing
 		// from the middle
@@ -1313,13 +1293,13 @@ public final class ClickGui
 		// behind title
 		context.fill(x1, y1, x3, y3, titleBgColor);
 		
-		// window title
+		// window title, squeezed if it doesn't fit
 		Font tr = BeastFont.get();
-		String title = tr.substrByWidth(
-			net.minecraft.network.chat.Component.literal(window.getTitle()),
-			x3 - x1 - 4).getString();
 		context.guiRenderState.up();
-		drawAccentText(context, tr, title, x1 + 3, y1 + 3);
+		pushFittedText(context, tr, window.getTitle(), x1 + 3, y1 + 3,
+			x3 - x1 - 5);
+		drawAccentText(context, tr, window.getTitle(), 0, 0);
+		context.pose().popMatrix();
 		
 		if(revealing)
 			context.disableScissor();
@@ -1389,6 +1369,24 @@ public final class ClickGui
 	{
 		RenderUtils.drawBorder2D(context, x1, y1, x2, y2,
 			BeastColors.ROW_BORDER);
+	}
+	
+	/**
+	 * Pushes the pose so that text drawn at (0, 0) starts at (x, y) and fits
+	 * in maxWidth: full size if it fits (the same size as the bar's tabs),
+	 * otherwise narrower at full height down to 60% width, and only past that
+	 * smaller as well, centred on the line. Pop it with
+	 * {@code context.pose().popMatrix()}.
+	 */
+	public static void pushFittedText(GuiGraphicsExtractor context, Font font,
+		String text, float x, float y, float maxWidth)
+	{
+		float fit = Math.min(1, maxWidth / Math.max(1, font.width(text)));
+		float height = Math.min(1, fit / 0.6F);
+		Matrix3x2fStack pose = context.pose();
+		pose.pushMatrix();
+		pose.translate(x, y + (8 - 8 * height) / 2);
+		pose.scale(fit, height);
 	}
 	
 	/**

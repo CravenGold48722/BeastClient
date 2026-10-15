@@ -9,7 +9,6 @@ package net.wurstclient.clickgui.components;
 
 import java.util.Objects;
 
-import org.joml.Matrix3x2fStack;
 import org.lwjgl.glfw.GLFW;
 
 import net.minecraft.client.gui.Font;
@@ -80,7 +79,7 @@ public final class FeatureButton extends Component
 	
 	private void handleLeftClick(double mouseX)
 	{
-		if(hasSettings && (mouseX > getX() + getWidth() - 12
+		if(hasSettings && (mouseX > getX() + getWidth() - getArrowWidth() - 1
 			|| feature.getPrimaryAction().isEmpty()))
 		{
 			toggleSettingsWindow();
@@ -121,6 +120,15 @@ public final class FeatureButton extends Component
 		}
 	}
 	
+	/**
+	 * The settings arrow on the right, slimmer in a narrow (bar) row so the
+	 * name has more room (right-click opens the settings too).
+	 */
+	private int getArrowWidth()
+	{
+		return getWidth() < 60 ? 7 : 11;
+	}
+	
 	private boolean isImportant()
 	{
 		return feature instanceof Hack hack && hack.isImportant();
@@ -132,7 +140,7 @@ public final class FeatureButton extends Component
 	{
 		int x1 = getX();
 		int x2 = x1 + getWidth();
-		int x3 = hasSettings ? x2 - 11 : x2;
+		int x3 = hasSettings ? x2 - getArrowWidth() : x2;
 		int y1 = getY();
 		int y2 = y1 + getHeight();
 		
@@ -191,14 +199,8 @@ public final class FeatureButton extends Component
 		// moving gradient, so that "this is on" stays readable at a glance.
 		String name = feature.getName();
 		
-		// a name too long for a narrow (bar) window is squeezed to fit
-		int nameWidth = TR.width(name);
-		float squeeze =
-			Math.min(1, (x3 - 2 - tx) / (float)Math.max(1, nameWidth));
-		Matrix3x2fStack pose = context.pose();
-		pose.pushMatrix();
-		pose.translate(tx, ty + (8 - 8 * squeeze) / 2);
-		pose.scale(squeeze);
+		// full size like the bar's tabs, squeezed only if it doesn't fit
+		ClickGui.pushFittedText(context, TR, name, tx, ty, x3 - 2 - tx);
 		
 		// (cross-faded while toggling; vanilla draws text with an alpha near 0
 		// fully opaque, so the faint one is left out)
@@ -208,7 +210,7 @@ public final class FeatureButton extends Component
 		if(on > 0.03F)
 			context.text(TR, name, 0, 0,
 				BeastColors.withOpacity(BeastColors.SELECTED_RED, on), false);
-		pose.popMatrix();
+		context.pose().popMatrix();
 	}
 	
 	@Override

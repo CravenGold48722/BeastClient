@@ -329,11 +329,13 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
   have their own title bar again (no buttons) and are **one column with a scrollbar**, at most
   "Max height" (slider back, on-screen pixels) and never past the bottom of the screen.
   **All ten can be open at once without overlapping** (user): docked windows are drawn shrunk
-  (`Window.getScale`). The shared scale lets the 85th-percentile row fit a slot (user: "make
-  the text larger" - fitting the single longest name made it ~20% smaller); longer names
-  are squeezed into their row (`FeatureButton`/`HintComponent` scale just that text). A
-  window that isn't all feature rows (UI Settings, sliders) can't squeeze and shrinks on its
-  own until it fits. Test screen 427 px: 49%; the user's ~480: ~55% and fill
+  only if they must (`Window.getScale`): text is the **same size as the bar's tabs whenever
+  it fits** (user). Feature-row windows are drawn at full size, slot wide, and each name
+  that doesn't fit its row goes through `ClickGui.pushFittedText` (narrower at full height
+  down to 60% width, then smaller too) - the same for tab titles, window titles and the
+  hint. Narrow rows (< 60 px) get a slimmer settings arrow (7 px) for more name room. A
+  window that isn't all feature rows (UI Settings, sliders) can't squeeze and is drawn
+  smaller until it fits (33% on the 427 px test screen) and fill
   their slot exactly, right below the bar (user: "touch the top bar and each other, NOT
   overlap"): `sizeBarWindows` sets the logical width to slot / scale and fine-tunes the
   scale so the edges land on the same whole pixels as the tab bounds; rows stretch to it.

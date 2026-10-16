@@ -174,7 +174,7 @@ abstract class PrepareTestServer extends DefaultTask
 		addonsDir.listFiles()?.findAll { it.name.endsWith(".jar") }*.delete()
 		addons.files.each { jar ->
 			byte[] bytes = jar.bytes
-			if(patchGrim.get())
+			if(patchGrim.get() && jar.name.startsWith("grimac"))
 				bytes = GrimJarPatch.patch(bytes)
 			new File(addonsDir, jar.name).bytes = bytes
 		}
@@ -263,6 +263,9 @@ def prepareGrimServer = tasks.register("prepareGrimServer", PrepareTestServer) {
 		exclude "grimac-fabric-official-*", "grimac-fabric-intermediary-*",
 			"grimac-fabric-mc*"
 	})
+	// VexBot (see build.gradle): AimAssist (Auto combo) fights one of its bots
+	if(project.vexbotJar.isFile())
+		addons.from(project.vexbotJar)
 	addonDir = "mods"
 	patchGrim = true
 	freshDirs = ["world", "logs"]
@@ -273,6 +276,7 @@ def prepareGrimServer = tasks.register("prepareGrimServer", PrepareTestServer) {
 		// no usage statistics sent from test runs
 		"config/bStats/config.yml": "enabled: false\n",
 		"plugins/bStats/config.yml": "enabled: false\n",
+		"vexbot_settings.json": '{"global": {"statsOn": false}}\n',
 		// every flag in the console, not only alerts past a threshold
 		"config/GrimAC/config.yml": useGrim
 			? new File(grimSource, "common/src/main/resources/config/en.yml")
@@ -321,16 +325,16 @@ loom {
 	runs {
 		clientGameTest {
 			if(useGrim)
-				vmArgs.add("-Dwurst.test.grimServer=${new File(anticheatDir, "grim").absolutePath}:${grimPort}")
+				vmArg("-Dwurst.test.grimServer=${new File(anticheatDir, "grim").absolutePath}:${grimPort}")
 			if(useIntave)
-				vmArgs.add("-Dwurst.test.intaveServer=${new File(anticheatDir, "intave").absolutePath}:${intavePort}")
+				vmArg("-Dwurst.test.intaveServer=${new File(anticheatDir, "intave").absolutePath}:${intavePort}")
 			// every hack and command takes ~10 min per server
 			if(providers.gradleProperty("noFeatureSweep").isPresent())
-				vmArgs.add("-Dwurst.test.noFeatureSweep=true")
+				vmArg("-Dwurst.test.noFeatureSweep=true")
 			// -Pfeatures=blink,criticals: only those features' tests
 			def features = providers.gradleProperty("features").getOrNull()
 			if(features)
-				vmArgs.add("-Dwurst.test.features=$features")
+				vmArg("-Dwurst.test.features=$features")
 		}
 	}
 }

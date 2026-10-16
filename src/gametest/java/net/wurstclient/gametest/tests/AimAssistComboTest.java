@@ -8,7 +8,10 @@
 package net.wurstclient.gametest.tests;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
@@ -22,6 +25,7 @@ import net.wurstclient.event.EventManager;
 import net.wurstclient.events.PlayerAttacksEntityListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.gametest.SingleplayerTest;
+import net.wurstclient.util.EntityUtils;
 
 /**
  * AimAssist's Auto combo the way the combo guides describe it, against a
@@ -45,6 +49,10 @@ public final class AimAssistComboTest extends SingleplayerTest
 	private final List<Attack> attacks = new ArrayList<>();
 	private final List<Boolean> jumped = new ArrayList<>();
 	private final List<HitTaken> hitsTaken = new ArrayList<>();
+	private final List<Boolean> backDown = new ArrayList<>();
+	
+	/** Ticks where a hit could have gone out (see isChance). */
+	private final List<Boolean> chances = new ArrayList<>();
 	
 	private record Attack(int tick, boolean sprintHit, boolean crit,
 		boolean targetFalling, boolean deflecting)
@@ -61,6 +69,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 		if(player.hurtTime > 0 && player.hurtTime == player.hurtDuration)
 			hitsTaken.add(new HitTaken(forwardDown.size(), player.onGround()));
 		forwardDown.add(mc.options.keyUp.isDown());
+		backDown.add(mc.options.keyDown.isDown());
+		chances.add(isChance(mc));
 		// the input the last tick was moved with
 		jumped.add(player.input.keyPresses.jump());
 	};
@@ -72,7 +82,9 @@ public final class AimAssistComboTest extends SingleplayerTest
 			player.fallDistance > 0 && !player.onGround()
 				&& !player.isSprinting() && !player.wasSprinting,
 			isFalling(target),
-			player.hurtTime > 0 && player.hurtTime >= player.hurtDuration - 4));
+			player.hurtTime > 0 && player.hurtTime >= player.hurtDuration - 4
+				|| target instanceof Player p && p.swinging
+					&& p.swingTime <= 4));
 	};
 	
 	private String me;
@@ -114,6 +126,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		{
 			comboOnStillTarget();
 			noHitWhileFalling();
+			tapChoice();
 			realFight();
 			
 		}finally
@@ -279,9 +292,12 @@ public final class AimAssistComboTest extends SingleplayerTest
 			
 		// The jump goes in with the input read in the tick the hit arrived,
 		// which the next tick's record shows. (The knockback lifts us too -
-		// only the jump key counts.)
+		// only the jump key counts.) S instead is a fly-out (held into the
+		// hit) or an S-tap deflection (too close to jump-reset).
+		List<Boolean> back = snapshot(backDown);
 		int onGround = 0;
-		int reset = 0;
+		int jumpResets = 0;
+		int sTaps = 0;
 		for(HitTaken hit : taken)
 		{
 			if(!hit.onGround())
@@ -289,17 +305,131 @@ public final class AimAssistComboTest extends SingleplayerTest
 			onGround++;
 			int t = hit.tick() + 1;
 			if(t < jumps.size() && jumps.get(t))
-				reset++;
+				jumpResets++;
+			else if(t < back.size() && back.get(t))
+				sTaps++;
 		}
-		logger.info("Fight: {} of {} hits taken on the ground jump-reset",
-			reset, onGround);
+		logger.info(
+			"Fight: of {} hits taken on the ground, {} jump-reset, {} with S"
+				+ " (fly-out / S-tap deflection)",
+			onGround, jumpResets, sTaps);
 		if(onGround == 0)
 			throw new RuntimeException("The bot never hit us on the ground");
-		if(reset < onGround)
-			throw new RuntimeException("Only " + reset + " of " + onGround
-				+ " hits taken on the ground were jump-reset");
+		if(jumpResets + sTaps < onGround)
+			throw new RuntimeException("Only " + (jumpResets + sTaps) + " of "
+				+ onGround + " hits taken on the ground got a reaction");
+			
+		// Chances to hit that went by: a hit goes out in the tick whose
+		// record comes right before its index (the recorder runs first).
+		List<Boolean> chance = snapshot(chances);
+		Set<Integer> hitTicks = new HashSet<>();
+		for(Attack hit : hits)
+			hitTicks.add(hit.tick() - 1);
+		int chanceTicks = 0;
+		int missed = 0;
+		int longestMiss = 0;
+		int streak = 0;
+		for(int t = 0; t < chance.size(); t++)
+		{
+			if(!chance.get(t))
+			{
+				streak = 0;
+				continue;
+			}
+			chanceTicks++;
+			if(hitTicks.contains(t))
+			{
+				streak = 0;
+				continue;
+			}
+			missed++;
+			longestMiss = Math.max(longestMiss, ++streak);
+		}
+		logger.info(
+			"Fight: {} ticks with a chance to hit, {} went by, longest wait"
+				+ " {} ticks",
+			chanceTicks, missed, longestMiss);
+		// (HitCheck's old 0.1-inside-on-both-rotations rule let 74% go by;
+		// the rest now are mostly ticks the sent rotation was off the bot)
+		if(missed * 100 > chanceTicks * 65)
+			throw new RuntimeException("Let " + missed + " of " + chanceTicks
+				+ " chances to hit go by");
 		
 		removeBot();
+	}
+	
+	/**
+	 * The sprint reset after a hit by how the target moves: an S-tap when it
+	 * comes at us (makes room), a W-tap when it backs off (keeps up). The
+	 * test moves the bot itself, 0.12 blocks a tick (VexBot's goto and
+	 * remote control didn't move it); we're in creative, so it can't hurt
+	 * us.
+	 */
+	private void tapChoice()
+	{
+		// only the sprint reset (an uppercut or lunge would hit in the air)
+		runWurstCommand("setcheckbox AimAssist Uppercuts off");
+		runWurstCommand("setcheckbox AimAssist Lunges off");
+		startSpot();
+		spawnBot("~ ~ ~-4.5");
+		Boolean towardS = sTapAfterFirstHit(0.12);
+		removeBot();
+		
+		startSpot();
+		spawnBot("~ ~ ~-2.5");
+		Boolean awayS = sTapAfterFirstHit(-0.12);
+		removeBot();
+		runWurstCommand("setcheckbox AimAssist Uppercuts on");
+		runWurstCommand("setcheckbox AimAssist Lunges on");
+		
+		logger.info("Tap choice: coming at us S-tap {}, backing off S-tap {}",
+			towardS, awayS);
+		if(towardS == null || awayS == null)
+			throw new RuntimeException("Never hit the moving bot");
+		if(!towardS)
+			throw new RuntimeException(
+				"W-tapped a bot coming at us (an S-tap makes room)");
+		if(awayS)
+			throw new RuntimeException(
+				"S-tapped a bot backing off (a W-tap keeps up)");
+	}
+	
+	/**
+	 * Moves the bot by dz (+: south, toward us) every tick until our first
+	 * hit; whether S went down right after it. null: no hit.
+	 */
+	private Boolean sTapAfterFirstHit(double dz)
+	{
+		String move = String.format(Locale.ROOT,
+			"execute as %s at @s run tp @s ~ ~ ~%.2f", BOT, dz);
+		// already moving when AimAssist first sees it
+		for(int i = 0; i < 6; i++)
+		{
+			runCommand(move);
+			context.waitTick();
+		}
+		clearRecording();
+		runWurstCommand("t AimAssist on");
+		for(int i = 0; i < 120
+			&& context.computeOnClient(mc -> attacks.isEmpty()); i++)
+		{
+			runCommand(move);
+			context.waitTick();
+		}
+		context.waitTicks(4);
+		runWurstCommand("t AimAssist off");
+		context.waitTicks(3);
+		
+		List<Attack> hits = snapshotAttacks();
+		if(hits.isEmpty())
+			return null;
+		
+		List<Boolean> back = snapshot(backDown);
+		int t = hits.get(0).tick();
+		for(int i = t; i < Math.min(t + 3, back.size()); i++)
+			if(back.get(i))
+				return true;
+		return false;
 	}
 	
 	/**
@@ -340,9 +470,29 @@ public final class AimAssistComboTest extends SingleplayerTest
 		runCommand("execute as " + me + " at @s run " + command);
 	}
 	
+	/**
+	 * A tick where a hit could go out: charged, the bot under the crosshair
+	 * within 2.8 blocks, not falling, no shield up, not using an item.
+	 */
+	private static boolean isChance(Minecraft mc)
+	{
+		var player = mc.player;
+		if(player.getAttackStrengthScale(-0.5F) <= 0.9F || player.isUsingItem())
+			return false;
+		
+		for(Player p : mc.level.players())
+			if(p != player && p.getName().getString().equals(BOT))
+				return mc.crosshairPickEntity == p && !isFalling(p)
+					&& !p.isBlocking()
+					&& EntityUtils.distanceToHitboxSq(p) <= 2.8 * 2.8;
+		return false;
+	}
+	
 	private void clearRecording()
 	{
 		context.runOnClient(mc -> {
+			backDown.clear();
+			chances.clear();
 			forwardDown.clear();
 			jumped.clear();
 			attacks.clear();

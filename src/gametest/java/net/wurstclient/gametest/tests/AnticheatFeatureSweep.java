@@ -7,6 +7,7 @@
  */
 package net.wurstclient.gametest.tests;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -51,6 +52,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.WurstClient;
 import net.wurstclient.clickgui.screens.ClickGuiScreen;
+import net.wurstclient.events.UpdateListener;
 import net.wurstclient.gametest.PacketTrace;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.hacks.ForceOpHack;
@@ -202,6 +204,119 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 		awaitItems();
 	}
 	
+	/** VexBot's bot in {@link #comboAgainstVexBot()}. */
+	private static final String VEXBOT = "Vex";
+	
+	/**
+	 * Whether this server has VexBot (build.gradle: only Grim's, a Fabric
+	 * server - VexBot is a Fabric mod, Intave runs on Paper).
+	 */
+	private boolean hasVexBot()
+	{
+		File[] mods = new File(server.getDir(), "mods").listFiles();
+		if(mods == null)
+			return false;
+		for(File mod : mods)
+			if(mod.getName().startsWith("vexbot"))
+				return true;
+		return false;
+	}
+	
+	/**
+	 * A real fight against a VexBot instead of a still husk: it w-taps,
+	 * strafes, jumps and hits back, so the combo's deflections, jump resets
+	 * and crits happen against the anticheat too. Both sides can't die (we
+	 * have Resistance V, the bot resistance and regeneration).
+	 */
+	private String comboAgainstVexBot()
+	{
+		Vec3 pos = Vec3.atBottomCenterOf(home).add(0, 0, 4);
+		server.command(String.format(Locale.ROOT,
+			"execute as %s run vexbot spawn %s %.2f %.2f %.2f", BOT, VEXBOT,
+			pos.x, pos.y, pos.z));
+		
+		// Counted in the tick, like AimAssistComboTest: a hit's hurt time is
+		// full only until that tick's baseTick. [hits, taken, taken on the
+		// ground, jump resets, check the next jump]
+		int[] count = new int[5];
+		UpdateListener recorder = () -> {
+			var mc = WurstClient.MC;
+			var me = mc.player;
+			// the jump goes in with the input read in the tick the hit
+			// arrived in, which the next tick shows
+			if(count[4] == 1 && me.input.keyPresses.jump())
+				count[3]++;
+			count[4] = 0;
+			var bot = vexBot(mc);
+			if(bot != null && bot.hurtTime > 0
+				&& bot.hurtTime == bot.hurtDuration)
+				count[0]++;
+			if(me.hurtTime > 0 && me.hurtTime == me.hurtDuration)
+			{
+				count[1]++;
+				if(me.onGround())
+				{
+					count[2]++;
+					count[4] = 1;
+				}
+			}
+		};
+		
+		try
+		{
+			if(!waitUntil(mc -> vexBot(mc) != null, 200))
+				return FAIL + "the VexBot never showed up";
+			server.command("effect give " + VEXBOT
+				+ " minecraft:resistance infinite 3 true");
+			server.command("effect give " + VEXBOT
+				+ " minecraft:regeneration infinite 4 true");
+			server.command("effect give " + VEXBOT
+				+ " minecraft:saturation infinite 0 true");
+			server.command("item replace entity " + VEXBOT
+				+ " weapon.mainhand with diamond_sword");
+			at(0, 0, 0, 0, 0);
+			server.command("execute as " + BOT + " run vexbot attack " + BOT
+				+ " " + VEXBOT);
+			context.runOnClient(mc -> WurstClient.INSTANCE.getEventManager()
+				.add(UpdateListener.class, recorder));
+			on("AimAssist");
+			context.waitTicks(200);
+			
+			int[] c = context.computeOnClient(mc -> count.clone());
+			int hits = c[0];
+			int taken = c[1];
+			int takenOnGround = c[2];
+			int jumpResets = c[3];
+			
+			String fight = fmt(
+				"%d hits on the VexBot, it hit back %d times, jump resets on"
+					+ " %d of %d hits taken on the ground",
+				hits, taken, jumpResets, takenOnGround);
+			if(hits < 3)
+				return FAIL + fight;
+			if(taken == 0)
+				return FAIL + fight + " (the bot never fought back)";
+			return "fought a VexBot: " + fight;
+			
+		}finally
+		{
+			context.runOnClient(mc -> WurstClient.INSTANCE.getEventManager()
+				.remove(UpdateListener.class, recorder));
+			server.command("vexbot attack stop " + VEXBOT);
+			server.command("vexbot kill " + VEXBOT);
+			waitUntil(mc -> vexBot(mc) == null, 60);
+		}
+	}
+	
+	private static net.minecraft.world.entity.player.Player vexBot(
+		net.minecraft.client.Minecraft mc)
+	{
+		for(var p : mc.level.players())
+			if(p.getName().getString().equals(VEXBOT))
+				return p;
+		return null;
+	}
+	
 	private void pickaxe()
 	{
 		give("hotbar.0", "diamond_pickaxe");
@@ -342,11 +457,13 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 		// the combo: W/S taps, sprint resets, held-back hits
 		hack("AimAssist (Auto combo)", () -> {
 			sword();
+			set("AimAssist", "Auto combo", true);
+			set("AimAssist", "Dodging", false);
+			if(hasVexBot())
+				return comboAgainstVexBot();
 			String husk = husk(1.5, 2);
 			awaitEntities(Husk.class, 1);
 			at(0, 0, 0, 10, 0);
-			set("AimAssist", "Auto combo", true);
-			set("AimAssist", "Dodging", false);
 			on("AimAssist");
 			boolean aimed =
 				waitUntil(mc -> mc.crosshairPickEntity instanceof Husk, 60);

@@ -30,14 +30,22 @@ import net.wurstclient.WurstClient;
  * one, the next one, something in between) isn't known for closed-source
  * anticheats, so a verifiable hit has to work with all of them:
  * <ul>
- * <li>the rotation already sent <i>and</i> the current one both hit,</li>
+ * <li>the rotation already sent hits a little inside the hitbox's sides,
+ * since the server's copy of the target is rarely exactly where you see
+ * it,</li>
+ * <li>and the current one hits the hitbox too,</li>
  * <li>from where you are now and (at ordinary speeds) from where this
  * tick's move takes you,</li>
- * <li>within your real reach, with no block in between,</li>
- * <li>a little inside the hitbox's sides, since the server's copy of the
- * target is rarely exactly where you see it.</li>
+ * <li>within your real reach, with no block in between.</li>
  * </ul>
  * After a fast turn that holds the first hit back by a single tick.
+ *
+ * <p>
+ * (It used to want both rotations 0.1 inside the sides. Against a strafing,
+ * jumping VexBot that turned down 70% of the ticks where a hit was there to
+ * take - mostly by a hundredth of a block - while Grim accepts a hit if any
+ * one of the sent, the next or a mix of both rotations passes through any
+ * box the target could have had on your screen.)
  *
  * <p>
  * Call it inside the tick, right where the attack goes out.
@@ -46,8 +54,8 @@ public enum HitCheck
 {
 	;
 	
-	/** How far inside the hitbox's sides the rays have to hit, blocks. */
-	private static final double SIDE_MARGIN = 0.1;
+	/** How far inside the hitbox's sides the sent ray has to hit, blocks. */
+	private static final double SIDE_MARGIN = 0.03;
 	
 	/** Faster than this (blocks per tick, squared): no post-move check. */
 	private static final double FAST_SQ = 1;
@@ -61,7 +69,7 @@ public enum HitCheck
 		AABB box = target.getBoundingBox().inflate(target.getPickRadius());
 		double margin =
 			Math.min(SIDE_MARGIN, Math.min(box.getXsize(), box.getZsize()) / 4);
-		box = box.deflate(margin, 0, margin);
+		AABB inner = box.deflate(margin, 0, margin);
 		
 		double reach = player.entityInteractionRange();
 		
@@ -79,7 +87,8 @@ public enum HitCheck
 			new Rotation(faker.getServerYaw(), faker.getServerPitch());
 		Rotation sent = new Rotation(player.yRotLast, player.xRotLast);
 		
-		if(!rayHits(eyes, sent, box, reach) || !rayHits(eyes, now, box, reach))
+		if(!rayHits(eyes, sent, inner, reach)
+			|| !rayHits(eyes, now, box, reach))
 			return false;
 			
 		// The attack goes out before this tick's move, so the server judges

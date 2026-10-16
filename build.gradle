@@ -122,12 +122,12 @@ loom {
 
 	runs {
 		clientGameTest {
-			vmArgs.add("-Dfabric.client.gametest.disableNetworkSynchronizer=true")
-			vmArgs.add("-Dwurst.test.templateDir=$screenshotTemplateDir")
+			vmArg("-Dfabric.client.gametest.disableNetworkSynchronizer=true")
+			vmArg("-Dwurst.test.templateDir=$screenshotTemplateDir")
 			if (onlyTests)
-				vmArgs.add("-Dwurst.test.only=$onlyTests")
+				vmArg("-Dwurst.test.only=$onlyTests")
 			if (updateScreenshots)
-				vmArgs.add("-Dwurst.test.updateTemplates=true")
+				vmArg("-Dwurst.test.updateTemplates=true")
 		}
 		
 		clientWithMods {
@@ -138,15 +138,15 @@ loom {
 			inherit client
 			source = sourceSets.gametest
 			runDir = "build/run/clientGameTestWithMods"
-			vmArgs.add("-Dfabric.client.gametest")
-			vmArgs.add("-Dfabric.client.gametest.disableNetworkSynchronizer=true")
-			vmArgs.add("-Dwurst.test.withMods=true")
-			vmArgs.add("-Dwurst.test.templateDir=$screenshotTemplateDir")
+			vmArg("-Dfabric.client.gametest")
+			vmArg("-Dfabric.client.gametest.disableNetworkSynchronizer=true")
+			vmArg("-Dwurst.test.withMods=true")
+			vmArg("-Dwurst.test.templateDir=$screenshotTemplateDir")
 			if (onlyTests)
-				vmArgs.add("-Dwurst.test.only=$onlyTests")
+				vmArg("-Dwurst.test.only=$onlyTests")
 			if (updateScreenshots)
-				vmArgs.add("-Dwurst.test.updateTemplates=true")
-			programArgs.add("--username=Wurst-Bot")
+				vmArg("-Dwurst.test.updateTemplates=true")
+			programArg("--username=Wurst-Bot")
 		}
 	}
 }
@@ -186,12 +186,15 @@ def prepareClientGameTestWithMods = tasks.register("prepareClientGameTestWithMod
 }
 
 // VexBot (a server-side PvP bot mod, MIT) for the gametests: AimAssistComboTest
-// fights one of its bots instead of a husk. The jar isn't on any maven, so it
-// comes from -PvexbotJar (default: ../vexbot-3.0.14mc26.1.2.jar) and goes only
-// into the test client's own mods folder. VexBot posts usage stats to its
-// author's server every few seconds by default; vexbot_settings.json (read
-// from the server directory when the world starts) switches that off.
-def vexbotJar = file(project.findProperty("vexbotJar") ?: "../vexbot-3.0.14mc26.1.2.jar")
+// and the Grim server's AimAssist (Auto combo) test fight one of its bots
+// instead of a husk. The jar isn't on any maven, so it comes from -PvexbotJar
+// (default: ../vexbot-3.0.14mc26.1.2.jar) and goes only into the test client's
+// mods folder and the Grim test server's (gradle/anticheat.gradle). VexBot
+// posts usage stats to its author's server every few seconds by default;
+// vexbot_settings.json (read from the server directory when the world
+// starts) switches that off.
+ext.vexbotJar = file(project.findProperty("vexbotJar") ?: "../vexbot-3.0.14mc26.1.2.jar")
+def vexbotJar = ext.vexbotJar
 def prepareVexbot = tasks.register("prepareVexbot") {
 	def runDir = layout.buildDirectory.dir("run/clientGameTest").get().asFile
 	inputs.property("jar", vexbotJar.path)

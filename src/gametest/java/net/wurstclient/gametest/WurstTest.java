@@ -48,7 +48,8 @@ public class WurstTest implements FabricClientGameTest
 	 * {@code -Dwurst.test.only=mace,scaffold} ({@code gametest mace scaffold}):
 	 * only the tests whose class name contains one of these, ignoring case.
 	 * Unset: all of them. The title screen, world and inventory checks always
-	 * run - everything else builds on them.
+	 * run - everything else builds on them - except the world ones when only
+	 * anticheat servers are picked (see isAnticheatOnly).
 	 */
 	private static final List<String> ONLY = Arrays
 		.stream(System.getProperty("wurst.test.only", "")
@@ -123,23 +124,15 @@ public class WurstTest implements FabricClientGameTest
 		// a busy CPU makes likely).
 		if(!servers.isEmpty())
 			servers.get(0).awaitSettled();
-		
-		LOGGER.info("Creating test world");
-		TestWorldBuilder worldBuilder = context.worldBuilder();
-		worldBuilder.adjustSettings(creator -> {
-			String mcVersion = SharedConstants.getCurrentVersion().name();
-			creator.setName("E2E Test " + mcVersion);
-			creator.setGameMode(WorldCreationUiState.SelectedGameMode.CREATIVE);
-			creator.getGameRules().set(GameRules.SEND_COMMAND_FEEDBACK, false,
-				null);
-			applyFlatPresetWithSmoothStone(creator);
-		});
-		
-		try(TestSingleplayerContext spContext = worldBuilder.create())
-		{
-			testInWorld(context, spContext);
-			LOGGER.info("Exiting test world");
-		}
+			
+		// Only anticheat tests selected (gametest grim/intave/anticheat): no
+		// singleplayer world. They don't use it, and closing it moments after
+		// it was created hit that same deadlock in 3 of 5 such runs
+		// (2026-10-15).
+		if(isAnticheatOnly())
+			LOGGER.info("Only anticheat tests selected - no test world");
+		else
+			testInNewWorld(context);
 		
 		// joins each server like a player, at the normal 20 ticks/s
 		for(int i = 0; i < servers.size(); i++)
@@ -160,6 +153,37 @@ public class WurstTest implements FabricClientGameTest
 	{
 		LOGGER.info("Starting the {} server", server.getName());
 		server.start();
+	}
+	
+	private void testInNewWorld(ClientGameTestContext context)
+	{
+		LOGGER.info("Creating test world");
+		TestWorldBuilder worldBuilder = context.worldBuilder();
+		worldBuilder.adjustSettings(creator -> {
+			String mcVersion = SharedConstants.getCurrentVersion().name();
+			creator.setName("E2E Test " + mcVersion);
+			creator.setGameMode(WorldCreationUiState.SelectedGameMode.CREATIVE);
+			creator.getGameRules().set(GameRules.SEND_COMMAND_FEEDBACK, false,
+				null);
+			applyFlatPresetWithSmoothStone(creator);
+		});
+		
+		try(TestSingleplayerContext spContext = worldBuilder.create())
+		{
+			testInWorld(context, spContext);
+			LOGGER.info("Exiting test world");
+		}
+	}
+	
+	/**
+	 * Whether every -Dwurst.test.only term only picks anticheat servers
+	 * (their tests are AnticheatTestGrim/-Intave, see AnticheatServers).
+	 */
+	private static boolean isAnticheatOnly()
+	{
+		return !ONLY.isEmpty()
+			&& ONLY.stream().allMatch(s -> "anticheattestgrim".contains(s)
+				|| "anticheattestintave".contains(s));
 	}
 	
 	private void testInWorld(ClientGameTestContext context,

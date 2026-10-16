@@ -36,13 +36,21 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.protocol.game.ClientboundDamageEventPacket;
 import net.minecraft.util.Mth;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.ItemAttributeModifiers;
+import net.minecraft.world.item.component.Weapon;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
@@ -55,6 +63,7 @@ import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.util.GameClock;
 import net.wurstclient.util.KeyPresser;
+import net.wurstclient.util.PacketOrder;
 import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.settings.AimAtSetting;
 import net.wurstclient.settings.CheckboxSetting;
@@ -219,8 +228,14 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ "- hold W, hit, release W: lets go of W right after each hit,"
 			+ " coasts, and only holds W again just before the next one, so"
 			+ " you don't run into their reach\n"
-			+ "- W-taps to reset sprint, or S-taps when the target is too"
-			+ " close\n"
+			+ "- resets sprint with an S-tap when the target comes at you"
+			+ " (makes room) and a W-tap when it backs off (keeps up); if"
+			+ " it's neither, an S-tap only when it's too close\n"
+			+ "- keeps W and sprint going when the crosshair slips off the"
+			+ " target for a moment, so the next hit isn't late\n"
+			+ "- never hits a raised shield (see §lShield breaker§r) and"
+			+ " doesn't walk into a target stuck in a cobweb - crits it"
+			+ " instead\n"
 			+ "- doesn't hit a target that's falling (that knocks them into"
 			+ " the ground and lets them rebuild momentum first) - waits"
 			+ " until they land - but hits them at once while they're still"
@@ -233,8 +248,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ " full speed\n\n"
 			+ "When §lAura-Farming§r is enabled, jumps and crits on the way"
 			+ " down.\n\n" + "Requires §lAuto attack§r to be enabled.\n\n"
-			+ "The combo is reset whenever your crosshair leaves the target"
-			+ " or you click the attack button manually.",
+			+ "The combo is reset whenever you look clearly away from the"
+			+ " target (45°+) or click the attack button manually.",
 		false);
 	
 	private final CheckboxSetting jumpReset = new CheckboxSetting("Jump reset",
@@ -244,8 +259,127 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ "Reacts to the actual hit, so delaying a hit to catch a jump"
 			+ " reset doesn't work against it.\n\n"
 			+ "With §lAuto combo§r it also holds W and sprint for it; without,"
-			+ " it only jumps when you're already sprinting forward.",
+			+ " it only jumps when you're already sprinting forward.\n\n"
+			+ "When the target is already too close for that (under 2"
+			+ " blocks), the combo S-taps instead and deflects from there.",
 		true);
+	
+	// The techniques from the combo guides (../howtocombotranscript*.txt),
+	// each its own switch. They all need Auto combo.
+	
+	private final CheckboxSetting flyOuts = new CheckboxSetting("Fly-outs",
+		"With §lAuto combo§r: when the target's next hit is due before yours"
+			+ " (from its last swing and its weapon's attack speed), holds S"
+			+ " and jumps right before it lands, so its knockback carries you"
+			+ " out of the trade - then lets go of S again, so you can build"
+			+ " up speed before the next trade. Only after you've hit it"
+			+ " yourself.",
+		true);
+	
+	private final CheckboxSetting sprintCrits =
+		new CheckboxSetting("Sprint crits",
+			"With §lAuto combo§r: when you're falling and no longer sprinting"
+				+ " (your last sprint hit ended it), keeps W held for the crit"
+				+ " instead of letting go - more distance covered, and punish"
+				+ " crits can be chained.",
+			true);
+	
+	private final CheckboxSetting hopCrits = new CheckboxSetting("Hop crits",
+		"With §lAuto combo§r: hops right after landing a deflection on the"
+			+ " ground and crits on the way down. If the target jump-resets"
+			+ " against your deflection, it jumps right into the crit.",
+		true);
+	
+	private final CheckboxSetting uppercuts = new CheckboxSetting("Uppercuts",
+		"With §lAuto combo§r: when the target is just out of reach and your"
+			+ " hit is ready, sprint-jumps and sprint-hits on the way up -"
+			+ " the jump's speed boost reaches a bit further.",
+		true);
+	
+	private final CheckboxSetting lunges = new CheckboxSetting("Lunges",
+		"With §lAuto combo§r: when the target backs out of the trade (3.5 to"
+			+ " 6 blocks away and moving off), sprint-jumps after it once"
+			+ " you've been sprinting for half a second (full speed), and"
+			+ " hits on the way down.",
+		true);
+	
+	private final CheckboxSetting doubleCrits = new CheckboxSetting(
+		"Double crits",
+		"With §lAuto combo§r: after a hit from up close (where the target"
+			+ " would rather punish-crit than deflect), jumps straight up at"
+			+ " once, holds S and crits on the way down.\n\n"
+			+ "A prediction: if the target deflects instead, you get"
+			+ " stunned.",
+		false);
+	
+	private final CheckboxSetting hops = new CheckboxSetting("Hops",
+		"With §lAuto combo§r: instead of backing off when you'd get too close"
+			+ " between hits, hops (jump and W, never both at once) and"
+			+ " sprint-hits on the way down - targets expecting a crit tend"
+			+ " to stay in the combo.",
+		false);
+	
+	private final CheckboxSetting baits = new CheckboxSetting("Baits",
+		"With §lAuto combo§r: when the target jumps at you from just out of"
+			+ " reach, sometimes (at random, to stay unpredictable) holds S"
+			+ " so its crit misses.",
+		false);
+	
+	private final CheckboxSetting sprintSweeps =
+		new CheckboxSetting("Sprint sweeps",
+			"With §lAuto combo§r: when the target backs out right after your"
+				+ " sprint hit, keeps W held without a sprint reset and hits"
+				+ " again unsprinted - less knockback, so it can't fly out of"
+				+ " the trade.\n\n" + "These hits aren't sprint hits or crits.",
+			false);
+	
+	private final CheckboxSetting weakHits = new CheckboxSetting("Weak hits",
+		"With §lAuto combo§r: squeezes in a weak (uncharged) hit when the"
+			+ " target is about to leave your reach and your next real hit"
+			+ " is still a while off.\n\n"
+			+ "These hits aren't sprint hits or crits.",
+		false);
+	
+	// From VexBot's sword AI (a server-side PvP bot; ideas, not its code).
+	
+	private final CheckboxSetting punishOpenings =
+		new CheckboxSetting("Punish openings",
+			"With §lAuto combo§r: sprint-hits at once, whatever the spacing,"
+				+ " when the target has just swung (hit or miss - it can't hit"
+				+ " again for a while) or just lowered its shield.",
+			true);
+	
+	private final CheckboxSetting shieldBreaker =
+		new CheckboxSetting("Shield breaker",
+			"When the target holds up a shield toward you: switches to an axe"
+				+ " from your hotbar, hits once (that disables the shield for 5"
+				+ " seconds) and switches back. Without an axe, waits for the"
+				+ " shield to come down instead of hitting it - a hit on a"
+				+ " shield does nothing and knocks you back.",
+			true);
+	
+	private final CheckboxSetting crouchDodge =
+		new CheckboxSetting("Crouch dodge",
+			"With §lAuto combo§r: crouches for a moment when the target drops"
+				+ " onto you for a crit and your own hit isn't ready - the"
+				+ " smaller hitbox makes it miss more often.",
+			true);
+	
+	private final CheckboxSetting comboStrafe = new CheckboxSetting(
+		"Combo strafe",
+		"With §lAuto combo§r: strafes (A or D) while in reach between hits,"
+			+ " switching sides after every hit - harder to hit back, and"
+			+ " strafing moves you toward the target a bit slower, which fine-"
+			+ "tunes the spacing. Not while §lDodging§r dodges.",
+		false);
+	
+	private final CheckboxSetting shieldBlock = new CheckboxSetting(
+		"Shield block",
+		"With §lAuto combo§r and a shield in your offhand: raises it when the"
+			+ " target's next hit is due before yours (shields take a"
+			+ " quarter second to come up) and lowers it in time for your"
+			+ " own hit. Not against axes - they disable shields.",
+		false);
 	
 	private final CheckboxSetting auraFarming =
 		new CheckboxSetting("Aura-Farming",
@@ -429,6 +563,73 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	private int deflectUntilTick = Integer.MIN_VALUE;
 	
+	/** Ticks of S left before an S-tap deflection (too close to deflect). */
+	private int deflectSTapTicks;
+	
+	/** When the combo last hit the target (tickCount), for fly-outs. */
+	private int lastHitTick = Integer.MIN_VALUE;
+	
+	/** What the jump in progress is for; decides the keys in the air. */
+	private AirMode airMode = AirMode.NONE;
+	
+	/** A fly-out in progress: ticks so far, and whether the hit came. */
+	private int lastFlyOutTick = Integer.MIN_VALUE;
+	private int flyOutTicks;
+	private boolean flyOutHit;
+	
+	/** Ticks of S left for a bait, and the target jump it was decided on. */
+	private int baitTicks;
+	private boolean baitDecided;
+	
+	/** Chasing a target that backs out with unsprinted hits. */
+	private boolean sweepChase;
+	
+	/** When the last weak hit went out (tickCount). */
+	private int lastWeakHitTick = Integer.MIN_VALUE;
+	
+	/** Ticks in a row sprinting forward on the ground (full speed: ~10). */
+	private int sprintTicks;
+	
+	/** Whether the combo let go of sprint this tick (see AutoSprint). */
+	private boolean sprintHeldOff;
+	
+	/** The target's last swing (tickCount) and what its swing looked like. */
+	private int targetSwingTick = Integer.MIN_VALUE;
+	private boolean targetWasSwinging;
+	private int targetLastSwingTime;
+	private Entity swingTracked;
+	
+	/** The target's movement per tick (see trackTargetMotion). */
+	private Vec3 targetMotion = Vec3.ZERO;
+	private Vec3 lastTargetPos;
+	private Entity motionTracked;
+	
+	/** Until this tick a hit goes out like a deflection (Punish openings). */
+	private int punishUntilTick = Integer.MIN_VALUE;
+	private boolean targetWasBlocking;
+	
+	/**
+	 * Shield breaker: 0 idle, 1 switched to the axe (hit next), 2 hit done
+	 * (switch back next). The slot to go back to.
+	 */
+	private int shieldBreakStage;
+	private int shieldBreakPrevSlot = -1;
+	private int shieldBreakTicks;
+	
+	/** When the last crouch dodge started (tickCount). */
+	private int lastCrouchDodgeTick = Integer.MIN_VALUE;
+	
+	/** Combo strafe: which side, flipped after every hit. */
+	private boolean strafeLeft;
+	private boolean comboStrafing;
+	
+	/** Shield block: holding the use key, and for how long. */
+	private boolean shieldBlocking;
+	private int shieldBlockTicks;
+	
+	/** Further than this from the target, the player looked away. */
+	private static final double LOOKED_AWAY_DEGREES = 45;
+	
 	/**
 	 * Guarantees at most one attack per tick. Without it the airborne-hit path
 	 * and the cooldown path could both fire on the same tick, which showed up
@@ -516,6 +717,21 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(autoAttack);
 		addSetting(autoCombo);
 		addSetting(jumpReset);
+		addSetting(flyOuts);
+		addSetting(sprintCrits);
+		addSetting(hopCrits);
+		addSetting(uppercuts);
+		addSetting(lunges);
+		addSetting(doubleCrits);
+		addSetting(hops);
+		addSetting(baits);
+		addSetting(sprintSweeps);
+		addSetting(weakHits);
+		addSetting(punishOpenings);
+		addSetting(shieldBreaker);
+		addSetting(crouchDodge);
+		addSetting(comboStrafe);
+		addSetting(shieldBlock);
 		addSetting(auraFarming);
 		
 		addSetting(dodging);
@@ -560,6 +776,23 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		spinRemaining = 0F;
 		spinTriggered = false;
 		attackedThisTick = false;
+		resetCombo();
+		lastHitTick = Integer.MIN_VALUE;
+		lastWeakHitTick = Integer.MIN_VALUE;
+		sprintTicks = 0;
+		swingTracked = null;
+		motionTracked = null;
+		lastTargetPos = null;
+		targetMotion = Vec3.ZERO;
+		punishUntilTick = Integer.MIN_VALUE;
+		lastFlyOutTick = Integer.MIN_VALUE;
+		targetWasBlocking = false;
+		shieldBreakStage = 0;
+		shieldBreakPrevSlot = -1;
+		lastCrouchDodgeTick = Integer.MIN_VALUE;
+		comboStrafing = false;
+		shieldBlocking = false;
+		shieldBlockTicks = 0;
 		resetDodge();
 		EVENTS.add(UpdateListener.class, this);
 		EVENTS.add(RenderListener.class, this);
@@ -582,6 +815,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		target = null;
 		resetAimState();
 		resetCombo();
+		resetShieldBreak();
 		resetDodge();
 		stopMusic();
 	}
@@ -622,7 +856,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return;
 		}
 		
-		if(!aimWhileBlocking.isChecked() && MC.player.isUsingItem())
+		// (the combo's own Shield block keeps going)
+		if(!aimWhileBlocking.isChecked() && MC.player.isUsingItem()
+			&& !shieldBlocking)
 		{
 			target = null;
 			aim.invalidate();
@@ -674,9 +910,14 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			resetDodge();
 			return;
 		}
-		WURST.getHax().autoSwordHack.setSlot(target);
+		// (not while the shield breaker holds the axe)
+		if(shieldBreakStage == 0)
+			WURST.getHax().autoSwordHack.setSlot(target);
 		
 		updateDodge();
+		trackTargetSwing();
+		trackTargetMotion();
+		trackSprint();
 		reactToTargetHit();
 		
 		// Apply the aim. Server-side keeps the camera still and only rewrites
@@ -730,14 +971,25 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// (This used to also reset the attack cooldown - every tick the
 		// crosshair slipped off a strafing target cost a full cooldown, so
 		// clear chances to hit went by and you had to click yourself.)
+		// (The combo also used to reset whenever the crosshair slipped off the
+		// target for a moment - a strafing or jumping one, a lag spike. That
+		// let go of W, so once the crosshair was back on, sprint had to be
+		// rebuilt first and the charged hit waited 2 ticks or never came.
+		// Now only looking clearly away resets it; whether a hit can go out
+		// right now is HitCheck's call in attackTarget().)
 		boolean silentSpin =
 			spinRemaining > 0F && faceTarget.getSelected() == FaceTarget.SERVER;
-		if(attackClicked || (!silentSpin && !isCrosshairOnTarget()))
+		if(attackClicked || !silentSpin && !isCrosshairOnTarget()
+			&& RotationUtils.getAngleToLookVec(
+				target.getBoundingBox().getCenter()) > LOOKED_AWAY_DEGREES)
 		{
 			resetCombo();
 			return;
 		}
 		
+		if(updateShieldBreak())
+			return;
+			
 		// (A separate path used to hit any airborne target right away. A
 		// falling one gets falling knockback - into the ground - so it lands
 		// and rebuilds its momentum first; now a falling target is waited
@@ -1000,7 +1252,18 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	private boolean attackTarget()
 	{
-		if(attackedThisTick || target == null)
+		return attackTarget(false);
+	}
+	
+	/**
+	 * @param anyHit
+	 *            also an unsprinted or uncharged hit (Sprint sweeps, Weak
+	 *            hits) - the caller decided it's worth it
+	 */
+	private boolean attackTarget(boolean anyHit)
+	{
+		// (nobody can attack while using an item - a shield, food)
+		if(attackedThisTick || target == null || MC.player.isUsingItem())
 			return false;
 			
 		// Only a hit the server can verify - with the rotation it already has
@@ -1010,11 +1273,16 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		if(!HitCheck.isVerifiable(target))
 			return false;
 			
+		// A hit on a raised shield does nothing and knocks us back - only
+		// one that disables it (an axe) is worth it.
+		if(isShieldUp(target) && !isShieldBreaker(MC.player.getMainHandItem()))
+			return false;
+			
 		// A sprint hit (knockback, keeps combos going) or, falling, a crit
 		// (+50% damage) - never a plain sweep. The server decides from the
 		// state it already has - the attack packet goes out before this
 		// tick's movement and sprint updates - so wait until it has one.
-		if(!isCritReady() && !isSprintHitReady())
+		if(!anyHit && !isCritReady() && !isSprintHitReady())
 		{
 			// (in the air the combo lets go of sprint for the crit)
 			if(!isAirborne())
@@ -1031,14 +1299,17 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	// ── Combo
 	// ─────────────────────────────────────────────────────────────────
 	//
-	// The way good players hold a sword combo (Theobald, Intel): sprint hits
-	// only; hold W, hit, release W - and don't hold W again until just before
-	// the next hit, or you walk into their reach; W-tap to reset sprint, S-tap
-	// when they're too close; don't hit someone who's falling (falling
-	// knockback sends them into the ground and they rebuild momentum first);
-	// sprint-hit right back when they hit you (a deflection); jump the moment
-	// you're hit (a jump reset); and hold a hit back once a few hits in, when
-	// people start jump resetting, so they jump into a launch instead.
+	// The way good players hold a sword combo (Theobald, Intel - see
+	// ../howtocombotranscript*.txt): sprint hits and crits; hold W, hit,
+	// release W - and don't hold W again until just before the next hit, or
+	// you walk into their reach; reset sprint with an S-tap when they come at
+	// you and a W-tap when they back off; don't hit someone who's falling
+	// (falling knockback sends them into the ground and they rebuild momentum
+	// first); sprint-hit right back when they hit you (a deflection - with an
+	// S-tap first when too close); jump the moment you're hit (a jump reset);
+	// fly out of a trade when their hit comes before yours can; and the
+	// jumps: punish/sprint crits, hop crits, uppercuts, lunges, double crits
+	// and hops (see the settings).
 	
 	/** Hitbox distance from which the target is in reach. */
 	private static final double REACH = 3.0;
@@ -1046,8 +1317,17 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	/** Closer than this, the target can easily hit back: S to back off. */
 	private static final double TOO_CLOSE = 2.0;
 	
-	/** Closer than this after a hit, the sprint reset is an S-tap. */
+	/**
+	 * Closer than this after a hit, the sprint reset is an S-tap - when the
+	 * target isn't clearly moving toward or away from us.
+	 */
 	private static final double S_TAP_DISTANCE = 2.3;
+	
+	/**
+	 * Blocks per tick the target has to move toward (or away from) us for
+	 * the sprint reset to be an S-tap (or a W-tap) whatever the distance.
+	 */
+	private static final double TAP_SPEED = 0.05;
 	
 	/**
 	 * How many ticks before the hit W goes down: one to start sprinting, one
@@ -1058,83 +1338,75 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	/** How long after being hit a hit still counts as a deflection. */
 	private static final int DEFLECT_TICKS = 4;
 	
-	/** From this ping a player is too laggy for combos: just keep hitting. */
+	/**
+	 * From this ping - the target's alone, or both added up - trades stack
+	 * hits: just keep hitting, falling target or not.
+	 */
 	private static final int LAGGY_PING_MS = 200;
+	
+	/** Ticks sprinting forward until you're at full speed (~half a second). */
+	private static final int FULL_SPEED_TICKS = 10;
+	
+	/** The longest a fly-out holds S, in ticks. */
+	private static final int MAX_FLYOUT_TICKS = 12;
+	
+	/** What the jump in progress is for - it decides the keys in the air. */
+	private enum AirMode
+	{
+		/** A jump reset, a drop, Aura-Farming: punish or sprint crit. */
+		NONE,
+		/** Sprint-hit on the way up, then like NONE. */
+		UPPERCUT,
+		/** W and sprint all the way: the most distance. */
+		LUNGE,
+		/** No W: a short hop for a crit after a deflection. */
+		HOP_CRIT,
+		/** Straight up, then S: crit on the way down, out of the trade. */
+		DOUBLE_CRIT,
+		/** W only in the air: sprint-hit on the way down. */
+		HOP
+	}
 	
 	private void updateAutoCombo()
 	{
 		double dist = Math.sqrt(EntityUtils.distanceToHitboxSq(target));
 		boolean deflecting = isDeflecting();
+		double closing = closingSpeed(target);
+		sprintHeldOff = false;
+		updateShieldBlock(dist);
 		
 		switch(comboPhase)
 		{
 			case IDLE:
 			if(isAirborne())
+				holdAirKeys();
+			else
 			{
-				// In the air (a jump reset, Aura-Farming's jump, a drop): a
-				// crit on the way down. W stays held while still going up -
-				// the momentum - and is let go once falling, so the server
-				// has us not sprinting by the hit (a punish crit).
-				if(MC.player.getDeltaMovement().y > 0)
-				{
-					releaseBackward();
-					holdForward();
-					KeyPresser.press(MC.options.keySprint);
-				}else
-				{
-					releaseForward();
-					releaseBackward();
-					KeyPresser.release(MC.options.keySprint);
-				}
-				
-			}else if(auraFarming.isChecked())
-			{
-				// jumps for a crit (and the spin) once charged and in reach
-				releaseBackward();
-				holdForward();
-				KeyPresser.press(MC.options.keySprint);
-				if(isHitCharged() && dist < REACH && !MC.player.isInWater()
-					&& !MC.player.isInLava() && !MC.player.isPassenger())
-					KeyPresser.press(MC.options.keyJump);
-				break;
-				
-			}else if(dist > REACH || deflecting
-				|| ticksUntilCharged() <= SPRINT_LEAD_TICKS)
-			{
-				// Spacing: chase from outside reach; just before the next hit
-				// hold W to be sprinting for it; otherwise coast, or back off
-				// with S when too close - never walk into their reach between
-				// hits.
-				releaseBackward();
-				holdForward();
-				KeyPresser.press(MC.options.keySprint);
-				
-			}else if(dist < TOO_CLOSE)
-			{
-				releaseForward();
-				holdBackward();
-				
-			}else
-			{
-				releaseForward();
-				releaseBackward();
+				airMode = AirMode.NONE;
+				if(updateGroundCombo(dist, deflecting, closing))
+					break;
 			}
 			
 			// A target in the air is hit at once while it's still going up -
 			// a jump reset that came too early gets it launched - and waited
 			// for while it's falling (see isGoodMomentToHit). No guessing
 			// when they'll jump.
-			if(!isHitCharged() || dist > REACH
-				|| !deflecting && !isGoodMomentToHit() || !attackTarget())
+			boolean inReach = dist <= REACH;
+			boolean goodMoment = deflecting || isGoodMomentToHit();
+			if(isHitCharged() && inReach && goodMoment
+				&& attackTarget(sweepChase))
+			{
+				afterHit(dist, deflecting, closing);
 				break;
-				
-			// Hold W, hit, release W - then reset sprint: an S-tap if
-			// they're still close, else a W-tap (just letting go of W).
-			comboHitCount++;
-			releaseForward();
-			resetWithS = dist < S_TAP_DISTANCE && !isAirborne();
-			resetTicksLeft = resetWithS ? 2 : 1;
-			comboPhase = ComboPhase.RESETTING;
+			}
+			
+			// Weak hits: one more (uncharged) hit before they leave reach.
+			if(weakHits.isChecked() && !isHitCharged() && inReach
+				&& dist > REACH - 0.4 && closing < -0.1 && goodMoment
+				&& ticksUntilCharged() > 3 && tickCount - lastWeakHitTick > 6
+				&& MC.player.getAttackStrengthScale(0.5F) >= 0.3F
+				&& attackTarget(true))
+				lastWeakHitTick = tickCount;
 			break;
 			
 			case RESETTING:
@@ -1147,14 +1419,654 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			releaseForward();
 			if(resetWithS)
 				holdBackward();
-			KeyPresser.release(MC.options.keySprint);
+			releaseSprint();
 			if(--resetTicksLeft <= 0)
 			{
 				releaseBackward();
 				comboPhase = ComboPhase.IDLE;
 			}
 			break;
+			
+			case FLYOUT:
+			// Holding S into their hit, so its knockback carries us out of
+			// the trade (the jump at the start carries us further). Let go
+			// once out of their reach - or once their hit clearly didn't
+			// come - so we can build speed again before the next trade
+			// instead of backing off for too long.
+			releaseForward();
+			holdBackward();
+			releaseSprint();
+			flyOutTicks++;
+			if(flyOutHit && dist > REACH + 0.5 || !flyOutHit && flyOutTicks > 6
+				|| flyOutTicks >= MAX_FLYOUT_TICKS)
+			{
+				releaseBackward();
+				comboPhase = ComboPhase.IDLE;
+			}
+			break;
 		}
+	}
+	
+	/**
+	 * The combo on the ground: what to do between hits. Returns true if this
+	 * tick is spoken for (a jump, a fly-out) and no hit should go out.
+	 */
+	private boolean updateGroundCombo(double dist, boolean deflecting,
+		double closing)
+	{
+		LocalPlayer player = MC.player;
+		boolean canJump = !player.isInWater() && !player.isInLava()
+			&& !player.isPassenger() && !player.onClimbable();
+		
+		if(auraFarming.isChecked())
+		{
+			// jumps for a crit (and the spin) once charged and in reach
+			releaseBackward();
+			holdForward();
+			pressSprint();
+			if(isHitCharged() && dist < REACH && canJump)
+				KeyPresser.press(MC.options.keyJump);
+			return true;
+		}
+		
+		// S-tap deflection: too close to stun them, so a tick of S first.
+		if(deflectSTapTicks > 0)
+		{
+			deflectSTapTicks--;
+			releaseForward();
+			holdBackward();
+			releaseSprint();
+			return true;
+		}
+		
+		// Crouch dodge: they drop onto us for a crit and our hit isn't
+		// ready - a smaller hitbox for a moment.
+		if(crouchDodge.isChecked() && tickCount - lastCrouchDodgeTick > 15
+			&& ticksUntilCharged() > 2 && isCritDiveIncoming())
+		{
+			KeyPresser.press(MC.options.keyShift, 3);
+			lastCrouchDodgeTick = tickCount;
+		}
+		
+		// Stuck in a cobweb, knockback can't move them and walking in
+		// would trap us too: stay out and crit (a hop, a crit on the way
+		// down).
+		if(isInCobweb(target) && !isInCobweb(player))
+		{
+			releaseForward();
+			releaseBackward();
+			releaseSprint();
+			releaseComboStrafe();
+			if(canJump && dist <= REACH && ticksUntilCharged() <= 3)
+			{
+				KeyPresser.press(MC.options.keyJump);
+				airMode = AirMode.HOP_CRIT;
+			}
+			return true;
+		}
+		
+		// Fly-out: their next hit comes before ours can, too early even to
+		// deflect - take it holding S, jumping backward, out of the trade.
+		// Only once we've hit them (flying out mid-combo lets them chase and
+		// get extra hits). Flying out of every trade a deflection could win
+		// let a VexBot chase and combo us for 3 seconds straight.
+		if(flyOuts.isChecked() && !deflecting && canJump && hasRoomBehind()
+			&& tickCount - lastHitTick <= 15 && tickCount - lastFlyOutTick > 20
+			&& isTargetHitComing()
+			&& ticksUntilCharged() > targetTicksUntilCharged() + DEFLECT_TICKS)
+		{
+			comboPhase = ComboPhase.FLYOUT;
+			lastFlyOutTick = tickCount;
+			flyOutTicks = 0;
+			flyOutHit = false;
+			releaseForward();
+			holdBackward();
+			releaseSprint();
+			KeyPresser.press(MC.options.keyJump);
+			return true;
+		}
+		
+		// Bait: they jump at us from just out of reach - S, and their crit
+		// misses. Not every time.
+		if(baitTicks > 0)
+		{
+			baitTicks--;
+			releaseForward();
+			holdBackward();
+			releaseSprint();
+			return false;
+		}
+		boolean targetRising = target.getY() - target.yo > 0.05;
+		if(!targetRising)
+			baitDecided = false;
+		else if(baits.isChecked() && !baitDecided && !deflecting
+			&& closing > 0.1 && dist > REACH && dist < REACH + 2.5)
+		{
+			baitDecided = true;
+			if(random.nextBoolean())
+			{
+				baitTicks = 3;
+				releaseForward();
+				holdBackward();
+				releaseSprint();
+				return false;
+			}
+		}
+		
+		boolean fullSpeed = sprintTicks >= FULL_SPEED_TICKS;
+		boolean sprinting = player.isSprinting() && player.wasSprinting;
+		
+		// Lunge: they back out of the trade - sprint-jump after them, once
+		// at full speed (a lunge from a standstill covers less ground).
+		if(lunges.isChecked() && canJump && fullSpeed && closing < -0.05
+			&& dist > REACH + 0.5 && dist <= 6 && ticksUntilCharged() <= 6
+			&& !isFalling(target))
+		{
+			releaseBackward();
+			holdForward();
+			pressSprint();
+			KeyPresser.press(MC.options.keyJump);
+			airMode = AirMode.LUNGE;
+			return true;
+		}
+		
+		// Uppercut: just out of reach with the hit ready - a sprint jump's
+		// speed boost reaches a bit further, and the hit goes out rising.
+		if(uppercuts.isChecked() && canJump && sprinting && dist > REACH
+			&& dist <= REACH + 0.7 && ticksUntilCharged() <= 1
+			&& closing <= TAP_SPEED && !isFalling(target))
+		{
+			releaseBackward();
+			holdForward();
+			pressSprint();
+			KeyPresser.press(MC.options.keyJump);
+			airMode = AirMode.UPPERCUT;
+			return true;
+		}
+		
+		if(sweepChase)
+		{
+			// Sprint sweeps: no sprint reset, W stays down while they back
+			// out - the next hit has less knockback, so they can't fly out.
+			if(closing >= -0.05 || dist > REACH + 1)
+				sweepChase = false;
+			else
+			{
+				releaseBackward();
+				holdForward();
+				releaseSprint();
+				return false;
+			}
+		}
+		
+		if(dist > REACH || deflecting
+			|| ticksUntilCharged() <= SPRINT_LEAD_TICKS)
+		{
+			// Spacing: chase from outside reach; just before the next hit
+			// hold W to be sprinting for it; otherwise coast, or back off
+			// with S when too close - never walk into their reach between
+			// hits.
+			releaseBackward();
+			holdForward();
+			pressSprint();
+			
+		}else if(hops.isChecked() && canJump && dist >= TOO_CLOSE - 0.5)
+		{
+			// Hops: jump without W, W in the air, a sprint hit on the way
+			// down - instead of backing off.
+			releaseForward();
+			releaseBackward();
+			KeyPresser.press(MC.options.keyJump);
+			airMode = AirMode.HOP;
+			
+		}else if(dist < TOO_CLOSE)
+		{
+			releaseForward();
+			holdBackward();
+			
+		}else
+		{
+			releaseForward();
+			releaseBackward();
+		}
+		
+		// Combo strafe: A or D while in reach, the side flipped every hit.
+		if(comboStrafe.isChecked() && dist <= REACH + 0.5
+			&& dodgeDirection == Dodge.NONE)
+		{
+			holdDodge(strafeLeft ? Dodge.LEFT : Dodge.RIGHT);
+			comboStrafing = true;
+		}else
+			releaseComboStrafe();
+		return false;
+	}
+	
+	/**
+	 * The keys in the air, by what the jump was for. A plain one (a jump
+	 * reset, a drop) ends in a punish crit: W while rising - the momentum -
+	 * and let go once falling, so the server has us not sprinting by the
+	 * hit. If sprinting already ended (our last sprint hit ended it), W can
+	 * stay down for a sprint crit.
+	 */
+	private void holdAirKeys()
+	{
+		LocalPlayer player = MC.player;
+		boolean rising = player.getDeltaMovement().y > 0;
+		switch(airMode)
+		{
+			case LUNGE, HOP ->
+			{
+				releaseBackward();
+				holdForward();
+				pressSprint();
+			}
+			
+			case HOP_CRIT ->
+			{
+				releaseForward();
+				releaseBackward();
+				releaseSprint();
+			}
+			
+			case DOUBLE_CRIT ->
+			{
+				releaseForward();
+				holdBackward();
+				releaseSprint();
+			}
+			
+			default ->
+			{
+				releaseBackward();
+				if(rising)
+				{
+					holdForward();
+					pressSprint();
+				}else
+				{
+					releaseSprint();
+					if(sprintCrits.isChecked() && !player.isSprinting())
+						holdForward();
+					else
+						releaseForward();
+				}
+			}
+		}
+	}
+	
+	/**
+	 * After a hit: release W and reset sprint - an S-tap when they come at
+	 * us (it makes room), a W-tap when they back off (it keeps up), else by
+	 * distance - or, with the settings for it, jump at once (hop crit after
+	 * a deflection, double crit from up close) or keep W down (sprint
+	 * sweeps).
+	 */
+	private void afterHit(double dist, boolean deflecting, double closing)
+	{
+		comboHitCount++;
+		lastHitTick = tickCount;
+		strafeLeft = !strafeLeft;
+		boolean onGround = !isAirborne();
+		
+		if(sweepChase)
+		{
+			// one more unsprinted hit; the chase goes on while they back out
+			releaseBackward();
+			holdForward();
+			releaseSprint();
+			return;
+		}
+		
+		if(sprintSweeps.isChecked() && onGround && closing < -0.15)
+		{
+			// they back out right away: chase with sprint sweeps
+			sweepChase = true;
+			releaseBackward();
+			holdForward();
+			releaseSprint();
+			return;
+		}
+		
+		releaseForward();
+		
+		boolean canJump = onGround && !MC.player.isInWater()
+			&& !MC.player.isInLava() && !MC.player.isPassenger();
+		if(canJump && deflecting && hopCrits.isChecked())
+		{
+			// hop crit: a hop right after the deflection
+			KeyPresser.press(MC.options.keyJump);
+			airMode = AirMode.HOP_CRIT;
+			resetWithS = false;
+			resetTicksLeft = 1;
+			comboPhase = ComboPhase.RESETTING;
+			return;
+		}
+		if(canJump && doubleCrits.isChecked() && dist < TOO_CLOSE)
+		{
+			// double crit: straight up at once, S after the jump
+			KeyPresser.press(MC.options.keyJump);
+			airMode = AirMode.DOUBLE_CRIT;
+			resetWithS = false;
+			resetTicksLeft = 1;
+			comboPhase = ComboPhase.RESETTING;
+			return;
+		}
+		
+		if(closing > TAP_SPEED)
+			resetWithS = true;
+		else if(closing < -TAP_SPEED)
+			resetWithS = false;
+		else
+			resetWithS = dist < S_TAP_DISTANCE;
+		resetWithS &= onGround;
+		resetTicksLeft = resetWithS ? closing > 0.2 ? 3 : 2 : 1;
+		comboPhase = ComboPhase.RESETTING;
+	}
+	
+	/**
+	 * Blocks per tick the entity moves toward us (negative: away), from its
+	 * positions - other players' motion isn't sent, only where they are.
+	 */
+	private double closingSpeed(Entity e)
+	{
+		double toX = MC.player.getX() - e.getX();
+		double toZ = MC.player.getZ() - e.getZ();
+		double len = Math.sqrt(toX * toX + toZ * toZ);
+		if(len < 1.0E-4)
+			return 0;
+		
+		return (targetMotion.x * toX + targetMotion.z * toZ) / len;
+	}
+	
+	/**
+	 * The target's movement per tick, from where it was each tick and
+	 * smoothed a little (like VexBot): its last-tick step alone reads 0
+	 * after a position snap (a teleport, a correction).
+	 */
+	private void trackTargetMotion()
+	{
+		Vec3 pos = target.position();
+		if(target != motionTracked || lastTargetPos == null)
+			targetMotion = Vec3.ZERO;
+		else
+		{
+			Vec3 step = pos.subtract(lastTargetPos);
+			// a teleport isn't movement
+			if(step.horizontalDistanceSqr() > 4)
+				step = Vec3.ZERO;
+			targetMotion = targetMotion.scale(0.5).add(step.scale(0.5));
+		}
+		motionTracked = target;
+		lastTargetPos = pos;
+	}
+	
+	/** Notes when the target swings: its attack cooldown starts over then. */
+	private void trackTargetSwing()
+	{
+		if(target != swingTracked)
+		{
+			swingTracked = target;
+			targetSwingTick = Integer.MIN_VALUE;
+			targetWasSwinging = false;
+			targetLastSwingTime = 0;
+		}
+		if(!(target instanceof LivingEntity le))
+			return;
+		
+		boolean near =
+			EntityUtils.distanceToHitboxSq(le) <= (REACH + 0.5) * (REACH + 0.5);
+		if(le.swinging
+			&& (!targetWasSwinging || le.swingTime < targetLastSwingTime))
+		{
+			targetSwingTick = tickCount;
+			// it can't hit again for a while: answer the swing
+			if(punishOpenings.isChecked() && near)
+				punishUntilTick = tickCount + DEFLECT_TICKS;
+		}
+		targetWasSwinging = le.swinging;
+		targetLastSwingTime = le.swingTime;
+		
+		// it lowered its shield: hit before it comes back up
+		boolean blocking = le.isBlocking();
+		if(punishOpenings.isChecked() && targetWasBlocking && !blocking && near)
+			punishUntilTick = tickCount + DEFLECT_TICKS + 1;
+		targetWasBlocking = blocking;
+	}
+	
+	/** Ticks in a row sprinting forward on the ground (for lunges). */
+	private void trackSprint()
+	{
+		LocalPlayer player = MC.player;
+		if(!player.isSprinting() || !player.input.hasForwardImpulse())
+			sprintTicks = 0;
+		else if(player.onGround())
+			sprintTicks++;
+	}
+	
+	/**
+	 * Ticks until the target can deal a full hit again: its weapon's attack
+	 * speed (players; mobs a second) since its last swing, at the same 90%
+	 * as ours. 0 if it hasn't swung yet.
+	 */
+	private int targetTicksUntilCharged()
+	{
+		if(targetSwingTick == Integer.MIN_VALUE)
+			return 0;
+		
+		double cooldown = 20;
+		if(target instanceof Player p)
+		{
+			ItemStack weapon = p.getMainHandItem();
+			double speed =
+				weapon.getOrDefault(DataComponents.ATTRIBUTE_MODIFIERS,
+					ItemAttributeModifiers.EMPTY).compute(
+						Attributes.ATTACK_SPEED, 4, EquipmentSlot.MAINHAND);
+			cooldown = 20 / Math.max(speed, 0.1);
+		}
+		
+		double since = tickCount - targetSwingTick;
+		return Math.max(0, (int)Math.ceil(0.9 * cooldown - 0.5 - since));
+	}
+	
+	/**
+	 * Whether the target's next hit is about to come: it's facing us, within
+	 * its reach of us (a bit more for momentum), and charged within a tick.
+	 */
+	private boolean isTargetHitComing()
+	{
+		// only a target that's fighting: one that never swings (a dummy, a
+		// passive mob) isn't about to hit anyone
+		if(!(target instanceof LivingEntity)
+			|| tickCount - targetSwingTick > 40)
+			return false;
+		
+		Vec3 eyes = target.getEyePosition();
+		Vec3 nearest = closestPoint(MC.player.getBoundingBox(), eyes);
+		if(eyes.distanceToSqr(nearest) > 3.3 * 3.3)
+			return false;
+		
+		if(facingUs(target, MC.player.position()) < 0.8)
+			return false;
+		
+		return targetTicksUntilCharged() <= 1;
+	}
+	
+	private static Vec3 closestPoint(AABB box, Vec3 p)
+	{
+		return new Vec3(Mth.clamp(p.x, box.minX, box.maxX),
+			Mth.clamp(p.y, box.minY, box.maxY),
+			Mth.clamp(p.z, box.minZ, box.maxZ));
+	}
+	
+	/**
+	 * Whether S would actually move us: no wall right behind (VexBot's
+	 * MeleeWallGuard - an S-tap or fly-out into a wall does nothing).
+	 */
+	private boolean hasRoomBehind()
+	{
+		double yaw = Math.toRadians(MC.player.getYRot());
+		AABB moved = MC.player.getBoundingBox().move(Math.sin(yaw) * 0.55, 0,
+			-Math.cos(yaw) * 0.55);
+		return MC.level.noCollision(MC.player, moved);
+	}
+	
+	/** The target drops onto us, charged, from our height or above. */
+	private boolean isCritDiveIncoming()
+	{
+		if(!(target instanceof LivingEntity) || target.onGround())
+			return false;
+		if(target.getY() - target.yo > -0.05
+			|| target.getY() < MC.player.getY() - 0.1)
+			return false;
+		
+		return EntityUtils.distanceToHitboxSq(target) <= (REACH + 0.5)
+			* (REACH + 0.5) && targetTicksUntilCharged() == 0;
+	}
+	
+	private static boolean isInCobweb(Entity e)
+	{
+		return MC.level.getBlockState(e.blockPosition()).is(Blocks.COBWEB)
+			|| MC.level.getBlockState(BlockPos.containing(e.getEyePosition()))
+				.is(Blocks.COBWEB);
+	}
+	
+	private void releaseComboStrafe()
+	{
+		if(!comboStrafing)
+			return;
+		comboStrafing = false;
+		if(dodgeDirection == Dodge.NONE)
+			releaseDodgeKeys();
+	}
+	
+	/**
+	 * Whether the entity holds up a shield toward us: vanilla blocks hits
+	 * coming from in front of it.
+	 */
+	private static boolean isShieldUp(Entity e)
+	{
+		if(!(e instanceof LivingEntity le) || !le.isBlocking())
+			return false;
+		
+		Vec3 toUs = MC.player.position().subtract(le.position());
+		Vec3 look = le.getLookAngle();
+		return look.x * toUs.x + look.z * toUs.z > 0;
+	}
+	
+	/** A weapon whose hits disable shields (axes). */
+	private static boolean isShieldBreaker(ItemStack stack)
+	{
+		Weapon weapon = stack.get(DataComponents.WEAPON);
+		return weapon != null && weapon.disableBlockingForSeconds() > 0;
+	}
+	
+	private static int findShieldBreakerSlot()
+	{
+		for(int i = 0; i < 9; i++)
+			if(isShieldBreaker(MC.player.getInventory().getItem(i)))
+				return i;
+		return -1;
+	}
+	
+	/**
+	 * Shield breaker: switch to the axe, hit (next tick - the slot change
+	 * has to reach the server first, and never after an attack in the same
+	 * tick, see PacketOrder), switch back. Returns true while it runs.
+	 */
+	private boolean updateShieldBreak()
+	{
+		if(shieldBreakStage == 1)
+		{
+			shieldBreakTicks++;
+			if(!isShieldUp(target) || shieldBreakTicks > 10
+				|| attackTarget(true))
+				shieldBreakStage = 2;
+			return true;
+		}
+		
+		if(shieldBreakStage == 2)
+		{
+			if(!PacketOrder.canChangeSlotNow())
+				return true;
+			if(shieldBreakPrevSlot >= 0)
+				selectSlot(shieldBreakPrevSlot);
+			shieldBreakStage = 0;
+			shieldBreakPrevSlot = -1;
+			return true;
+		}
+		
+		if(!shieldBreaker.isChecked() || !isShieldUp(target)
+			|| EntityUtils.distanceToHitboxSq(target) > REACH * REACH)
+			return false;
+		
+		// already holding one: just hit
+		if(isShieldBreaker(MC.player.getMainHandItem()))
+			return attackTarget(true);
+		
+		int axe = findShieldBreakerSlot();
+		if(axe < 0)
+			return false;
+		if(!PacketOrder.canChangeSlotNow())
+			return true;
+		
+		shieldBreakPrevSlot = MC.player.getInventory().getSelectedSlot();
+		selectSlot(axe);
+		shieldBreakStage = 1;
+		shieldBreakTicks = 0;
+		return true;
+	}
+	
+	private static void selectSlot(int slot)
+	{
+		MC.player.getInventory().setSelectedSlot(slot);
+		IMC.getInteractionManager().syncSelectedSlot();
+	}
+	
+	/** Puts the weapon back if the shield breaker was holding the axe. */
+	private void resetShieldBreak()
+	{
+		if(shieldBreakStage != 0 && shieldBreakPrevSlot >= 0
+			&& MC.player != null && PacketOrder.canChangeSlotNow())
+			selectSlot(shieldBreakPrevSlot);
+		shieldBreakStage = 0;
+		shieldBreakPrevSlot = -1;
+	}
+	
+	/**
+	 * Shield block: up while the target's hit is due before ours (a shield
+	 * takes 5 ticks to block), down in time for our own hit.
+	 */
+	private void updateShieldBlock(double dist)
+	{
+		ItemStack offhand = MC.player.getOffhandItem();
+		boolean want = shieldBlock.isChecked()
+			&& offhand.has(DataComponents.BLOCKS_ATTACKS)
+			&& !MC.player.getCooldowns().isOnCooldown(offhand)
+			&& target instanceof LivingEntity le
+			&& !isShieldBreaker(le.getMainHandItem()) && dist <= 4.5
+			&& facingUs(target, MC.player.position()) >= 0.8
+			&& targetTicksUntilCharged() <= 6 && ticksUntilCharged() > 2
+			&& shieldBlockTicks < 40;
+		
+		if(want)
+		{
+			MC.options.keyUse.setDown(true);
+			shieldBlocking = true;
+			shieldBlockTicks++;
+		}else
+			stopShieldBlock();
+	}
+	
+	private void stopShieldBlock()
+	{
+		if(!shieldBlocking)
+		{
+			shieldBlockTicks = 0;
+			return;
+		}
+		IKeyMapping.get(MC.options.keyUse).resetPressedState();
+		shieldBlocking = false;
+		shieldBlockTicks = 0;
 	}
 	
 	/**
@@ -1197,18 +2109,29 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			&& e.getY() - e.yo < -0.01;
 	}
 	
+	/**
+	 * Whether the target is very laggy, or both pings together are high: the
+	 * knockback lands late either way and the trade stacks hits, so hitting
+	 * fast pays off more than waiting.
+	 */
 	private static boolean isLaggy(Entity e)
 	{
 		if(!(e instanceof Player) || MC.getConnection() == null)
 			return false;
 		
 		PlayerInfo info = MC.getConnection().getPlayerInfo(e.getUUID());
-		return info != null && info.getLatency() >= LAGGY_PING_MS;
+		if(info == null)
+			return false;
+		
+		PlayerInfo own = MC.getConnection().getPlayerInfo(MC.player.getUUID());
+		int ownPing = own == null ? 0 : own.getLatency();
+		return info.getLatency() + ownPing >= LAGGY_PING_MS;
 	}
 	
+	/** A deflection, or punishing an opening (see Punish openings). */
 	private boolean isDeflecting()
 	{
-		return tickCount <= deflectUntilTick;
+		return tickCount <= deflectUntilTick || tickCount <= punishUntilTick;
 	}
 	
 	/**
@@ -1231,10 +2154,35 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		if(!justHurt || hurtBy == null
 			|| System.nanoTime() - hurtBy > 500_000_000L)
 			return;
+			
+		// it just attacked, so its cooldown starts over (its swing packet
+		// may come a tick later)
+		targetSwingTick = tickCount;
 		
 		boolean combo = autoAttack.isChecked() && autoCombo.isChecked();
+		
+		// Flying out: the hit was the point (its knockback carries us off),
+		// no deflection and no jump reset back into the trade.
+		if(combo && comboPhase == ComboPhase.FLYOUT)
+		{
+			flyOutHit = true;
+			return;
+		}
+		
 		if(combo)
 			deflectUntilTick = tickCount + DEFLECT_TICKS;
+			
+		// Too close for a deflection to stun them: S-tap first to make a bit
+		// of room, then deflect (an S-tap deflection) - a jump reset would
+		// only keep us this close.
+		if(combo && player.onGround()
+			&& Math.sqrt(EntityUtils.distanceToHitboxSq(target)) < TOO_CLOSE)
+		{
+			resetCombo();
+			deflectSTapTicks = 1;
+			deflectUntilTick = tickCount + DEFLECT_TICKS + 2;
+			return;
+		}
 		
 		if(!jumpReset.isChecked() || !player.onGround() || player.isInWater()
 			|| player.isInLava() || player.isPassenger())
@@ -1270,6 +2218,12 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	private void holdBackward()
 	{
+		// nothing to gain from walking into a wall
+		if(!hasRoomBehind())
+		{
+			releaseBackward();
+			return;
+		}
 		MC.options.keyDown.setDown(true);
 		backwardKeyForced = true;
 	}
@@ -1282,12 +2236,33 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		backwardKeyForced = false;
 	}
 	
+	private void pressSprint()
+	{
+		KeyPresser.press(MC.options.keySprint);
+		sprintHeldOff = false;
+	}
+	
+	private void releaseSprint()
+	{
+		KeyPresser.release(MC.options.keySprint);
+		sprintHeldOff = true;
+	}
+	
 	private void resetCombo()
 	{
 		comboPhase = ComboPhase.IDLE;
 		resetTicksLeft = 0;
 		comboHitCount = 0;
 		spinRemaining = 0F;
+		deflectSTapTicks = 0;
+		airMode = AirMode.NONE;
+		flyOutTicks = 0;
+		flyOutHit = false;
+		baitTicks = 0;
+		sweepChase = false;
+		sprintHeldOff = false;
+		releaseComboStrafe();
+		stopShieldBlock();
 		releaseForward();
 		releaseBackward();
 	}
@@ -1664,7 +2639,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		if(!isEnabled() || !autoAttack.isChecked() || !autoCombo.isChecked())
 			return false;
 		
-		return comboPhase == ComboPhase.RESETTING;
+		return comboPhase != ComboPhase.IDLE || sprintHeldOff;
 	}
 	
 	private boolean isCrosshairOnTarget()
@@ -1701,7 +2676,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private enum ComboPhase
 	{
 		IDLE,
-		RESETTING
+		RESETTING,
+		FLYOUT
 	}
 	
 	private enum PlayWhen

@@ -43,6 +43,9 @@ public final class AnticheatServer
 	private static final Pattern FORMATTING =
 		Pattern.compile("\u001B\\[[0-9;]*m|§.");
 	
+	/** The test client's name: flags for other players aren't its. */
+	private static final String CLIENT_NAME = "Wurst-Bot";
+	
 	private final String name;
 	private final File dir;
 	private final int port;
@@ -181,8 +184,14 @@ public final class AnticheatServer
 					started.countDown();
 				
 				if(flagLogDir == null && flagLine.matcher(line).find())
-					addFlag(line);
-				else if(line.contains("ERROR") || line.contains("Exception"))
+				{
+					// VexBot's bot (AimAssist (Auto combo)) is a player too
+					if(line.contains(CLIENT_NAME))
+						addFlag(line);
+					else
+						LOGGER.info("[{} flag, another player] {}", name,
+							line.trim());
+				}else if(line.contains("ERROR") || line.contains("Exception"))
 					LOGGER.warn("[{} server] {}", name, line);
 			}
 			

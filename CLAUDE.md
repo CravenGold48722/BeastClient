@@ -54,7 +54,7 @@ you which files are fork-custom**. Don't try; judge from content.
 |---|---|
 | Minecraft | `26.1.2` (`gradle.properties`, `WurstClient.MC_VERSION`) |
 | Mappings | **Mojang official (mojmap)** — `Minecraft`, `LocalPlayer`, `ItemStack.is()`, `Mth`, `AABB`. Not Yarn. |
-| Loader | Fabric, loader `0.19.3`, Fabric API `0.155.2+26.1.2`, Loom `1.16-SNAPSHOT` |
+| Loader | Fabric, loader `0.19.5`, Fabric API `0.155.3+26.1.2`, Loom `1.18-SNAPSHOT`, Gradle `9.8.1` (Loom 1.18 needs 9.7+; it made run configs' `vmArgs`/`programArgs` read-only - use `vmArg(...)`/`programArg(...)`) |
 | Java | **25** (source, target, and mixin `compatibilityLevel`) |
 | Version string | `WurstClient.VERSION` is read from the mod metadata (`mod_version` in `gradle.properties`, minus the `-MC…` suffix); jar `Beast-Client` |
 | Mod id / name | `wurst` / "Beast Client" (`src/main/resources/fabric.mod.json`) |
@@ -453,24 +453,57 @@ does it. When writing or touching a hack:
   hits" hold-back of hit 2-4 was removed, 2026-10-15);
   **Jump reset** (jump in the tick the target's hit arrives: `hurtTime == hurtDuration` at the
   UpdateEvent, which runs before `baseTick` and before the input is read; with the combo it
-  holds W + sprint for it). Gametest `AimAssistComboTest` fights a **VexBot** (user,
+  holds W + sprint for it). **Everything else from both guides** (user, 2026-10-15: "implement
+  every non-unrelated feature"), each its own checkbox: the sprint reset by the target's
+  movement (S-tap when it comes at you, W-tap when it backs off, distance otherwise - from
+  `trackTargetMotion`, positions over ticks smoothed like VexBot's; `x - xo` read 0 after a
+  position snap); S-tap deflection when hit from under 2 blocks (instead of a jump reset);
+  Fly-outs (S + jump into their hit when it's due before ours plus the deflection window -
+  from their last swing (`swinging`/`swingTime`) and their weapon's attack speed
+  (`ItemAttributeModifiers.compute(ATTACK_SPEED, 4, MAINHAND)`); only against a target that
+  swung in the last 40 ticks, 20 ticks apart; flying out whenever theirs came first let a
+  VexBot combo us for 67 ticks); Sprint crits (W stays down falling when sprint already ended);
+  Hop crits (hop after a ground deflection); Uppercuts (just out of reach, not approaching);
+  Lunges (target backing off 3.5-6 blocks, after 10 ticks of sprinting); combined ping 200+ =
+  hit stacking; opt-in: Double crits, Hops, Baits (random), Sprint sweeps and Weak hits (the
+  last two are the only non-sprint/crit hits - off by default because of the user's "never
+  sweeps"). Not added: delayed sprint hits (the user replaced them with "no guessing").
+  **From VexBot's AI** (user: "decompile vexbot, add what it does better, except aiming";
+  Vineflower on its combat classes - ideas only, no code): Punish openings (hit at once when the
+  target just swung or lowered its shield), Shield breaker (axe from the hotbar: switch, hit
+  next tick, switch back with `PacketOrder`; never hit a raised shield otherwise), Crouch dodge
+  (sneak 3 ticks against an incoming crit dive), no walking into a cobwebbed target (crits it),
+  no S into a wall (MeleeWallGuard), opt-in Combo strafe and Shield block. Its mace/crystal/
+  elytra/pearl/potion/loot AIs are outside AimAssist. Also fixed: the combo reset (and let go
+  of W) whenever the crosshair slipped off the target for a tick, so the next hit came 2+ ticks
+  late - now only looking 45°+ away resets it; and no attack while using an item. Gametest `AimAssistComboTest` fights a **VexBot** (user,
   2026-10-15: a server-side Fabric PvP bot mod, `../vexbot-3.0.14mc26.1.2.jar`, MIT; it
   w-taps, strafes, jumps, crits and jump-resets): a frozen bot with jump strength 0 and
   knockback resistance 1 (12-tick gaps, sprint hits, W let go - a frozen VexBot still jumps out
   of a combo and takes knockback, so it isn't still otherwise), a bot dropped from 6 blocks (no
   hit while it falls), and a 300-tick real fight in survival, both with diamond swords and
-  resistance 3 + regeneration 4 (only sprint hits/crits, no non-deflection hit on a falling bot,
-  a jump reset on **every** hit taken on the ground, at least one crit; first run: 21 hits, 6
-  crits, 11/11 jump resets). Jumps are read from `input.keyPresses.jump()` one tick after the
-  hit (knockback lifts you too). VexBot traps: it's a player, so `runCommand`'s `execute as @p`
+  resistance 3 + regeneration 4 (only sprint hits/crits, no non-deflection/punish hit on a
+  falling bot, every hit taken on the ground answered with a jump reset or S (fly-out / S-tap
+  deflection), at least one crit, at most 65% of the "chances" - charged, bot under the
+  crosshair within 2.8, not falling - let go by; with the guide + VexBot features: 22 hits,
+  19 of 41 chances let go); plus a tap-choice part (the test teleports the bot 0.12 a tick
+  toward/away - VexBot's `goto` and `control ... move` didn't move it - S-tap toward, W-tap
+  away; Uppercuts/Lunges off there). Jumps are read from `input.keyPresses.jump()` one tick
+  after the hit (knockback lifts you too). VexBot traps: it's a player, so `runCommand`'s `execute as @p`
   can pick **the bot** (it got our sword) - the test names us (`runAsMe`); spawning is async
   (~1 s, i.e. ~60 ticks at the test tick rate); a bot that dies leaves the server (give it
   regeneration). `build.gradle`'s `prepareVexbot` copies the jar (`-PvexbotJar`) into the
   test client's mods after `deleteGameTestRunDir` and writes `vexbot_settings.json`
   `{"global":{"statsOn":false}}` - VexBot posts usage stats to its author's server every few
   seconds by default; its `/vexbot extensions` commands download add-ons (never used). The
-  anticheat sweep's `AimAssist (Auto combo)` still uses a husk (VexBot is Fabric-only, Intave
-  is Paper) - clean on Grim and Intave (2026-10-15). BowAimbot's lead comes from `util/BallisticSolver`
+  anticheat sweep's `AimAssist (Auto combo)` fights a VexBot **on Grim** (`anticheat.gradle`
+  puts the jar and the same settings file on the Grim server; `comboAgainstVexBot`, 200
+  ticks, counted in an UpdateListener - sampled between ticks a hit's full hurt time is
+  already gone) and still a husk on Intave (VexBot is Fabric-only, Intave is Paper). First Grim
+  run (2026-10-15): clean, 9 hits, 9/9 jump resets. Grim checks the bot too: only flag lines
+  naming `Wurst-Bot` count (`AnticheatServer.CLIENT_NAME`), others are logged as "another
+  player". `set("AimAssist", "Auto combo", true)` must come before that branch (it fought
+  without the combo once: never sprinted, so never hit). BowAimbot's lead comes from `util/BallisticSolver`
   (vanilla projectile physics, tested in `BallisticSolverTest`) plus `util/TargetPredictor`:
   Robocode-style pattern matching (replays the most similar past moments of the target's
   movement, relative to the shooter), aims at the densest spot of those replays within the hit
@@ -519,10 +552,15 @@ does it. When writing or touching a hack:
   hit was aimed with - and only when a ray from the current eye position along the current look
   hits the target's current hitbox (+ pick radius) within `player.entityInteractionRange()`, with no
   block in between. No predicted positions, no extra range. Gate the attack on `util/HitCheck.isVerifiable`:
-  the last-sent rotation (`yRotLast`/`xRotLast`) and the current one must both hit, from the current
-  and the post-move eye position, 0.1 inside the hitbox sides - the attack packet precedes this
-  tick's movement packet, so hitting the moment a per-frame turn lands flagged Matrix HITBOX
-  ("hit without any intersection", AimAssist, 2026-10-02). AimAssist and MaceAssist use it.
+  the last-sent rotation (`yRotLast`/`xRotLast`) must hit 0.03 inside the hitbox sides and the
+  current one the hitbox, from the current and the post-move eye position - the attack packet
+  precedes this tick's movement packet, so hitting the moment a per-frame turn lands flagged
+  Matrix HITBOX ("hit without any intersection", AimAssist, 2026-10-02). AimAssist and
+  MaceAssist use it. (2026-10-15: it was 0.1 inside for both rotations - against a strafing,
+  jumping VexBot that turned down 74% of the ticks with a hit to take, mostly by hundredths of a
+  block; Grim's `Reach` accepts a hit if any one of the next, the last or a mixed look ray
+  passes any box the target could have had on the client's screen. Now 46%, the rest mostly
+  ticks where the sent rotation was off the target.)
 - **Packet order (Grim PacketOrderE):** a slot change must never go out after an attack, interact,
   use, use-on-block, release, PlayerCommand or sneak/sprint input change in the same tick (tick =
   up to `ServerboundClientTickEndPacket`). `util/PacketOrder` tracks that from the sent packets and
@@ -858,6 +896,9 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
   - Fabric's gametest harness can **deadlock closing the singleplayer world** while another heavy
     process starts (render thread in the deferred disconnect -> `IntegratedServer.halt`, server
     thread parked in the harness phaser): the servers are awaited before that world is created.
+    It also hit 3 of 5 `gametest grim` runs (2026-10-15), where the world closed moments after
+    it opened (setting the tick rate back to 20 first didn't help): when every `only` term just
+    picks anticheat servers, no singleplayer world is made (`WurstTest.isAnticheatOnly`).
     `gametest.ps1` has a watchdog (no game log output for 4 min -> jstack to
     `build/gametest-hang.txt`, kill, FAILED), and the gametest `ConnectionMixin` logs every
     disconnect reason and connection exception (a silent disconnect used to hang the run).

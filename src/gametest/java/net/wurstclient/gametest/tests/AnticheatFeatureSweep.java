@@ -339,6 +339,27 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 					: "never turned onto the husk");
 		});
 		
+		// the combo: W/S taps, sprint resets, held-back hits
+		hack("AimAssist (Auto combo)", () -> {
+			sword();
+			String husk = husk(1.5, 2);
+			awaitEntities(Husk.class, 1);
+			at(0, 0, 0, 10, 0);
+			set("AimAssist", "Auto combo", true);
+			set("AimAssist", "Dodging", false);
+			on("AimAssist");
+			boolean aimed =
+				waitUntil(mc -> mc.crosshairPickEntity instanceof Husk, 60);
+			boolean hit = aimed && awaitHurt(Husk.class, 40);
+			// a few combo hits
+			if(hit)
+				context.waitTicks(60);
+			return check(hit,
+				fmt("comboed the husk (%.1f damage)", damage(husk)),
+				aimed ? "aimed at the husk but never hit it"
+					: "never turned onto the husk");
+		});
+		
 		hack("AnchorAura", () -> {
 			give("hotbar.0", "respawn_anchor 8");
 			give("hotbar.1", "glowstone 16");

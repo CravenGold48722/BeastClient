@@ -223,6 +223,7 @@ public class WurstTest implements FabricClientGameTest
 		run(new RecordingModeTest(context, spContext));
 		run(new KeyPresserTest(context, spContext));
 		run(new PacketBudgetTest(context, spContext));
+		run(new AimAssistComboTest(context, spContext));
 		
 		// TODO: Open ClickGUI and Navigator
 		

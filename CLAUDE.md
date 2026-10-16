@@ -435,7 +435,22 @@ does it. When writing or touching a hack:
   up and sideways while falling). AimAssist hits are all sprint hits (user, 2026-10-03):
   `attackTarget` waits for `isSprinting() && wasSprinting` (what the server has - the attack goes
   out before this tick's sprint update) unless sprinting is impossible right now (hunger,
-  blindness, item use, sneaking, riding, gliding, water). BowAimbot's lead comes from `util/BallisticSolver`
+  blindness, item use, sneaking, riding, gliding, water). **Auto combo** (user, 2026-10-15, from two
+  combo guides - `../howtocombotranscript*.txt`): a hit as soon as vanilla gives sprint knockback
+  (`Player.attack`: strength at +0.5 tick > 0.9 - fired a tick past that, 12 ticks with a sword
+  instead of 13); hold W, hit, release W - between hits it coasts (no keys), backs off with S
+  under 2.0 blocks, chases over 3.0, and holds W only `SPRINT_LEAD_TICKS` (2) before the next
+  hit; sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **no hit on a falling
+  target** (falling knockback sends them into the ground and they rebuild momentum first -
+  `isFalling(Entity)` from `getY() - yo`, other players' motion isn't sent) unless they're
+  200+ ms laggy (`PlayerInfo.getLatency`); a **deflection** (hit back whatever the spacing within
+  4 ticks after the target hits you); **Delayed hits** (one of hits 2-4 held back 2-4 charged
+  ticks while keeping distance, let go at once if the target jumps = mistimed jump reset);
+  **Jump reset** (jump in the tick the target's hit arrives: `hurtTime == hurtDuration` at the
+  UpdateEvent, which runs before `baseTick` and before the input is read; with the combo it
+  holds W + sprint for it). Gametest `AimAssistComboTest` (12-tick gaps, sprint hits, W let go,
+  no hit on a falling husk, jump after `/damage ... by` the husk); the anticheat sweep has
+  `AimAssist (Auto combo)` - clean on Grim and Intave (2026-10-15). BowAimbot's lead comes from `util/BallisticSolver`
   (vanilla projectile physics, tested in `BallisticSolverTest`) plus `util/TargetPredictor`:
   Robocode-style pattern matching (replays the most similar past moments of the target's
   movement, relative to the shooter), aims at the densest spot of those replays within the hit

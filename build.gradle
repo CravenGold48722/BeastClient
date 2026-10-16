@@ -185,6 +185,34 @@ def prepareClientGameTestWithMods = tasks.register("prepareClientGameTestWithMod
 	into layout.buildDirectory.dir("run/clientGameTestWithMods/mods")
 }
 
+// VexBot (a server-side PvP bot mod, MIT) for the gametests: AimAssistComboTest
+// fights one of its bots instead of a husk. The jar isn't on any maven, so it
+// comes from -PvexbotJar (default: ../vexbot-3.0.14mc26.1.2.jar) and goes only
+// into the test client's own mods folder. VexBot posts usage stats to its
+// author's server every few seconds by default; vexbot_settings.json (read
+// from the server directory when the world starts) switches that off.
+def vexbotJar = file(project.findProperty("vexbotJar") ?: "../vexbot-3.0.14mc26.1.2.jar")
+def prepareVexbot = tasks.register("prepareVexbot") {
+	def runDir = layout.buildDirectory.dir("run/clientGameTest").get().asFile
+	inputs.property("jar", vexbotJar.path)
+	// Fabric's deleteGameTestRunDir wipes the run dir before every run
+	mustRunAfter "deleteGameTestRunDir"
+	doLast {
+		def mods = new File(runDir, "mods")
+		mods.mkdirs()
+		mods.listFiles().findAll { it.name.startsWith("vexbot") }*.delete()
+		if (!vexbotJar.isFile()) {
+			logger.warn("VexBot jar not found at $vexbotJar - AimAssistComboTest will fail (-PvexbotJar=...)")
+			return
+		}
+		new File(runDir, "vexbot_settings.json").text = '{"global": {"statsOn": false}}\n'
+		java.nio.file.Files.copy(vexbotJar.toPath(), new File(mods, vexbotJar.name).toPath())
+	}
+}
+tasks.named("runClientGameTest") {
+	dependsOn prepareVexbot
+}
+
 def doModCompatTest = providers.gradleProperty("do_mod_compat_test").map { it.toBoolean() }.orElse(false)
 tasks.named("runClientGameTestWithMods") {
 	onlyIf { doModCompatTest.get() }

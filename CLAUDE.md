@@ -453,12 +453,24 @@ does it. When writing or touching a hack:
   hits" hold-back of hit 2-4 was removed, 2026-10-15);
   **Jump reset** (jump in the tick the target's hit arrives: `hurtTime == hurtDuration` at the
   UpdateEvent, which runs before `baseTick` and before the input is read; with the combo it
-  holds W + sprint for it). Gametest `AimAssistComboTest` (12-tick gaps, sprint hits, W let go,
-  no hit on a falling husk; after `/damage ... by` the husk: a deflection and a jump in that
-  tick, a crit on the way down - jumps are read from `input.keyPresses.jump()`, the damage's
-  knockback lifts you to vy 0.36 too and looked like a jump; every part starts at 0 -57 0 facing
-  north, a husk knocked into the wall 10 blocks south was out of sight); the anticheat sweep has
-  `AimAssist (Auto combo)` - clean on Grim and Intave (2026-10-15). BowAimbot's lead comes from `util/BallisticSolver`
+  holds W + sprint for it). Gametest `AimAssistComboTest` fights a **VexBot** (user,
+  2026-10-15: a server-side Fabric PvP bot mod, `../vexbot-3.0.14mc26.1.2.jar`, MIT; it
+  w-taps, strafes, jumps, crits and jump-resets): a frozen bot with jump strength 0 and
+  knockback resistance 1 (12-tick gaps, sprint hits, W let go - a frozen VexBot still jumps out
+  of a combo and takes knockback, so it isn't still otherwise), a bot dropped from 6 blocks (no
+  hit while it falls), and a 300-tick real fight in survival, both with diamond swords and
+  resistance 3 + regeneration 4 (only sprint hits/crits, no non-deflection hit on a falling bot,
+  a jump reset on **every** hit taken on the ground, at least one crit; first run: 21 hits, 6
+  crits, 11/11 jump resets). Jumps are read from `input.keyPresses.jump()` one tick after the
+  hit (knockback lifts you too). VexBot traps: it's a player, so `runCommand`'s `execute as @p`
+  can pick **the bot** (it got our sword) - the test names us (`runAsMe`); spawning is async
+  (~1 s, i.e. ~60 ticks at the test tick rate); a bot that dies leaves the server (give it
+  regeneration). `build.gradle`'s `prepareVexbot` copies the jar (`-PvexbotJar`) into the
+  test client's mods after `deleteGameTestRunDir` and writes `vexbot_settings.json`
+  `{"global":{"statsOn":false}}` - VexBot posts usage stats to its author's server every few
+  seconds by default; its `/vexbot extensions` commands download add-ons (never used). The
+  anticheat sweep's `AimAssist (Auto combo)` still uses a husk (VexBot is Fabric-only, Intave
+  is Paper) - clean on Grim and Intave (2026-10-15). BowAimbot's lead comes from `util/BallisticSolver`
   (vanilla projectile physics, tested in `BallisticSolverTest`) plus `util/TargetPredictor`:
   Robocode-style pattern matching (replays the most similar past moments of the target's
   movement, relative to the shooter), aims at the densest spot of those replays within the hit

@@ -110,7 +110,10 @@ public final class PacketBudgetTest extends SingleplayerTest
 			context.waitTicks(5);
 			checkEngaged("KillauraLegit");
 			checkEngaged("Killaura");
+			// (Sticky turns only with the mouse - AimAssistStickyTest)
+			runWurstCommand("setmode AimAssist Turning Auto");
 			checkEngaged("AimAssist");
+			runWurstCommand("setmode AimAssist Turning Sticky");
 			checkMaceSwapOrder();
 			
 		}finally

@@ -82,6 +82,7 @@ import net.wurstclient.util.HitCheck;
 import net.wurstclient.util.HumanAim;
 import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
+import net.wurstclient.util.StickyAim;
 import net.wurstclient.util.text.WText;
 
 public final class AimAssistHack extends Hack implements UpdateListener,
@@ -103,9 +104,50 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private final AimAtSetting aimAt = new AimAtSetting(
 		"What point in the target's hitbox AimAssist should aim at.");
 	
+	private final EnumSetting<Turning> turning = new EnumSetting<>("Turning",
+		"How the camera gets onto the target.\n\n"
+			+ "§lSticky§r (default): you turn with your mouse, like without"
+			+ " AimAssist. Near the target your mouse slows down, so the"
+			+ " crosshair eases onto it and sticks there - flick hard to break"
+			+ " free. While the crosshair is on the target, the camera follows"
+			+ " it across your view (its strafing and yours). Nothing turns on"
+			+ " its own while your hand is still and the target stands still."
+			+ " Set by §lStickiness§r, §lAssist zone§r, §lMagnetism§r and"
+			+ " §lTracking§r.\n\n"
+			+ "§lAuto§r: AimAssist turns the camera onto the target itself and"
+			+ " holds your mouse meanwhile. Set by §lFace target§r and the"
+			+ " §lSmooth aim§r settings.",
+		Turning.values(), Turning.STICKY);
+	
+	private final SliderSetting stickiness = new SliderSetting("Stickiness",
+		"§lTurning: Sticky§r - how much your mouse slows down while leaving"
+			+ " the target from on it. Closing in, it slows down half as much,"
+			+ " so the crosshair eases onto the target instead of flying past"
+			+ " it.",
+		0.75, 0, 0.95, 0.05, ValueDisplay.PERCENTAGE);
+	
+	private final SliderSetting assistZone = new SliderSetting("Assist zone",
+		"§lTurning: Sticky§r - how far outside the target's hitbox the"
+			+ " slowdown starts. It fades in from there to full on the"
+			+ " hitbox.",
+		5, 0.5, 20, 0.5, ValueDisplay.DECIMAL.withSuffix("°"));
+	
+	private final SliderSetting magnetism = new SliderSetting("Magnetism",
+		"§lTurning: Sticky§r - while you move the mouse toward the target"
+			+ " (within the assist zone), this share of your movement is bent"
+			+ " toward it, never past it. Nothing while your mouse is still.",
+		0.25, 0, 1, 0.05, ValueDisplay.PERCENTAGE);
+	
+	private final SliderSetting tracking = new SliderSetting("Tracking",
+		"§lTurning: Sticky§r - how much of the target's movement across your"
+			+ " view the camera follows while the crosshair is on it, so it"
+			+ " stays on a strafing target (or while you strafe).",
+		1, 0, 1, 0.05, ValueDisplay.PERCENTAGE);
+	
 	private final FaceTargetSetting faceTarget =
 		FaceTargetSetting.withoutPacketSpam(
-			WText.literal("How AimAssist rotates toward the target.\n\n"
+			WText.literal("§lTurning: Auto§r - how AimAssist rotates toward"
+				+ " the target.\n\n"
 				+ "§lClient-side§r (default) actually turns your camera, so"
 				+ " the server sees exactly what you see.\n\n"
 				+ "§lServer-side§r keeps your camera still and only aims"
@@ -118,8 +160,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			FaceTarget.CLIENT);
 	
 	private final CheckboxSetting smoothAim = new CheckboxSetting("Smooth aim",
-		"Turns toward the target in continuous steps instead of snapping"
-			+ " straight to the needed angle.\n\n"
+		"§lTurning: Auto§r - turns toward the target in continuous steps"
+			+ " instead of snapping straight to the needed angle.\n\n"
 			+ "Used when the target is further away than"
 			+ " §lSmooth aim distance§r, and every time the aim picks up a"
 			+ " target - starting, switching, after a kill, after an"
@@ -142,7 +184,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	private final CheckboxSetting humanizeSmoothAim = new CheckboxSetting(
 		"Humanize smooth aim",
-		"Makes §lSmooth aim§r move like a hand on a mouse: a short reaction"
+		"§lTurning: Auto§r - makes §lSmooth aim§r move like a hand on a"
+			+ " mouse: a short reaction"
 			+ " delay before turning to a new target, speeding up at the start"
 			+ " and slowing down as it closes in, a speed that drifts a little"
 			+ " over time, a slightly curved path, horizontal before vertical,"
@@ -157,7 +200,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	private final SliderSetting smoothAimSpeed = new SliderSetting(
 		"Smooth aim speed",
-		"How fast §lSmooth aim§r turns toward the target, in degrees per"
+		"§lTurning: Auto§r - how fast §lSmooth aim§r turns toward the"
+			+ " target, in degrees per"
 			+ " second. A set speed takes over from the automatic one: the turn"
 			+ " then eases up to that speed (or holds it, with"
 			+ " §lHumanize smooth aim§r off).\n\n"
@@ -180,7 +224,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	private final SliderSetting smoothAimDistance = new SliderSetting(
 		"Smooth aim distance",
-		"Hitbox distance below which the aim snaps instead of smoothing,"
+		"§lTurning: Auto§r - hitbox distance below which the aim snaps"
+			+ " instead of smoothing,"
 			+ " once your crosshair has reached the target. Measured the same"
 			+ " way as §lRange§r.",
 		4, 0, 20, 0.25, ValueDisplay.DECIMAL.withSuffix(" blocks"));
@@ -501,6 +546,14 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	private final HumanAim aim = new HumanAim();
 	
+	/** Turning: Sticky - the mouse friction, magnetism and tracking. */
+	private final StickyAim sticky = new StickyAim();
+	private long lastStickyFrame;
+	private Entity stickyTarget;
+	
+	/** Whether Sticky is changing the mouse's turn right now. */
+	private boolean stickyEngaged;
+	
 	/**
 	 * Forces the smooth aim regardless of distance, so a target switch or a
 	 * fresh target after a kill is caught up to by turning rather than by
@@ -705,6 +758,11 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(range);
 		addSetting(fov);
 		addSetting(aimAt);
+		addSetting(turning);
+		addSetting(stickiness);
+		addSetting(assistZone);
+		addSetting(magnetism);
+		addSetting(tracking);
 		addSetting(faceTarget);
 		addSetting(smoothAim);
 		addSetting(humanizeSmoothAim);
@@ -932,6 +990,10 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			// silent aim. Otherwise the server sees the real spin.
 			if(faceTarget.getSelected() == FaceTarget.SERVER)
 				WURST.getRotationFaker().faceVectorPacket(aimPoint);
+			aim.invalidate();
+		}else if(isSticky())
+		{
+			// Your mouse turns the camera; onMouseUpdate() bends it.
 			aim.invalidate();
 		}else if(steering)
 		{
@@ -1211,6 +1273,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		steerAccumPitch = 0;
 		steeringNow = false;
 		frameAimActive = false;
+		sticky.reset();
+		stickyEngaged = false;
+		stickyTarget = null;
 	}
 	
 	/**
@@ -2680,6 +2745,25 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		FLYOUT
 	}
 	
+	private enum Turning
+	{
+		STICKY("Sticky"),
+		AUTO("Auto");
+		
+		private final String name;
+		
+		Turning(String name)
+		{
+			this.name = name;
+		}
+		
+		@Override
+		public String toString()
+		{
+			return name;
+		}
+	}
+	
 	private enum PlayWhen
 	{
 		WHILE_ENABLED("While enabled"),
@@ -2790,11 +2874,118 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	@Override
 	public void onMouseUpdate(MouseUpdateEvent event)
 	{
-		if(!isLockingMouse())
+		if(isLockingMouse())
+		{
+			event.setDeltaX(0);
+			event.setDeltaY(0);
 			return;
+		}
 		
-		event.setDeltaX(0);
-		event.setDeltaY(0);
+		if(isSticky())
+			applySticky(event);
+	}
+	
+	/**
+	 * Turning: Sticky - bends this frame's mouse movement (see
+	 * {@link StickyAim}): slower near the target, a little toward it, and
+	 * along with it while on it. Done to the mouse counts, so vanilla turns
+	 * the camera from them as from any mouse movement.
+	 */
+	private void applySticky(MouseUpdateEvent event)
+	{
+		long now = GameClock.nanoTime();
+		double dt = Math.min((now - lastStickyFrame) / 1e9, 0.05);
+		lastStickyFrame = now;
+		
+		LocalPlayer player = MC.player;
+		// (spyglass and cinematic camera turn by their own rules)
+		if(target == null || player == null || MC.screen != null
+			|| !MC.mouseHandler.isMouseGrabbed() || MC.options.smoothCamera
+			|| player.isScoping())
+		{
+			stickyEngaged = false;
+			sticky.reset();
+			return;
+		}
+		
+		// a new target's position isn't the old one's movement
+		if(target != stickyTarget)
+		{
+			sticky.reset();
+			stickyTarget = target;
+		}
+		
+		float partialTicks =
+			MC.getDeltaTracker().getGameTimeDeltaPartialTick(true);
+		Vec3 offset = EntityUtils.getLerpedPos(target, partialTicks)
+			.subtract(target.position());
+		AABB box = getTargetBox(target.getBoundingBox().move(offset));
+		Vec3 eyes = EntityUtils.getLerpedPos(player, partialTicks).add(0,
+			player.getEyeHeight(player.getPose()), 0);
+		
+		// Aim at: Auto is the hitbox point closest to your eyes - it stays
+		// put while the target slides sideways until the hitbox's edge
+		// passes it, so tracking it trailed a strafer by half its width.
+		// The middle of the hitbox at your eye height moves with it.
+		Vec3 aimPoint =
+			aimAt.getSelected() == AimAtSetting.AimAt.AUTO
+				? new Vec3(box.getCenter().x,
+					Mth.clamp(eyes.y, box.minY, box.maxY), box.getCenter().z)
+				: aimAt.getAimPoint(target).add(offset);
+		
+		StickyAim.Target t = getStickyTarget(aimPoint, box, eyes,
+			player.getYRot(), player.getXRot());
+		StickyAim.Strength s = new StickyAim.Strength(stickiness.getValue(),
+			assistZone.getValue(), magnetism.getValue(), tracking.getValue());
+		
+		double step = Rotation.getMouseStep();
+		int signX = MC.options.invertMouseX().get() ? -1 : 1;
+		int signY = MC.options.invertMouseY().get() ? -1 : 1;
+		double userYaw = event.getDeltaX() * step * signX;
+		double userPitch = event.getDeltaY() * step * signY;
+		
+		double[] turn = sticky.step(userYaw, userPitch, t, s, dt);
+		double[] counts = sticky.toCounts(turn[0], turn[1], step, signX, signY);
+		event.setDeltaX(counts[0]);
+		event.setDeltaY(counts[1]);
+		
+		stickyEngaged = t.outside() < assistZone.getValue();
+	}
+	
+	/** Where the target is relative to the camera, for StickyAim. */
+	private static StickyAim.Target getStickyTarget(Vec3 aimPoint, AABB box,
+		Vec3 eyes, float yaw, float pitch)
+	{
+		Rotation needed = RotationUtils.getNeededRotations(eyes, aimPoint);
+		double errorYaw = Mth.wrapDegrees(yaw - needed.yaw());
+		double errorPitch = pitch - needed.pitch();
+		
+		// inside the hitbox: on it whichever way you look
+		if(box.contains(eyes))
+			return new StickyAim.Target(errorYaw, errorPitch, 180, -180, 180,
+				needed.yaw(), needed.pitch());
+		
+		double horizontal =
+			Math.max(Math.hypot(aimPoint.x - eyes.x, aimPoint.z - eyes.z), 0.1);
+		double halfWidth = Math.toDegrees(Math
+			.atan(Math.min(box.getXsize(), box.getZsize()) / 2 / horizontal));
+		double top = pitchTo(eyes, aimPoint, box.maxY, horizontal);
+		double bottom = pitchTo(eyes, aimPoint, box.minY, horizontal);
+		
+		return new StickyAim.Target(errorYaw, errorPitch, halfWidth,
+			top - needed.pitch(), bottom - needed.pitch(), needed.yaw(),
+			needed.pitch());
+	}
+	
+	private static double pitchTo(Vec3 eyes, Vec3 aimPoint, double y,
+		double horizontal)
+	{
+		return -Math.toDegrees(Math.atan2(y - eyes.y, horizontal));
+	}
+	
+	private boolean isSticky()
+	{
+		return turning.getSelected() == Turning.STICKY;
 	}
 	
 	/**
@@ -2804,19 +2995,27 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	public boolean isTurningCamera()
 	{
-		return isEnabled() && isLockingMouse();
+		return isEnabled() && (isLockingMouse()
+			|| isSticky() && target != null && stickyEngaged);
 	}
 	
 	private boolean isLockingMouse()
 	{
 		if(target == null || MC.player == null)
 			return false;
+		
+		// the cosmetic spin turns the camera itself in both modes
+		if(spinRemaining > 0F)
+			return true;
+		
+		// Sticky: your mouse turns the camera.
+		if(isSticky())
+			return false;
 			
 		// Silent aim never turns the camera - locking it would just freeze
 		// your view.
 		return faceTarget.getSelected() == FaceTarget.CLIENT
-			|| autoAttack.isChecked() && autoCombo.isChecked()
-			|| spinRemaining > 0F;
+			|| autoAttack.isChecked() && autoCombo.isChecked();
 	}
 	
 	private boolean isValidTarget(Entity e)

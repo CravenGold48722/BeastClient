@@ -440,6 +440,8 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 	{
 		hack("AimAssist", () -> {
 			sword();
+			// nobody moves the mouse here: AimAssist turns the camera itself
+			set("AimAssist", "Turning", "Auto");
 			String husk = husk(1.5, 2);
 			awaitEntities(Husk.class, 1);
 			at(0, 0, 0, 10, 0);
@@ -454,9 +456,31 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 					: "never turned onto the husk");
 		});
 		
+		// Turning: Sticky - the mouse turns; AimAssist slows it on the husk
+		hack("AimAssist (Sticky)", () -> {
+			sword();
+			set("AimAssist", "Turning", "Sticky");
+			set("AimAssist", "Dodging", false);
+			String husk = husk(1.5, 2);
+			awaitEntities(Husk.class, 1);
+			// the husk is at yaw -36.9: start 35 beside it, sweep 10 past
+			at(0, 0, 0, -71.9F, 15);
+			on("AimAssist");
+			sweepMouse(45, 16);
+			boolean aimed =
+				waitUntil(mc -> mc.crosshairPickEntity instanceof Husk, 5);
+			boolean hit = aimed && awaitHurt(Husk.class, 40);
+			return check(hit,
+				fmt("swept the mouse across the husk, stopped on it and hit"
+					+ " it (%.1f damage)", damage(husk)),
+				aimed ? "stopped on the husk but never hit it"
+					: "the mouse sweep didn't stop on the husk");
+		});
+		
 		// the combo: W/S taps, sprint resets, held-back hits
 		hack("AimAssist (Auto combo)", () -> {
 			sword();
+			set("AimAssist", "Turning", "Auto");
 			set("AimAssist", "Auto combo", true);
 			set("AimAssist", "Dodging", false);
 			if(hasVexBot())

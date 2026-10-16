@@ -737,6 +737,24 @@ abstract class FeatureTestKit
 		context.waitTick();
 	}
 	
+	/**
+	 * Moves the mouse to the right by this many degrees of hand, evenly over
+	 * the given ticks, like a player sweeping across something.
+	 */
+	void sweepMouse(double degrees, int ticks)
+	{
+		double counts =
+			degrees / context.computeOnClient(mc -> Rotation.getMouseStep());
+		long done = 0;
+		for(int i = 1; i <= ticks; i++)
+		{
+			long next = Math.round(counts * i / ticks);
+			input.moveCursor(next - done, 0);
+			done = next;
+			context.waitTick();
+		}
+	}
+	
 	/** Looks at the center of a block's face toward the bot. */
 	void lookAtBlock(int dx, int dy, int dz)
 	{

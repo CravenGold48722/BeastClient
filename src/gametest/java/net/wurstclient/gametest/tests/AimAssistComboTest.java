@@ -111,6 +111,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 		runCommand("kill @e[type=!player]");
 		runAsMe("item replace entity @s weapon.mainhand with diamond_sword");
 		
+		// nobody moves the mouse here: AimAssist turns the camera itself
+		runWurstCommand("setmode AimAssist Turning Auto");
 		runWurstCommand("setcheckbox AimAssist Auto_attack on");
 		runWurstCommand("setcheckbox AimAssist Auto_combo on");
 		// one less thing moving us around
@@ -140,6 +142,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 			runWurstCommand("t AimAssist off");
 			runWurstCommand("setcheckbox AimAssist Auto_combo off");
 			runWurstCommand("setcheckbox AimAssist Dodging on");
+			runWurstCommand("setmode AimAssist Turning Sticky");
 			removeBot();
 			runAsMe("gamemode creative");
 			runAsMe("effect clear @s");

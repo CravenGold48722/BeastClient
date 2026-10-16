@@ -425,7 +425,26 @@ does it. When writing or touching a hack:
   the per-tick tracking estimate alone lags each reversal. `PidAimTest` compares it with the old
   aim (strafer 40°/s: 96% vs 81% on target). Within "Smooth aim distance" (once caught up) it snaps; "Smooth aim speed" 360-2000 overrides
   the PID with a fixed top speed (old humanStep/linearStep), its top end "auto" (the value reads "auto") = PID.
-  While AimAssist has a target and turns the camera, `onMouseUpdate` zeroes your mouse input
+  **AimAssist "Turning" (user, 2026-10-16, from a "Sensitivity Based Aim-Assist" video - you
+  flick yourself, the crosshair decelerates onto the zombie in ~100 ms with no overshoot and
+  creeps before breaking free; inspiration Kclient/Raven's AimAssist, ideas only):** default
+  **Sticky** = `util/StickyAim` in `onMouseUpdate`, which only bends the frame's mouse counts:
+  friction near the target (full "Stickiness" while leaving the aim point, half at the hitbox
+  edge growing to full at the aim point while closing - half-then-full on crossing stopped it
+  dead), "Magnetism" (part of the hand's movement while closing, plus part of the target's own
+  movement across the view, toward the aim point, never past it - pulling back while leaving
+  made a steady hand unable to leave), "Tracking" (follow the target's angular motion, 100%;
+  85% + fading from the hitbox edge trailed a strafer by 6°), all fading out over "Assist zone"
+  degrees outside the hitbox. Still hand + still target = no turn. Output is whole mouse
+  counts with the fraction carried. With Aim at: Auto it follows the hitbox's middle at eye
+  height - Auto's closest-to-eyes point stays put while a target slides sideways. Off while
+  scoping/cinematic camera. **Auto** = the old camera-driving aim below (Face target, Smooth
+  aim...); tests that don't move the mouse (`AimAssistComboTest`, `PacketBudgetTest`, the
+  sweep's AimAssist/Auto combo) set Auto. `StickyAimTest` (JUnit) and `AimAssistStickyTest`
+  (gametest, real mouse: a sweep 10° past a husk misses without it and stops on it with it,
+  still hand = no turn, a husk sliding 0.08/tick stays under the crosshair, a 60° flick leaves);
+  sweep `AimAssist (Sticky)` clean on Grim and Intave.
+  With Turning: Auto, while AimAssist has a target and turns the camera, `onMouseUpdate` zeroes your mouse input
   (the old "you moved the mouse >1.5° = steering" release made it let go of targets). Gate attacks on the crosshair actually
   being on the target while turning. All three steps lead the target's motion by one frame
   (`leadDt`: the previous step's dt), never by the current dt - after a 150 ms lag spike that

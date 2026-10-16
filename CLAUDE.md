@@ -432,10 +432,12 @@ does it. When writing or touching a hack:
   put the aim 23° ahead of a fast target (`noFlickAfterFrameHitch`); and the hand stops once
   past the aim point while still moving away. Only one hack turns the camera at a time:
   MaceAssist's mace aim yields while `AimAssist.isTurningCamera()` (both at once flicked the view
-  up and sideways while falling). AimAssist hits are all sprint hits (user, 2026-10-03):
-  `attackTarget` waits for `isSprinting() && wasSprinting` (what the server has - the attack goes
-  out before this tick's sprint update) unless sprinting is impossible right now (hunger,
-  blindness, item use, sneaking, riding, gliding, water). **Auto combo** (user, 2026-10-15, from two
+  up and sideways while falling). AimAssist hits are sprint hits or crits, never sweeps (user,
+  2026-10-03; crits allowed 2026-10-15): `attackTarget` waits for `isSprinting() && wasSprinting`
+  (what the server has - the attack goes out before this tick's sprint update), or `isCritReady`
+  (vanilla `canCriticalAttack` with the server's state: fallDistance > 0, not on ground/ladder/
+  water/riding, not blind, `!isSprinting && !wasSprinting`), unless sprinting is impossible
+  right now (hunger, blindness, item use, sneaking, riding, gliding, water). **Auto combo** (user, 2026-10-15, from two
   combo guides - `../howtocombotranscript*.txt`): a hit as soon as vanilla gives sprint knockback
   (`Player.attack`: strength at +0.5 tick > 0.9 - fired a tick past that, 12 ticks with a sword
   instead of 13); hold W, hit, release W - between hits it coasts (no keys), backs off with S
@@ -444,12 +446,18 @@ does it. When writing or touching a hack:
   target** (falling knockback sends them into the ground and they rebuild momentum first -
   `isFalling(Entity)` from `getY() - yo`, other players' motion isn't sent) unless they're
   200+ ms laggy (`PlayerInfo.getLatency`); a **deflection** (hit back whatever the spacing within
-  4 ticks after the target hits you); **Delayed hits** (one of hits 2-4 held back 2-4 charged
-  ticks while keeping distance, let go at once if the target jumps = mistimed jump reset);
+  4 ticks after the target hits you); **in the air** (a jump reset, Aura-Farming's jump, a drop)
+  W + sprint while rising, both let go once falling, then a **crit** (punish crit); against
+  **their** jump resets no guessing (user): a target on the ground or still rising is hit at
+  once - an early jump gets them launched - and a falling one waited for (the random "Delayed
+  hits" hold-back of hit 2-4 was removed, 2026-10-15);
   **Jump reset** (jump in the tick the target's hit arrives: `hurtTime == hurtDuration` at the
   UpdateEvent, which runs before `baseTick` and before the input is read; with the combo it
   holds W + sprint for it). Gametest `AimAssistComboTest` (12-tick gaps, sprint hits, W let go,
-  no hit on a falling husk, jump after `/damage ... by` the husk); the anticheat sweep has
+  no hit on a falling husk; after `/damage ... by` the husk: a deflection and a jump in that
+  tick, a crit on the way down - jumps are read from `input.keyPresses.jump()`, the damage's
+  knockback lifts you to vy 0.36 too and looked like a jump; every part starts at 0 -57 0 facing
+  north, a husk knocked into the wall 10 blocks south was out of sight); the anticheat sweep has
   `AimAssist (Auto combo)` - clean on Grim and Intave (2026-10-15). BowAimbot's lead comes from `util/BallisticSolver`
   (vanilla projectile physics, tested in `BallisticSolverTest`) plus `util/TargetPredictor`:
   Robocode-style pattern matching (replays the most similar past moments of the target's

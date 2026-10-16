@@ -37,24 +37,27 @@ public final class AimAssistComboTest extends SingleplayerTest
 {
 	/** What the client did, tick by tick (written on the client thread). */
 	private final List<Boolean> forwardDown = new ArrayList<>();
-	private final List<Boolean> onGround = new ArrayList<>();
-	private final List<Double> yMotion = new ArrayList<>();
 	private final List<Attack> attacks = new ArrayList<>();
+	private final List<Boolean> jumped = new ArrayList<>();
 	
-	private record Attack(int tick, boolean sprintHit, boolean targetFalling)
+	private record Attack(int tick, boolean sprintHit, boolean crit,
+		boolean targetFalling)
 	{}
 	
 	private final UpdateListener recorder = () -> {
 		Minecraft mc = WurstClient.MC;
 		forwardDown.add(mc.options.keyUp.isDown());
-		onGround.add(mc.player.onGround());
-		yMotion.add(mc.player.getDeltaMovement().y);
+		// the input the last tick was moved with
+		jumped.add(mc.player.input.keyPresses.jump());
 	};
 	
 	private final PlayerAttacksEntityListener attackRecorder = target -> {
 		var player = WurstClient.MC.player;
 		attacks.add(new Attack(forwardDown.size(),
-			player.isSprinting() && player.wasSprinting, isFalling(target)));
+			player.isSprinting() && player.wasSprinting,
+			player.fallDistance > 0 && !player.onGround()
+				&& !player.isSprinting() && !player.wasSprinting,
+			isFalling(target)));
 	};
 	
 	public AimAssistComboTest(ClientGameTestContext context,
@@ -70,8 +73,6 @@ public final class AimAssistComboTest extends SingleplayerTest
 		runCommand("gamerule spawn_mobs false");
 		runCommand("kill @e[type=!player]");
 		runCommand("item replace entity @s weapon.mainhand with diamond_sword");
-		runCommand("tp @s ~ ~ ~ 0 0");
-		context.waitTicks(7);
 		
 		runWurstCommand("setcheckbox AimAssist Auto_attack on");
 		runWurstCommand("setcheckbox AimAssist Auto_combo on");
@@ -125,8 +126,9 @@ public final class AimAssistComboTest extends SingleplayerTest
 	 */
 	private void comboOnStillTarget()
 	{
+		startSpot();
 		runCommand(
-			"summon husk ~ ~ ~2.5 {NoAI:1b,Silent:1b,PersistenceRequired:1b,"
+			"summon husk ~ ~ ~-2.5 {NoAI:1b,Silent:1b,PersistenceRequired:1b,"
 				+ "Health:1024f,attributes:[{id:\"minecraft:max_health\","
 				+ "base:1024}]}");
 		context.waitTicks(5);
@@ -180,8 +182,9 @@ public final class AimAssistComboTest extends SingleplayerTest
 	 */
 	private void noHitWhileFalling()
 	{
+		startSpot();
 		runCommand(
-			"summon husk ~ ~6 ~2 {NoAI:0b,Silent:1b,PersistenceRequired:1b,"
+			"summon husk ~ ~6 ~-2 {NoAI:0b,Silent:1b,PersistenceRequired:1b,"
 				+ "Health:1024f,attributes:[{id:\"minecraft:max_health\","
 				+ "base:1024},{id:\"minecraft:movement_speed\",base:0}]}");
 		clearRecording();
@@ -210,8 +213,9 @@ public final class AimAssistComboTest extends SingleplayerTest
 	 */
 	private void jumpResetWhenHit()
 	{
+		startSpot();
 		runCommand(
-			"summon husk ~ ~ ~2.5 {NoAI:1b,Silent:1b,PersistenceRequired:1b,"
+			"summon husk ~ ~ ~-2.5 {NoAI:1b,Silent:1b,PersistenceRequired:1b,"
 				+ "Health:1024f,attributes:[{id:\"minecraft:max_health\","
 				+ "base:1024}]}");
 		runCommand("gamemode survival");
@@ -220,7 +224,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 		runWurstCommand("t AimAssist on");
 		context.waitTicks(20);
 		
-		for(int attempt = 0; attempt < 3; attempt++)
+		boolean everJumped = false;
+		for(int attempt = 0; attempt < 5; attempt++)
 		{
 			// standing on the ground first
 			context.waitFor(mc -> mc.player.onGround(), 40);
@@ -228,30 +233,51 @@ public final class AimAssistComboTest extends SingleplayerTest
 			clearRecording();
 			runCommand("damage @s 1 minecraft:mob_attack by @e[type=husk,"
 				+ "limit=1]");
-			context.waitTicks(6);
+			// the jump, and the fall back down
+			context.waitTicks(16);
 			
-			List<Boolean> ground = snapshot(onGround);
-			List<Double> motion = snapshot(yMotion);
-			logger.info("After being hit: on ground {}, y motion {}", ground,
-				motion);
-			for(int t = 0; t < ground.size(); t++)
-				if(motion.get(t) > 0.3)
-				{
-					logger.info("Jump reset {} ticks after the hit", t);
-					runWurstCommand("t AimAssist off");
-					return;
-				}
+			List<Boolean> jumps = snapshot(jumped);
+			List<Attack> hits = snapshotAttacks();
+			int jumpTick = -1;
+			// (the knockback lifts us too - only the jump key counts)
+			for(int t = 0; t < Math.min(4, jumps.size()) && jumpTick < 0; t++)
+				if(jumps.get(t))
+					jumpTick = t;
+			logger.info("Hit by the husk: jumped at tick {}, then hits {}",
+				jumpTick, hits);
+			if(jumpTick < 0)
+				continue;
+			everJumped = true;
+			
+			// a punish crit on the way down, if it was charged by then
+			if(hits.stream().anyMatch(Attack::crit))
+			{
+				runWurstCommand("t AimAssist off");
+				return;
+			}
 		}
 		
-		throw new RuntimeException("Never jumped when the husk hit us");
+		throw new RuntimeException(everJumped
+			? "Jumped when the husk hit us, but never crit on the way down"
+			: "Never jumped when the husk hit us");
+	}
+	
+	/**
+	 * The same open spot for every part, facing north - away from the wall
+	 * the other tests built 10 blocks south (a husk knocked into it was out
+	 * of sight).
+	 */
+	private void startSpot()
+	{
+		runCommand("tp @s 0 -57 0 180 0");
+		context.waitTicks(7);
 	}
 	
 	private void clearRecording()
 	{
 		context.runOnClient(mc -> {
 			forwardDown.clear();
-			onGround.clear();
-			yMotion.clear();
+			jumped.clear();
 			attacks.clear();
 		});
 	}

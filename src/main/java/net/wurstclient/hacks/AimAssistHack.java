@@ -211,8 +211,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			true);
 	
 	private final CheckboxSetting autoCombo = new CheckboxSetting("Auto combo",
-		"Holds the target in a combo with sprint-knockback hits (every hit"
-			+ " waits until the server sees you sprinting):\n"
+		"Holds the target in a combo with sprint-knockback hits on the ground"
+			+ " and crits in the air (every hit waits until the server sees"
+			+ " you sprinting - or, for a crit, falling and not sprinting):\n"
 			+ "- hits as soon as the knockback is guaranteed (just past 90%"
 			+ " charge), not only at a full cooldown\n"
 			+ "- hold W, hit, release W: lets go of W right after each hit,"
@@ -222,24 +223,19 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ " close\n"
 			+ "- doesn't hit a target that's falling (that knocks them into"
 			+ " the ground and lets them rebuild momentum first) - waits"
-			+ " until they land, or hits them on the way up\n"
+			+ " until they land - but hits them at once while they're still"
+			+ " going up, so a jump reset that came too early gets them"
+			+ " launched\n"
+			+ "- in the air (a jump reset, a drop): holds W while rising,"
+			+ " lets go once falling and crits\n"
 			+ "- deflects: sprint-hits right back when the target hits you\n"
 			+ "- against a very laggy player (200+ ms), just keeps hitting at"
 			+ " full speed\n\n"
-			+ "When §lAura-Farming§r is enabled, jumps and attacks"
-			+ " on the way down - still a sprint hit.\n\n"
-			+ "Requires §lAuto attack§r to be enabled.\n\n"
+			+ "When §lAura-Farming§r is enabled, jumps and crits on the way"
+			+ " down.\n\n" + "Requires §lAuto attack§r to be enabled.\n\n"
 			+ "The combo is reset whenever your crosshair leaves the target"
 			+ " or you click the attack button manually.",
 		false);
-	
-	private final CheckboxSetting delayedHits = new CheckboxSetting(
-		"Delayed hits",
-		"Part of §lAuto combo§r. Once per combo, on hit 2, 3 or 4 (when"
-			+ " players usually start jump resetting), holds the hit back for"
-			+ " a few ticks and keeps its distance. If the target jumps"
-			+ " meanwhile, it's hit on the way up and sent flying.",
-		true);
 	
 	private final CheckboxSetting jumpReset = new CheckboxSetting("Jump reset",
 		"Jumps the moment the target hits you while you're on the ground."
@@ -433,10 +429,6 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	private int deflectUntilTick = Integer.MIN_VALUE;
 	
-	/** Which hit of the combo is held back (Delayed hits), and how long. */
-	private int delayedHitNumber;
-	private int delayTicksLeft;
-	
 	/**
 	 * Guarantees at most one attack per tick. Without it the airborne-hit path
 	 * and the cooldown path could both fire on the same tick, which showed up
@@ -523,7 +515,6 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(aimWhileBlocking);
 		addSetting(autoAttack);
 		addSetting(autoCombo);
-		addSetting(delayedHits);
 		addSetting(jumpReset);
 		addSetting(auraFarming);
 		
@@ -1019,13 +1010,15 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		if(!HitCheck.isVerifiable(target))
 			return false;
 			
-		// Every hit is a sprint hit (more knockback than a crit does
-		// damage, and it keeps combos going). The server decides that from
-		// the sprint state it already has - the attack packet goes out
-		// before this tick's sprint update - so wait until it has it.
-		if(!isSprintHitReady())
+		// A sprint hit (knockback, keeps combos going) or, falling, a crit
+		// (+50% damage) - never a plain sweep. The server decides from the
+		// state it already has - the attack packet goes out before this
+		// tick's movement and sprint updates - so wait until it has one.
+		if(!isCritReady() && !isSprintHitReady())
 		{
-			KeyPresser.press(MC.options.keySprint);
+			// (in the air the combo lets go of sprint for the crit)
+			if(!isAirborne())
+				KeyPresser.press(MC.options.keySprint);
 			return false;
 		}
 		
@@ -1072,32 +1065,46 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	{
 		double dist = Math.sqrt(EntityUtils.distanceToHitboxSq(target));
 		boolean deflecting = isDeflecting();
-		boolean holdingBack = !deflecting && isHoldingHitBack();
 		
 		switch(comboPhase)
 		{
 			case IDLE:
-			if(auraFarming.isChecked())
+			if(isAirborne())
 			{
+				// In the air (a jump reset, Aura-Farming's jump, a drop): a
+				// crit on the way down. W stays held while still going up -
+				// the momentum - and is let go once falling, so the server
+				// has us not sprinting by the hit (a punish crit).
+				if(MC.player.getDeltaMovement().y > 0)
+				{
+					releaseBackward();
+					holdForward();
+					KeyPresser.press(MC.options.keySprint);
+				}else
+				{
+					releaseForward();
+					releaseBackward();
+					KeyPresser.release(MC.options.keySprint);
+				}
+				
+			}else if(auraFarming.isChecked())
+			{
+				// jumps for a crit (and the spin) once charged and in reach
 				releaseBackward();
 				holdForward();
 				KeyPresser.press(MC.options.keySprint);
-				if(isHitCharged() && dist < REACH && MC.player.onGround()
-					&& !MC.player.isInWater() && !MC.player.isInLava()
-					&& !MC.player.isPassenger())
-				{
+				if(isHitCharged() && dist < REACH && !MC.player.isInWater()
+					&& !MC.player.isInLava() && !MC.player.isPassenger())
 					KeyPresser.press(MC.options.keyJump);
-					comboPhase = ComboPhase.JUMPED;
-				}
 				break;
-			}
-			
-			// Spacing: chase from outside reach; just before the next hit hold
-			// W to be sprinting for it; otherwise coast, or back off with S
-			// when too close - never walk into their reach between hits.
-			if(dist > REACH || deflecting
-				|| !holdingBack && ticksUntilCharged() <= SPRINT_LEAD_TICKS)
+				
+			}else if(dist > REACH || deflecting
+				|| ticksUntilCharged() <= SPRINT_LEAD_TICKS)
 			{
+				// Spacing: chase from outside reach; just before the next hit
+				// hold W to be sprinting for it; otherwise coast, or back off
+				// with S when too close - never walk into their reach between
+				// hits.
 				releaseBackward();
 				holdForward();
 				KeyPresser.press(MC.options.keySprint);
@@ -1113,51 +1120,21 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 				releaseBackward();
 			}
 			
-			if(!isHitCharged() || dist > REACH || holdingBack
+			// A target in the air is hit at once while it's still going up -
+			// a jump reset that came too early gets it launched - and waited
+			// for while it's falling (see isGoodMomentToHit). No guessing
+			// when they'll jump.
+			if(!isHitCharged() || dist > REACH
 				|| !deflecting && !isGoodMomentToHit() || !attackTarget())
 				break;
 				
 			// Hold W, hit, release W - then reset sprint: an S-tap if
 			// they're still close, else a W-tap (just letting go of W).
 			comboHitCount++;
-			if(comboHitCount == 1)
-				planDelayedHit();
 			releaseForward();
-			resetWithS = dist < S_TAP_DISTANCE;
+			resetWithS = dist < S_TAP_DISTANCE && !isAirborne();
 			resetTicksLeft = resetWithS ? 2 : 1;
 			comboPhase = ComboPhase.RESETTING;
-			break;
-			
-			case JUMPED:
-			// Only reached in aura-farming mode; bail to IDLE if it was
-			// disabled mid-air.
-			if(!auraFarming.isChecked())
-			{
-				comboPhase = ComboPhase.IDLE;
-				break;
-			}
-			// Sprint hit on the way down: sprint forward the whole jump and
-			// hit once falling. (This used to let go of sprint for a crit;
-			// every hit is a sprint hit now - see attackTarget().)
-			holdForward();
-			KeyPresser.press(MC.options.keySprint);
-			
-			if(isHitCharged() && !MC.player.onGround() && !MC.player.isInWater()
-				&& !MC.player.isInLava())
-			{
-				if(isFalling() && attackTarget())
-				{
-					comboHitCount++;
-					releaseForward();
-					resetWithS = true;
-					resetTicksLeft = 1;
-					comboPhase = ComboPhase.RESETTING;
-				}
-			}
-			// Safety net: if we landed without getting the hit (e.g. we were
-			// blocked mid-air), fall back to IDLE and try again.
-			else if(MC.player.onGround() && isHitCharged())
-				comboPhase = ComboPhase.IDLE;
 			break;
 			
 			case RESETTING:
@@ -1232,38 +1209,6 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private boolean isDeflecting()
 	{
 		return tickCount <= deflectUntilTick;
-	}
-	
-	/**
-	 * Picks the hit (2nd, 3rd or 4th) that a combo holds back, and for how
-	 * long - players tend to start jump resetting a few hits in.
-	 */
-	private void planDelayedHit()
-	{
-		delayedHitNumber = delayedHits.isChecked() ? 2 + random.nextInt(3) : 0;
-		delayTicksLeft = 2 + random.nextInt(3);
-	}
-	
-	/**
-	 * Whether the next hit is the one held back right now. It stays held back
-	 * for a few charged ticks, keeping its distance meanwhile; if the target
-	 * leaves the ground before that - a mistimed jump reset - it goes out at
-	 * once and catches them on the way up.
-	 */
-	private boolean isHoldingHitBack()
-	{
-		if(comboHitCount + 1 != delayedHitNumber || delayTicksLeft <= 0)
-			return false;
-		
-		if(!target.onGround() && target.getY() - target.yo > 0)
-		{
-			delayTicksLeft = 0;
-			return false;
-		}
-		
-		if(isHitCharged())
-			delayTicksLeft--;
-		return true;
 	}
 	
 	/**
@@ -1342,8 +1287,6 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		comboPhase = ComboPhase.IDLE;
 		resetTicksLeft = 0;
 		comboHitCount = 0;
-		delayedHitNumber = 0;
-		delayTicksLeft = 0;
 		spinRemaining = 0F;
 		releaseForward();
 		releaseBackward();
@@ -1684,11 +1627,30 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		dodgeCooldown = 0;
 	}
 	
-	/** On the way down from a jump. */
-	private boolean isFalling()
+	/** In the air - not on the ground, a ladder, in water or riding. */
+	private boolean isAirborne()
 	{
-		return MC.player.fallDistance > 0 && !MC.player.onGround()
-			&& MC.player.getDeltaMovement().y < 0;
+		LocalPlayer player = MC.player;
+		return !player.onGround() && !player.onClimbable()
+			&& !player.isInWater() && !player.isInLava()
+			&& !player.isPassenger() && !player.isFallFlying();
+	}
+	
+	/**
+	 * Whether a hit now would be a crit to the server: vanilla's
+	 * {@code Player.canCriticalAttack} - falling, not on a ladder or in
+	 * water, not blind, not riding, not sprinting - with the state the server
+	 * has (the attack goes out before this tick's movement packet, and
+	 * {@code wasSprinting} is the sprint state it was last told).
+	 */
+	private boolean isCritReady()
+	{
+		LocalPlayer player = MC.player;
+		return player.fallDistance > 0 && !player.onGround()
+			&& !player.onClimbable() && !player.isInWater()
+			&& !player.hasEffect(MobEffects.BLINDNESS) && !player.isPassenger()
+			&& !player.isSprinting() && !player.wasSprinting
+			&& target instanceof LivingEntity;
 	}
 	
 	/**
@@ -1739,7 +1701,6 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private enum ComboPhase
 	{
 		IDLE,
-		JUMPED,
 		RESETTING
 	}
 	

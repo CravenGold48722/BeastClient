@@ -529,7 +529,14 @@ does it. When writing or touching a hack:
   target just swung or lowered its shield), Shield breaker (axe from the hotbar: switch, hit
   next tick, switch back with `PacketOrder`; never hit a raised shield otherwise), Crouch dodge
   (sneak 3 ticks against an incoming crit dive), no walking into a cobwebbed target (crits it),
-  no S into a wall (MeleeWallGuard), opt-in Combo strafe and Shield block. Its mace/crystal/
+  no S into a wall (MeleeWallGuard), opt-in Combo strafe and Shield block (**Shield source**,
+  user 2026-10-17 - AutoTotem holds the offhand: Shield while healthy (default; a hotbar shield
+  into the offhand right after our hit via select + swap-hands key + back, while in a fight -
+  target or a hit in the last 3 s - and health >= "Shield swap health" (+1 heart to swap in);
+  AutoTotem yields while `isKeepingShieldInOffhand()`), Hotbar shield (main-hand shield to
+  block, weapon back after - every switch restarts the cooldown), Always totem, Always
+  shield; tested in `AimAssistComboTest` with the user's setup: shield in the offhand 292 of
+  307 ticks, totem back after). Its mace/crystal/
   elytra/pearl/potion/loot AIs are outside AimAssist. Also fixed: the combo reset (and let go
   of W) whenever the crosshair slipped off the target for a tick, so the next hit came 2+ ticks
   late - now only looking 45°+ away resets it; and no attack while using an item. Gametest `AimAssistComboTest` fights a **VexBot** (user,
@@ -922,7 +929,7 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
   `preparePerfMods` (build.gradle, after `deleteGameTestRunDir`) copies - never moves - the
   performance mods from `-PperfModsDir` (default the user's `.minecraft/mods`: Sodium, Sodium
   Extra, ImmediatelyFast, EntityCulling, MoreCulling, CullLeaves, BetterBlockEntities, Particle
-  Core, lite-cpu, FerriteCore, ModernFix, SmoothJoin, Lithium, BadOptimizations, Debugify,
+  Core, FerriteCore, ModernFix, SmoothJoin, Lithium, BadOptimizations, Debugify,
   Krypton, Ixeris, Fast IP Ping + cloth-config, fzzy_config, fabric-language-kotlin) and writes
   an `options.txt` with the lowest graphics, except what tested features change or need to show
   (vignette, bobbing, hurt tilt, screen/FOV effects, gamma, FOV, GUI scale). Left out: Dynamic
@@ -936,9 +943,11 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
   G1 (pause 50 ms), `UseCompactObjectHeaders` (JDK 25), string dedup, unused heap given back
   (`MinHeapFreeRatio=10`, `MaxHeapFreeRatio=25`, `G1PeriodicGCInterval=10000`), code cache
   192M; the Gradle daemon gives heap back too - peaks 1.4 GB client + 1.0 GB Gradle.
-  lite-cpu gets a test config (`config/lite_cpu.json`): its throttled chunk rebuilds and
-  distance culling made screenshots race block changes; `in_game` also waits for the wall's
-  block to reach the client (the template was once recorded without it).
+  Not lite-cpu either: it throttles chunk rebuilds whatever its config says ("profile:
+  aggressive"). Screenshots still raced Sodium's own chunk rebuilds after a block change
+  ("all drawn" before the rebuild was scheduled): `assertScreenshotEquals` retries a
+  mismatch twice 10 ticks apart and records templates only after 20 ticks; `in_game` also
+  waits for the wall's block to reach the client.
 - `PacketBudgetTest` counts packets, swings per attack and aim settling in singleplayer; feel and
   accuracy still need a launch of the client.
 - **Real anticheats (`AnticheatTest`, user, 2026-10-13).** The gametests also join two real

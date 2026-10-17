@@ -91,19 +91,35 @@ public enum WurstClientTestHelper
 			RawImageImpl.fromColorNativeImage(nativeTemplateImage);
 		RawImage<int[]> maskedTemplateImage = applyMask(rawTemplateImage, mask);
 		
-		Path screenshotPath = context.takeScreenshot(fileName);
-		RawImage<int[]> rawScreenshotImage =
-			RawImageImpl.fromColorNativeImage(loadImageFile(screenshotPath));
+		// Sodium (the test client's performance mods) rebuilds chunks on its
+		// own threads, and "all chunks drawn" can be true before a block
+		// change was even scheduled: the in_game screenshot came out without
+		// the wall built right before it now and then. So a mismatch is
+		// retried twice, 10 ticks apart - a real change still fails all three
+		// - and a template is only recorded after 20 ticks.
+		if(UPDATE_TEMPLATES)
+			context.waitTicks(20);
 		
-		// The mask is the template's size, so a screenshot of a different size
-		// can't even be compared against it.
-		boolean sizeMatches =
-			rawScreenshotImage.width() == maskedTemplateImage.width()
-				&& rawScreenshotImage.height() == maskedTemplateImage.height();
-		
+		Path screenshotPath = null;
+		boolean sizeMatches = false;
 		boolean matches = false;
-		if(sizeMatches)
+		for(int attempt = 0; attempt < 3 && !matches; attempt++)
 		{
+			if(attempt > 0)
+				context.waitTicks(10);
+			
+			screenshotPath = context.takeScreenshot(fileName);
+			RawImage<int[]> rawScreenshotImage = RawImageImpl
+				.fromColorNativeImage(loadImageFile(screenshotPath));
+			
+			// The mask is the template's size, so a screenshot of a different
+			// size can't even be compared against it.
+			sizeMatches = rawScreenshotImage.width() == maskedTemplateImage
+				.width()
+				&& rawScreenshotImage.height() == maskedTemplateImage.height();
+			if(!sizeMatches)
+				break;
+			
 			RawImage<int[]> maskedScreenshotImage =
 				applyMask(rawScreenshotImage, mask);
 			
@@ -112,6 +128,10 @@ public enum WurstClientTestHelper
 			
 			matches = algo.findColor(maskedScreenshotImage,
 				maskedTemplateImage) != null;
+			
+			// recording: the first (settled) shot is the template
+			if(UPDATE_TEMPLATES)
+				break;
 		}
 		
 		// Only rewrite templates that actually changed, so that re-recording

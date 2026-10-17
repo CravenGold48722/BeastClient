@@ -289,6 +289,12 @@ public final class AutoTotemHack extends Hack
 			return;
 		}
 		
+		// AimAssist's Shield block has the offhand for now (its "Shield
+		// source": Shield while healthy in a fight, or Always shield) - the
+		// totem goes back as soon as that ends.
+		if(WURST.getHax().aimAssistHack.isKeepingShieldInOffhand())
+			return;
+		
 		float healthF = health.getValueF();
 		if(healthF > 0 && MC.player.getHealth() > healthF * 2F)
 			return;

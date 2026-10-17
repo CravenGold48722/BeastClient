@@ -402,6 +402,29 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ " own hit. Not against axes - they disable shields.",
 		false);
 	
+	private final EnumSetting<ShieldSource> shieldSource = new EnumSetting<>(
+		"Shield source",
+		"With §lShield block§r, where its shield comes from - the offhand is"
+			+ " also where §lAutoTotem§r keeps a totem.\n\n"
+			+ "§lShield while healthy§r: in a fight, a hotbar shield goes into"
+			+ " the offhand right after one of your hits while your health is"
+			+ " at least §lShield swap health§r; below that or after the"
+			+ " fight, AutoTotem puts the totem back.\n\n"
+			+ "§lHotbar shield§r: the totem stays; to block, the shield comes"
+			+ " into your main hand and the weapon back afterwards. Every"
+			+ " switch restarts the weapon's attack cooldown - fewer hits.\n\n"
+			+ "§lAlways totem§r: the offhand is never touched; shields only"
+			+ " work if one is already there.\n\n"
+			+ "§lAlways shield§r: a hotbar shield goes into the offhand and"
+			+ " stays, whatever your health.",
+		ShieldSource.values(), ShieldSource.WHILE_HEALTHY);
+	
+	private final SliderSetting shieldSwapHealth = new SliderSetting(
+		"Shield swap health",
+		"With §lShield source§r: Shield while healthy - the health from which"
+			+ " the shield goes into the offhand; below it, the totem.",
+		8, 1, 10, 0.5, ValueDisplay.DECIMAL.withSuffix(" hearts"));
+	
 	private final CheckboxSetting auraFarming =
 		new CheckboxSetting("Aura-Farming",
 			"Does a 360 spin while airborne on the way up, then turns back to"
@@ -645,6 +668,13 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 * (switch back next). The slot to go back to.
 	 */
 	private int shieldBreakStage;
+	
+	/** Hotbar shield: the weapon's slot while the shield is held, or -1. */
+	private int hotbarShieldPrevSlot = -1;
+	
+	/** Shield into the offhand: 1 shield selected, 2 swapped, else 0. */
+	private int offhandSwapStage;
+	private int offhandSwapPrevSlot = -1;
 	private int shieldBreakPrevSlot = -1;
 	private int shieldBreakTicks;
 	
@@ -763,6 +793,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(crouchDodge);
 		addSetting(comboStrafe);
 		addSetting(shieldBlock);
+		addSetting(shieldSource);
+		addSetting(shieldSwapHealth);
 		addSetting(auraFarming);
 		
 		addSetting(dodging);
@@ -847,6 +879,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		resetAimState();
 		resetCombo();
 		resetShieldBreak();
+		resetShieldSwaps();
 		resetDodge();
 		stopMusic();
 	}
@@ -932,6 +965,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 				aim.startTurn(GameClock.nanoTime());
 		}
 		
+		// (with or without a target: Always shield)
+		updateOffhandSwap();
+		
 		if(target == null)
 		{
 			// Nothing to continue from next time we acquire a target; the
@@ -941,8 +977,10 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			resetDodge();
 			return;
 		}
-		// (not while the shield breaker holds the axe)
-		if(shieldBreakStage == 0)
+		// (not while the shield breaker holds the axe or a shield is being
+		// handled)
+		if(shieldBreakStage == 0 && offhandSwapStage == 0
+			&& hotbarShieldPrevSlot < 0)
 			WURST.getHax().autoSwordHack.setSlot(target);
 		
 		updateDodge();
@@ -1323,6 +1361,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	{
 		LocalPlayer player = MC.player;
 		return !attackedThisTick && target != null && !player.isUsingItem()
+			&& hotbarShieldPrevSlot < 0 && offhandSwapStage == 0
 			&& HitCheck.isVerifiable(target)
 			&& (!isShieldUp(target)
 				|| isShieldBreaker(player.getMainHandItem()))
@@ -2185,27 +2224,203 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	/**
 	 * Shield block: up while the target's hit is due before ours (a shield
-	 * takes 5 ticks to block), down in time for our own hit.
+	 * takes 5 ticks to block), down in time for our own hit. With the shield
+	 * in the offhand - or, Shield source: Hotbar shield, in the main hand.
 	 */
 	private void updateShieldBlock(double dist)
 	{
-		ItemStack offhand = MC.player.getOffhandItem();
-		boolean want = shieldBlock.isChecked()
-			&& offhand.has(DataComponents.BLOCKS_ATTACKS)
-			&& !MC.player.getCooldowns().isOnCooldown(offhand)
+		LocalPlayer player = MC.player;
+		boolean offhandShield = isBlocker(player.getOffhandItem());
+		int hotbarShield =
+			shieldSource.getSelected() == ShieldSource.HOTBAR && !offhandShield
+				? findShieldSlot() : -1;
+		ItemStack shield =
+			offhandShield ? player.getOffhandItem() : hotbarShield >= 0
+				? player.getInventory().getItem(hotbarShield) : null;
+		
+		boolean threat = shieldBlock.isChecked() && shield != null
+			&& !player.getCooldowns().isOnCooldown(shield)
 			&& target instanceof LivingEntity le
 			&& !isShieldBreaker(le.getMainHandItem()) && dist <= 4.5
 			&& facingUs(target, MC.player.position()) >= 0.8
-			&& targetTicksUntilCharged() <= 6 && ticksUntilCharged() > 2
-			&& shieldBlockTicks < 40;
+			&& targetTicksUntilCharged() <= 6 && shieldBlockTicks < 40;
 		
-		if(want)
+		if(hotbarShield >= 0 || hotbarShieldPrevSlot >= 0)
+		{
+			updateHotbarShield(threat, hotbarShield);
+			return;
+		}
+		
+		if(threat && ticksUntilCharged() > 2)
 		{
 			MC.options.keyUse.setDown(true);
 			shieldBlocking = true;
 			shieldBlockTicks++;
 		}else
 			stopShieldBlock();
+	}
+	
+	/**
+	 * Shield source: Hotbar shield - the totem stays in the offhand; to block,
+	 * the shield comes into the main hand, and the weapon back once the
+	 * threat is over (their hit came or it isn't due any more). Every switch
+	 * restarts the weapon's cooldown: block their hit, then counter.
+	 */
+	private void updateHotbarShield(boolean threat, int shieldSlot)
+	{
+		LocalPlayer player = MC.player;
+		boolean holdingShield = isBlocker(player.getMainHandItem());
+		
+		if(threat && shieldSlot >= 0)
+		{
+			if(!holdingShield)
+			{
+				if(!PacketOrder.canChangeSlotNow())
+					return;
+				hotbarShieldPrevSlot = player.getInventory().getSelectedSlot();
+				selectSlot(shieldSlot);
+			}
+			MC.options.keyUse.setDown(true);
+			shieldBlocking = true;
+			shieldBlockTicks++;
+			return;
+		}
+		
+		stopShieldBlock();
+		if(hotbarShieldPrevSlot < 0 || !PacketOrder.canChangeSlotNow())
+			return;
+		if(holdingShield)
+			selectSlot(hotbarShieldPrevSlot);
+		hotbarShieldPrevSlot = -1;
+	}
+	
+	/**
+	 * Shield source: Shield while healthy / Always shield - a hotbar shield
+	 * goes into the offhand the way a player does it: select it, the
+	 * swap-hands key, the weapon back (one step a tick; a slot change never
+	 * after an action in the same tick, see PacketOrder). In a fight only
+	 * right after our hit, when switching items costs nothing (the weapon's
+	 * cooldown just restarted anyway). AutoTotem puts the totem back once
+	 * isKeepingShieldInOffhand() says so.
+	 */
+	private void updateOffhandSwap()
+	{
+		LocalPlayer player = MC.player;
+		if(offhandSwapStage == 1)
+		{
+			// the shield is selected: swap hands (vanilla sends it with the
+			// keybinds next tick)
+			if(isBlocker(player.getMainHandItem()))
+			{
+				IKeyMapping swap = IKeyMapping.get(MC.options.keySwapOffhand);
+				swap.simulatePress(true);
+				swap.simulatePress(false);
+			}
+			offhandSwapStage = 2;
+			return;
+		}
+		
+		if(offhandSwapStage == 2)
+		{
+			if(!PacketOrder.canChangeSlotNow())
+				return;
+			if(offhandSwapPrevSlot >= 0)
+				selectSlot(offhandSwapPrevSlot);
+			offhandSwapStage = 0;
+			offhandSwapPrevSlot = -1;
+			return;
+		}
+		
+		if(!isKeepingShieldInOffhand() || isBlocker(player.getOffhandItem()))
+			return;
+		if(target != null && tickCount - lastHitTick > 2)
+			return;
+		if(shieldBreakStage != 0 || hotbarShieldPrevSlot >= 0
+			|| player.isUsingItem() || MC.screen != null
+			|| !PacketOrder.canChangeSlotNow())
+			return;
+		
+		int slot = findShieldSlot();
+		if(slot < 0)
+			return;
+		offhandSwapPrevSlot = player.getInventory().getSelectedSlot();
+		selectSlot(slot);
+		offhandSwapStage = 1;
+	}
+	
+	/**
+	 * Whether AimAssist wants a shield in the offhand right now (Shield source:
+	 * Shield while healthy in a fight at enough health, or Always shield) and
+	 * has one there or in the hotbar. AutoTotem leaves the offhand alone
+	 * meanwhile.
+	 */
+	public boolean isKeepingShieldInOffhand()
+	{
+		if(!isEnabled() || !shieldBlock.isChecked() || !autoAttack.isChecked()
+			|| !autoCombo.isChecked() || MC.player == null)
+			return false;
+		
+		ShieldSource source = shieldSource.getSelected();
+		if(source == ShieldSource.WHILE_HEALTHY)
+		{
+			// a heart more to swap the shield in than to keep it (no flipping
+			// back and forth at the line), and the fight lasts 3 s past the
+			// last hit (a target lost for a moment doesn't end it)
+			boolean fighting = target != null || tickCount - lastHitTick < 60;
+			float need = shieldSwapHealth.getValueF() * 2
+				+ (isBlocker(MC.player.getOffhandItem()) ? 0 : 2);
+			if(!fighting || MC.player.getHealth() < need)
+				return false;
+		}else if(source != ShieldSource.ALWAYS)
+			return false;
+		
+		return isBlocker(MC.player.getOffhandItem()) || findShieldSlot() >= 0;
+	}
+	
+	private static boolean isBlocker(ItemStack stack)
+	{
+		return stack.has(DataComponents.BLOCKS_ATTACKS);
+	}
+	
+	private static int findShieldSlot()
+	{
+		for(int i = 0; i < 9; i++)
+			if(isBlocker(MC.player.getInventory().getItem(i)))
+				return i;
+		return -1;
+	}
+	
+	/** Puts the weapon back if a shield swap was halfway. */
+	private void resetShieldSwaps()
+	{
+		int prev = hotbarShieldPrevSlot >= 0 ? hotbarShieldPrevSlot
+			: offhandSwapStage != 0 ? offhandSwapPrevSlot : -1;
+		if(prev >= 0 && MC.player != null && PacketOrder.canChangeSlotNow())
+			selectSlot(prev);
+		hotbarShieldPrevSlot = -1;
+		offhandSwapStage = 0;
+		offhandSwapPrevSlot = -1;
+	}
+	
+	private enum ShieldSource
+	{
+		WHILE_HEALTHY("Shield while healthy"),
+		HOTBAR("Hotbar shield"),
+		TOTEM("Always totem"),
+		ALWAYS("Always shield");
+		
+		private final String name;
+		
+		private ShieldSource(String name)
+		{
+			this.name = name;
+		}
+		
+		@Override
+		public String toString()
+		{
+			return name;
+		}
 	}
 	
 	private void stopShieldBlock()
@@ -2415,6 +2630,15 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		sprintHeldOff = false;
 		releaseComboStrafe();
 		stopShieldBlock();
+		// the weapon back if the hotbar shield is in hand (a swap into the
+		// offhand carries on - Always shield runs without a target too)
+		if(hotbarShieldPrevSlot >= 0 && MC.player != null
+			&& PacketOrder.canChangeSlotNow())
+		{
+			if(isBlocker(MC.player.getMainHandItem()))
+				selectSlot(hotbarShieldPrevSlot);
+			hotbarShieldPrevSlot = -1;
+		}
 		releaseForward();
 		releaseBackward();
 	}

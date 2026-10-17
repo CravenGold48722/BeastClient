@@ -26,6 +26,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.WurstClient;
@@ -536,21 +537,23 @@ public final class AimAssistComboTest extends SingleplayerTest
 			return null;
 		
 		List<Boolean> back = snapshot(backDown);
+		// the reset's own ticks: from the third on, S can be the spacing
+		// (staying out of the bot's reach while ours charges - VexBot keeps
+		// walking at us even while the test pushes it away)
 		int t = hits.get(0).tick();
-		for(int i = t; i < Math.min(t + 3, back.size()); i++)
+		for(int i = t; i < Math.min(t + 2, back.size()); i++)
 			if(back.get(i))
 				return true;
 		return false;
 	}
 	
 	/**
-	 * The same open spot on the ground for every part, facing north - away
-	 * from what the other tests built around the origin.
-	 */
-	/**
-	 * Shield block and Crouch dodge (user, 2026-10-17: "doesn't work"), with
-	 * a shield in the offhand against a VexBot: the shield goes up while the
-	 * bot's hit is due before ours, and a crit dive onto us gets a crouch.
+	 * Shield block and Crouch dodge (user, 2026-10-17: "doesn't work") against
+	 * a VexBot, set up like the user's game: AutoTotem on (Health 0), a totem
+	 * in the offhand and a shield in the hotbar. Shield source "Shield while
+	 * healthy" puts the shield in after our first hit, the shield goes up
+	 * while the bot's hit is due before ours, AutoTotem puts the totem back
+	 * after the fight, and a crit dive onto us gets a crouch.
 	 */
 	private void shieldAndCrouchDodge()
 	{
@@ -559,24 +562,30 @@ public final class AimAssistComboTest extends SingleplayerTest
 		context.waitTicks(20);
 		runAsMe("gamemode survival");
 		makeTough("@s");
-		runAsMe("item replace entity @s weapon.offhand with shield");
+		runAsMe("item replace entity @s weapon.offhand with totem_of_undying");
+		runAsMe("item replace entity @s hotbar.1 with shield");
 		runAsMe("item replace entity " + BOT
 			+ " weapon.mainhand with diamond_sword");
 		runWurstCommand("setcheckbox AimAssist Shield_block on");
+		runWurstCommand("setmode AimAssist Shield_source shield_while_healthy");
+		runWurstCommand("setslider AutoTotem Health 0");
+		runWurstCommand("t AutoTotem on");
 		runWurstCommand("setcheckbox AimAssist Crouch_dodge on");
 		// the drops below are teleports, up to ~6 blocks in a tick from where
 		// knockback put it (120 blocks/s):
 		// the user's Filter speed 35 let go of the target every time
 		runWurstCommand("setslider AimAssist Filter_speed 200");
 		
-		int[] counts = new int[7];
+		int[] counts = new int[8];
 		final int BLOCKING = 0, SWINGS = 1, HURT = 2, DIVES = 3,
-			DIVE_CROUCHED = 4, CROUCHING = 5, TICKS = 6;
+			DIVE_CROUCHED = 4, CROUCHING = 5, TICKS = 6, OFFHAND_SHIELD = 7;
 		boolean[] botWasSwinging = new boolean[1];
 		UpdateListener watch = () -> {
 			Minecraft mc = WurstClient.MC;
 			var player = mc.player;
 			counts[TICKS]++;
+			if(player.getOffhandItem().is(Items.SHIELD))
+				counts[OFFHAND_SHIELD]++;
 			if(player.isBlocking())
 				counts[BLOCKING]++;
 			if(player.isShiftKeyDown())
@@ -622,16 +631,35 @@ public final class AimAssistComboTest extends SingleplayerTest
 		{
 			context.runOnClient(mc -> WurstClient.INSTANCE.getEventManager()
 				.remove(UpdateListener.class, watch));
-			runAsMe("item replace entity @s weapon.offhand with air");
-			removeBot();
 		}
 		
+		// the fight is over: AutoTotem puts the totem back
+		boolean totemBack = false;
+		for(int i = 0; i < 40 && !totemBack; i++)
+		{
+			context.waitTick();
+			totemBack = context.computeOnClient(
+				mc -> mc.player.getOffhandItem().is(Items.TOTEM_OF_UNDYING));
+		}
+		runWurstCommand("t AutoTotem off");
+		runAsMe("item replace entity @s weapon.offhand with air");
+		runAsMe("item replace entity @s hotbar.1 with air");
+		removeBot();
+		
 		logger.info(
-			"Shield & crouch dodge: {} ticks, shield up {}, bot swung {} times,"
-				+ " hurt {} times; crit dives onto us {} ticks, crouched in {}"
-				+ " of them, crouching {} ticks in all",
-			counts[TICKS], counts[BLOCKING], counts[SWINGS], counts[HURT],
-			counts[DIVES], counts[DIVE_CROUCHED], counts[CROUCHING]);
+			"Shield & crouch dodge: {} ticks, shield in the offhand {}, up {},"
+				+ " bot swung {} times, hurt {} times, totem back after: {};"
+				+ " crit dives onto us {} ticks, crouched in {} of them,"
+				+ " crouching {} ticks in all",
+			counts[TICKS], counts[OFFHAND_SHIELD], counts[BLOCKING],
+			counts[SWINGS], counts[HURT], totemBack, counts[DIVES],
+			counts[DIVE_CROUCHED], counts[CROUCHING]);
+		if(counts[OFFHAND_SHIELD] == 0)
+			throw new RuntimeException("Shield source \"Shield while healthy\""
+				+ " never put the hotbar shield into the offhand");
+		if(!totemBack)
+			throw new RuntimeException(
+				"AutoTotem didn't put the totem back after the fight");
 		if(counts[SWINGS] > 3 && counts[BLOCKING] == 0)
 			throw new RuntimeException("Shield block never raised the shield ("
 				+ counts[SWINGS] + " bot swings)");
@@ -640,6 +668,10 @@ public final class AimAssistComboTest extends SingleplayerTest
 				+ counts[DIVES] + " ticks of crit dives onto us)");
 	}
 	
+	/**
+	 * The same open spot on the ground for every part, facing north - away
+	 * from what the other tests built around the origin.
+	 */
 	private void startSpot()
 	{
 		runAsMe("tp @s 0.5 -60 -20.5 180 0");

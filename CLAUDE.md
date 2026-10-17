@@ -489,7 +489,15 @@ does it. When writing or touching a hack:
   `approachTicks(dist)` before the charge, so it arrives as the hit charges (it chased from
   3.0 and backed off under 2.0: a VexBot landed 11 of its 16 hits during our cooldown from
   0.3-2.4 blocks; score 18:16 -> 19:10; the fight logs every hit taken with both reaches);
-  Hops only replace backing off when too close (they hopped at any distance from 1.5); sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **every chance at a
+  Hops only replace backing off when too close (they hopped at any distance from 1.5);
+  **Combat style** (user, 2026-10-17, "HT1 bot" = Minecraft Combat AI's ECHO v29 in Janus's
+  video `Wkz9kOb3mt0`, beat HT1s 45:18; its on-screen overlay shows distance, phase
+  closing/opening/holding, its 3x3 movement keys and JUMP/SPRT/HIT/SNEAK per frame - read at
+  10 fps): Sprint combo (default) or **Crit trader** = ECHO's rules - at the reach edge
+  strafing, no W inside it, jump whenever the charge is <= 6 ticks away (falls = crit as it
+  charges), hit from ~3 blocks, S + sneak 3 ticks after the hit. Against VexBot (which sticks
+  at 0.5-1.7 blocks) Sprint combo 20:13, Crit trader 10 (7 crits):13 - roughly even in damage;
+  `AimAssistComboTest.critTraderFight` logs both; sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **every chance at a
   sprint hit or crit is taken** (user, 2026-10-16: "100% of the time, unless a setting says
   not to" - `isHitChance` runs before the ground combo's tricks and in every combo phase; only
   Baits, Aura-Farming on the ground, Shield breaker and Skip falling targets hold one back;

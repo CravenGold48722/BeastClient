@@ -261,6 +261,17 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ " target (45°+) or click the attack button manually.",
 		false);
 	
+	private final EnumSetting<CombatStyle> combatStyle = new EnumSetting<>(
+		"Combat style",
+		"With §lAuto combo§r, how it fights.\n\n"
+			+ "§lSprint combo§r: sprint hits that knock the target up and away,"
+			+ " then out of its reach until the next one - the combo guides.\n\n"
+			+ "§lCrit trader§r: the way the ECHO PvP AI beat HT1 players -"
+			+ " stays at the edge of reach strafing, jumps so it falls (a"
+			+ " crit) as the hit charges, hits from ~3 blocks, then backs off"
+			+ " with a sneak. Never walks into the target's reach to hit.",
+		CombatStyle.values(), CombatStyle.SPRINT_COMBO);
+	
 	private final CheckboxSetting skipFalling = new CheckboxSetting(
 		"Skip falling targets",
 		"With §lAuto attack§r: doesn't hit a target that's falling (that"
@@ -776,6 +787,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(aimWhileBlocking);
 		addSetting(autoAttack);
 		addSetting(autoCombo);
+		addSetting(combatStyle);
 		addSetting(skipFalling);
 		addSetting(jumpReset);
 		addSetting(flyOuts);
@@ -1599,6 +1611,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return true;
 		}
 		
+		if(combatStyle.getSelected() == CombatStyle.CRIT_TRADER)
+			return updateCritTrader(dist, canJump);
+		
 		// S-tap deflection: too close to stun them, so a tick of S first.
 		if(deflectSTapTicks > 0)
 		{
@@ -1831,12 +1846,82 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 * a deflection, double crit from up close) or keep W down (sprint
 	 * sweeps).
 	 */
+	/**
+	 * Combat style: Crit trader - the way ECHO (Minecraft Combat AI's v29,
+	 * which beat HT1 players 45:18) fights, read off its overlay in Janus's
+	 * video (user, 2026-10-17): it lives at the edge of reach (in and out
+	 * every few ticks, always with A or D), comes in jumping so it falls -
+	 * a crit - as its hit charges, hits from ~3 blocks the moment it can,
+	 * and backs off with a sneak right after (its counter-hit window).
+	 * Never walks into the target's reach to hit. Returns false: the hit
+	 * itself goes out in updateAutoCombo.
+	 */
+	private boolean updateCritTrader(double dist, boolean canJump)
+	{
+		int charge = ticksUntilCharged();
+		// a jump now falls (fallDistance > 0) from ~6 ticks on: charged by
+		// then - or already (with only 3-6 it never jumped while the hit
+		// waited charged, and with no W there's no sprint hit either)
+		boolean jumpForCrit = canJump && charge <= 6;
+		
+		if(dist > REACH + 0.3)
+		{
+			// in from outside, jumping when the charge is near: it lands as
+			// a crit from the edge (ECHO's "three block crits")
+			releaseBackward();
+			holdForward();
+			pressSprint();
+			releaseComboStrafe();
+			if(jumpForCrit && dist <= REACH + 2)
+			{
+				KeyPresser.press(MC.options.keyJump);
+				airMode = AirMode.NONE;
+			}
+			return false;
+		}
+		
+		// at the edge: no W - never into their reach - S if too close, and
+		// sideways, switching sides every 8 ticks
+		releaseForward();
+		if(dist < REACH - 0.6 && hasRoomBehind())
+			holdBackward();
+		else
+			releaseBackward();
+		if(tickCount % 8 == 0)
+			strafeLeft = !strafeLeft;
+		if(dodgeDirection == Dodge.NONE)
+		{
+			holdDodge(strafeLeft ? Dodge.LEFT : Dodge.RIGHT);
+			comboStrafing = true;
+		}
+		
+		// a jump in place (no W while rising) for the crit
+		if(jumpForCrit)
+		{
+			KeyPresser.press(MC.options.keyJump);
+			airMode = AirMode.HOP_CRIT;
+		}
+		return false;
+	}
+	
 	private void afterHit(double dist, boolean deflecting, double closing)
 	{
 		comboHitCount++;
 		lastHitTick = tickCount;
 		strafeLeft = !strafeLeft;
 		boolean onGround = !isAirborne();
+		
+		if(combatStyle.getSelected() == CombatStyle.CRIT_TRADER)
+		{
+			// back off with a sneak - their counter-hit comes now, at a
+			// smaller hitbox
+			releaseForward();
+			resetWithS = onGround && hasRoomBehind();
+			resetTicksLeft = 3;
+			comboPhase = ComboPhase.RESETTING;
+			KeyPresser.press(MC.options.keyShift, 3);
+			return;
+		}
 		
 		if(sweepChase)
 		{
@@ -2400,6 +2485,25 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		hotbarShieldPrevSlot = -1;
 		offhandSwapStage = 0;
 		offhandSwapPrevSlot = -1;
+	}
+	
+	private enum CombatStyle
+	{
+		SPRINT_COMBO("Sprint combo"),
+		CRIT_TRADER("Crit trader");
+		
+		private final String name;
+		
+		private CombatStyle(String name)
+		{
+			this.name = name;
+		}
+		
+		@Override
+		public String toString()
+		{
+			return name;
+		}
 	}
 	
 	private enum ShieldSource

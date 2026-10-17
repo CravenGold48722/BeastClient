@@ -177,6 +177,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 			noHitWhileFalling();
 			tapChoice();
 			realFight();
+			critTraderFight();
 			shieldAndCrouchDodge();
 			
 		}finally
@@ -545,6 +546,50 @@ public final class AimAssistComboTest extends SingleplayerTest
 			if(back.get(i))
 				return true;
 		return false;
+	}
+	
+	/**
+	 * Combat style "Crit trader" (ECHO's way of fighting, see AimAssist) in
+	 * the same 300-tick VexBot fight as realFight: only sprint hits and
+	 * crits, crits among them, and the score next to the sprint combo's.
+	 */
+	private void critTraderFight()
+	{
+		startSpot();
+		spawnBot("~ ~ ~-4");
+		context.waitTicks(20);
+		runAsMe("gamemode survival");
+		makeTough("@s");
+		runAsMe("item replace entity " + BOT
+			+ " weapon.mainhand with diamond_sword");
+		runWurstCommand("setmode AimAssist Combat_style crit_trader");
+		clearRecording();
+		runAsMe("vexbot attack " + me + " " + BOT);
+		runWurstCommand("t AimAssist on");
+		context.waitTicks(300);
+		int fightEnd = context.computeOnClient(mc -> forwardDown.size());
+		runWurstCommand("t AimAssist off");
+		runAsMe("vexbot attack stop " + BOT);
+		runWurstCommand("setmode AimAssist Combat_style sprint_combo");
+		context.waitTicks(3);
+		
+		List<Attack> hits = snapshotAttacks();
+		long taken = context.computeOnClient(
+			mc -> hitsTaken.stream().filter(h -> h.tick() < fightEnd).count());
+		long crits = hits.stream().filter(Attack::crit).count();
+		long neither =
+			hits.stream().filter(h -> !h.sprintHit() && !h.crit()).count();
+		logger.info(
+			"Crit trader: score {} hits on the bot, {} taken; {} crits,"
+				+ " {} neither sprint hits nor crits",
+			hits.size(), taken, crits, neither);
+		removeBot();
+		
+		if(hits.size() < 5)
+			throw new RuntimeException("Crit trader: only " + hits.size()
+				+ " hits in a 300-tick fight");
+		if(crits == 0)
+			throw new RuntimeException("Crit trader: not a single crit");
 	}
 	
 	/**

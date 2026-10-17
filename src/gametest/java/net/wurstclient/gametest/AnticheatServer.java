@@ -137,8 +137,13 @@ public final class AnticheatServer
 			// for seconds - lag flags everywhere (Intave, a bigger plugin:
 			// more)
 			String heap = flagLogDir != null ? "-Xmx1536M" : "-Xmx1G";
-			process = new ProcessBuilder(java, heap, "-jar", jar, "nogui")
-				.directory(dir).redirectErrorStream(true).start();
+			// the client's flags too (build.gradle): G1 with short pauses,
+			// compact object headers, unused heap given back every 15 s
+			process = new ProcessBuilder(java, "-Xms256M", heap, "-XX:+UseG1GC",
+				"-XX:MaxGCPauseMillis=50", "-XX:+ParallelRefProcEnabled",
+				"-XX:+UseCompactObjectHeaders", "-XX:+UseStringDeduplication",
+				"-XX:G1PeriodicGCInterval=15000", "-jar", jar, "nogui")
+					.directory(dir).redirectErrorStream(true).start();
 			
 		}catch(IOException e)
 		{

@@ -39,6 +39,7 @@ import net.wurstclient.settings.SwingHandSetting.SwingHand;
 import net.wurstclient.settings.filterlists.EntityFilterList;
 import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.EntityUtils;
+import net.wurstclient.util.HitCheck;
 
 @SearchTags({"fight bot"})
 @DontSaveState
@@ -231,12 +232,12 @@ public final class FightBotHack extends Hack
 		// check range
 		if(EntityUtils.distanceToHitboxSq(entity) > range.getValueSq())
 			return;
-		
-		// while turning smoothly, only swing once the crosshair is on it
-		if(entity == frameAimTarget
-			&& !CameraAim.isLookingAt(MC.player.getYRot(), MC.player.getXRot(),
-				entity.getBoundingBox().inflate(entity.getPickRadius()),
-				range.getValue() + 1))
+			
+		// Only a hit the server can verify: within real reach, nothing in
+		// between, with the rotation it already has and the current one (see
+		// HitCheck). Range alone (4.25 by default) let a hit go out from 4.19
+		// blocks - Grim Reach.
+		if(!HitCheck.isVerifiable(entity))
 			return;
 		
 		// attack entity

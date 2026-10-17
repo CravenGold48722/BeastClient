@@ -97,7 +97,6 @@ public final class NukerHack extends Hack
 		
 		if(currentBlock != null)
 		{
-			MC.gameMode.isDestroying = true;
 			MC.gameMode.stopDestroyBlock();
 			currentBlock = null;
 		}
@@ -167,6 +166,8 @@ public final class NukerHack extends Hack
 	private boolean breakOneBlock(BlockBreakingParams params)
 	{
 		faceTarget.face(params.hitVec());
+		if(BlockBreaker.isTurnPending(params.pos()))
+			return true;
 		
 		if(!MC.gameMode.continueDestroyBlock(params.pos(), params.side()))
 			return false;

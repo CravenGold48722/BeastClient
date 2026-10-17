@@ -8,6 +8,7 @@ param(
 	[switch]$Update,
 	[switch]$Mods,
 	[switch]$NoSweep,
+	[switch]$NoPerfMods,
 	[string]$Features,
 	[switch]$Help,
 	[Parameter(ValueFromRemainingArguments = $true)][string[]]$Tests
@@ -21,6 +22,8 @@ gametest mace scaffold     only tests whose name contains "mace" or "scaffold"
 gametest anticheat         only the Grim and Intave servers (or: grim, intave)
 gametest -nosweep          without the per-feature tests on them (~10 min less each)
 gametest grim -features blink,criticals   only those features' tests (names contain)
+gametest -noperfmods       without the performance mods from .minecraft\mods
+                           (screenshot templates are recorded with them)
 gametest -mods             with Sodium etc. installed
 gametest -update           re-record the screenshot templates (check git diff!)
 "@
@@ -46,6 +49,10 @@ if($Tests)
 if($NoSweep)
 {
 	$gradleArgs += "-PnoFeatureSweep"
+}
+if($NoPerfMods)
+{
+	$gradleArgs += "-PnoPerfMods"
 }
 if($Features)
 {

@@ -7,9 +7,13 @@
  */
 package net.wurstclient.util;
 
+import java.awt.Color;
+
 import org.joml.Matrix3x2f;
 
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.wurstclient.WurstClient;
+import net.wurstclient.hack.HackList;
 
 /**
  * The Beast Client color palette.
@@ -175,8 +179,31 @@ public enum BeastColors
 	 */
 	public static int gradientAt(float screenX, float opacity)
 	{
+		// RainbowUI: the same moving wave through every hue instead of red
+		// (it only changed the old accent color, which the Beast UI doesn't
+		// draw with)
+		if(isRainbow())
+			return withOpacity(Color.HSBtoRGB(hueAt(screenX), 0.8F,
+				0.6F + 0.4F * rampAt(screenX)), opacity);
+		
 		return withOpacity(lerpColor(DARK_RED, LIGHT_RED, rampAt(screenX)),
 			opacity);
+	}
+	
+	private static boolean isRainbow()
+	{
+		HackList hax = WurstClient.INSTANCE.getHax();
+		return hax != null && hax.rainbowUiHack.isEnabled();
+	}
+	
+	/** One hue cycle every two waves, moving along with them. */
+	private static float hueAt(float screenX)
+	{
+		float seconds =
+			waveFrozen ? 0 : (System.nanoTime() - START_TIME) / 1_000_000_000F;
+		float u =
+			(screenX - seconds * SCROLL_PIXELS_PER_SECOND) / (2 * CYCLE_PIXELS);
+		return u - (float)Math.floor(u);
 	}
 	
 	/**

@@ -117,11 +117,21 @@ def updateScreenshots = project.hasProperty("updateScreenshots")
 // Only some of the gametests: -Ponly=mace,scaffold (see gametest.cmd)
 def onlyTests = project.findProperty("only")
 
+def gameTestJvmFlags = ["-Xms1G", "-Xmx3G", "-XX:+UseG1GC",
+	"-XX:MaxGCPauseMillis=50", "-XX:+ParallelRefProcEnabled",
+	"-XX:+UseCompactObjectHeaders", "-XX:+UseStringDeduplication",
+	"-XX:G1PeriodicGCInterval=15000"]
+
 loom {
 	accessWidenerPath = file("src/main/resources/wurst.accesswidener")
 
 	runs {
 		clientGameTest {
+			// Less RAM, short pauses (user, 2026-10-16: "optimize the JVM
+			// flags"): G1 with a 1-3 GB heap, compact object headers (JDK
+			// 25: smaller objects), deduplicated strings, unused heap given
+			// back to Windows every 15 s.
+			gameTestJvmFlags.each { vmArg(it) }
 			vmArg("-Dfabric.client.gametest.disableNetworkSynchronizer=true")
 			vmArg("-Dwurst.test.templateDir=$screenshotTemplateDir")
 			if (onlyTests)
@@ -212,8 +222,83 @@ def prepareVexbot = tasks.register("prepareVexbot") {
 		java.nio.file.Files.copy(vexbotJar.toPath(), new File(mods, vexbotJar.name).toPath())
 	}
 }
+// Performance mods and the lowest graphics for the gametest client (user,
+// 2026-10-16: "all visual settings ... absolute lowest to save ram", "sodium,
+// lithium, ferritecore, modernfix ... and all performance mods in my personal
+// mods folder"). The jars are copied (never moved or changed) from
+// -PperfModsDir, default the user's .minecraft/mods; -PnoPerfMods runs
+// without them. Not Dynamic FPS: it lowers the frame rate while the window
+// is in the background, and the test client runs at most one tick per frame.
+// Not Moonrise: with it, closing the test world deadlocked Fabric's harness
+// (render thread in IntegratedServer.halt, server thread parked in the
+// harness's phaser) on the first run; without it, it closed fine.
+// The options leave alone what features under test change or need to show:
+// vignette, view bobbing, hurt tilt, screen/FOV effects, gamma, FOV, GUI
+// scale (NoVignette, AntiWobble, NoHurtcam, Fullbright, the ClickGUI...).
+def perfModsDir = file(project.findProperty("perfModsDir")
+	?: "${System.getenv("APPDATA")}/.minecraft/mods")
+def usePerfMods = !project.hasProperty("noPerfMods")
+def perfMods = [
+	// rendering
+	"sodium-fabric-", "sodium-extra-fabric-", "ImmediatelyFast-",
+	"entityculling-fabric-", "moreculling-fabric-", "cullleaves-fabric-",
+	"bzbe-fabric-", "particle_core-", "lite-cpu-",
+	// memory, loading
+	"ferritecore-", "modernfix-", "smoothjoin-",
+	// game logic, the integrated server
+	"lithium-fabric-", "BzadOptimizations-", "debugify-",
+	// network, input
+	"krypton-", "Ixeris-", "fast-ip-ping-",
+	// what they need
+	"cloth-config-", "fzzy_config-", "fabric-language-kotlin-"]
+def lowGraphics = """version:4790
+renderDistance:2
+simulationDistance:5
+graphicsPreset:"custom"
+cutoutLeaves:false
+improvedTransparency:false
+ao:false
+entityShadows:false
+particles:2
+mipmapLevels:0
+biomeBlendRadius:0
+textureFiltering:0
+renderClouds:"false"
+weatherRadius:3
+entityDistanceScaling:0.5
+menuBackgroundBlurriness:0
+chunkSectionFadeInTime:0.0
+enableVsync:false
+inactivityFpsLimit:"minimized"
+"""
+def preparePerfMods = tasks.register("preparePerfMods") {
+	def runDir = layout.buildDirectory.dir("run/clientGameTest").get().asFile
+	inputs.property("dir", perfModsDir.path)
+	inputs.property("enabled", usePerfMods)
+	mustRunAfter "deleteGameTestRunDir"
+	doLast {
+		runDir.mkdirs()
+		new File(runDir, "options.txt").text = lowGraphics
+		if (!usePerfMods)
+			return
+		def mods = new File(runDir, "mods")
+		mods.mkdirs()
+		def jars = (perfModsDir.listFiles() ?: []).findAll { f ->
+			f.name.endsWith(".jar") && perfMods.any { f.name.startsWith(it) }
+		}
+		def missing = perfMods.findAll { p -> !jars.any { it.name.startsWith(p) } }
+		if (missing)
+			logger.warn("Performance mods not in $perfModsDir: $missing")
+		jars.each {
+			java.nio.file.Files.copy(it.toPath(), new File(mods, it.name).toPath(),
+				java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+		}
+		logger.lifecycle("Gametest client: ${jars.size()} performance mods, lowest graphics")
+	}
+}
 tasks.named("runClientGameTest") {
 	dependsOn prepareVexbot
+	dependsOn preparePerfMods
 }
 
 def doModCompatTest = providers.gradleProperty("do_mod_compat_test").map { it.toBoolean() }.orElse(false)

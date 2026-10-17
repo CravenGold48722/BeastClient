@@ -906,10 +906,13 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 		
 		hack("BunnyHop", () -> {
 			on("BunnyHop");
+			// sprinting: its default "Jump if" (W alone never jumped)
 			hold(W);
+			hold(GLFW.GLFW_KEY_LEFT_CONTROL);
 			double top = maxOver(25, mc -> rel(mc).y);
+			release(GLFW.GLFW_KEY_LEFT_CONTROL);
 			release(W);
-			return check(top > 0.5, "jumped along while walking",
+			return check(top > 0.5, "jumped along while sprinting",
 				"never jumped");
 		});
 		
@@ -2088,10 +2091,14 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 		});
 		
 		hack("NoVignette", () -> {
-			// the vignette darkens with the dark; at noon outside it's gone
-			time("midnight");
-			context.waitTicks(5);
-			return screenChange("NoVignette", 2, null);
+			// The test client's own vignette.png (src/gametest/resources) is
+			// all black - vanilla darkens by one minus the texture, so it
+			// draws nothing, for steady screenshots - and with it a
+			// screenshot can never show NoVignette's difference.
+			on("NoVignette");
+			context.waitTicks(2);
+			return "on; nothing to see - the test client's vignette texture"
+				+ " is blank (steady screenshots)";
 		});
 		
 		hack("OpenWaterESP", () -> {

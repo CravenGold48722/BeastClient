@@ -908,6 +908,22 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
   spring) runs on `util/GameClock` - ticks that actually ran + the frame's partial tick, 50 ms each -
   not `System.nanoTime`; the test client runs at most one tick per frame, so real time x tick rate
   would be wrong too. New per-frame aim code must use `GameClock.nanoTime()`.
+- **Test client = performance mods + lowest graphics + tuned JVM (user, 2026-10-16).**
+  `preparePerfMods` (build.gradle, after `deleteGameTestRunDir`) copies - never moves - the
+  performance mods from `-PperfModsDir` (default the user's `.minecraft/mods`: Sodium, Sodium
+  Extra, ImmediatelyFast, EntityCulling, MoreCulling, CullLeaves, BetterBlockEntities, Particle
+  Core, lite-cpu, FerriteCore, ModernFix, SmoothJoin, Lithium, BadOptimizations, Debugify,
+  Krypton, Ixeris, Fast IP Ping + cloth-config, fzzy_config, fabric-language-kotlin) and writes
+  an `options.txt` with the lowest graphics, except what tested features change or need to show
+  (vignette, bobbing, hurt tilt, screen/FOV effects, gamma, FOV, GUI scale). Left out: Dynamic
+  FPS (throttles a background window; the client runs at most one tick per frame) and Moonrise
+  (closing the test world deadlocked the harness on the first run). `-PnoPerfMods` /
+  `gametest -noperfmods` runs without them; the screenshot templates are recorded with them.
+  Sodium 0.9.2 threw "Global terrain uniforms have not been updated" on every Fabric test
+  screenshot (the screenshot's extra `GameRenderer.render` skips the extract step where Sodium
+  re-arms its uniforms) - gametest `SodiumUniformsMixin` re-arms them at the end of each frame.
+  JVM: client `-Xms1G -Xmx3G`, servers `-Xms256M` + their old max, all G1 (pause 50 ms),
+  `UseCompactObjectHeaders` (JDK 25), string dedup, `G1PeriodicGCInterval=15000`.
 - `PacketBudgetTest` counts packets, swings per attack and aim settling in singleplayer; feel and
   accuracy still need a launch of the client.
 - **Real anticheats (`AnticheatTest`, user, 2026-10-13).** The gametests also join two real
@@ -1026,6 +1042,23 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
     the rail selected because `PacketOrder` holds a slot change after a click): now one step per
     tick - turn + rail slot, rail, cart slot + cart, back. Clean on both. (The test's
     `tnt_minecart 4` was refused: minecarts stack to 1.)
+  Found and fixed (2026-10-16 sweep):
+  - Grim WrongBreak (`CANCELLED_DIGGING, last=null`) once per mining hack: Nuker, AutoFarm,
+    AutoLibrarian, TreeBot, Tunneller and VeinMiner forced `isDestroying = true` before
+    `stopDestroyBlock()` on disable - an abort for a dig the server never had. Gone.
+  - Intave interactionraytrace ("broke X, but looking at a different block"): the break went
+    out in the tick the camera turned to the block, before the movement packet with that turn.
+    `BlockBreaker.isTurnPending(pos)` (the rotation about to be sent is on it, the last sent
+    one isn't -> wait a tick) in every mining hack; line of sight is now the crosshair's
+    (OUTLINE shapes, first block hit = the target) instead of collision shapes.
+  - NukerLegit called `startDestroyBlock` itself, skipping vanilla's 5-tick `destroyDelay`
+    (Grim FastBreak, Intave "started breaking too quickly") - only `continueDestroyBlock` now.
+  - FightBot (Range 4.25 -> Grim Reach at 4.19) and Protect (any look within 7 -> Intave
+    "attacked out of sight") gate hits on `HitCheck.isVerifiable`.
+  - RainbowUI only changed the old `acColor`, which the Beast UI doesn't draw with - it now
+    turns `BeastColors.gradientAt`'s wave into a moving rainbow.
+  - Test fixes: BunnyHop's default "Jump if" is Sprinting (the test only held W); NoVignette
+    can't show on screenshots (the test client's `vignette.png` is blank on purpose).
   Grim's every-step setbacks of the path-AI walk (FightBot, Protect, AntiAFK) were its grudge
   from earlier tests: with a clean record they walk and fight on Grim too. Still open: Kaboom,
   SpeedNuker and `.damage` get the bot kicked (packet spam by design).

@@ -125,12 +125,18 @@ abstract class FeatureTestKit
 	void begin()
 	{
 		// a clean record for each feature (see AnticheatTest.lastFlagged)
-		if(!test.rejoinIfNeeded() && test.lastFlagged())
+		boolean fresh = test.rejoinIfNeeded();
+		if(!fresh && test.lastFlagged())
+		{
 			test.reconnect();
+			fresh = true;
+		}
 		home = test.home();
 		cleanup();
 		at(0, 0, 0, 0, 0);
-		probe();
+		// (a fresh connection has nothing left over to find)
+		if(!fresh)
+			probe();
 		// right after a teleport the client isn't on the ground yet: jumps
 		// and hacks that need the ground would do nothing
 		// on the ground for a few ticks in a row: the anticheat's answer to
@@ -171,15 +177,18 @@ abstract class FeatureTestKit
 		waitUntil(mc -> mc.player.onGround(), 10);
 		server.takeFlags();
 		Vec3 start = pos();
-		holdFor(W, 4);
+		// 3 ticks walk ~0.43 blocks (a stuck bot: 0.10)
+		holdFor(W, 3);
 		double moved = horizontal(start, pos());
 		// stopped before the teleport home: a teleport with momentum left
-		// over was a Simulation flag (and a setback) at the next test's start
+		// over was a Simulation flag (and a setback) at the next test's start.
+		// A tick of S stops it - sliding to a stop took 7.
+		holdFor(S, 1);
 		waitUntil(
 			mc -> mc.player.getDeltaMovement().horizontalDistance() < 0.003,
 			10);
 		List<String> flags = server.takeFlags();
-		if(moved > 0.3)
+		if(moved > 0.2)
 		{
 			at(0, 0, 0, 0, 0);
 			return;
@@ -193,7 +202,7 @@ abstract class FeatureTestKit
 				.unwrapKey().map(k -> k.identifier().getPath()).orElse("?"))
 				.toList()));
 		probeNote = fmt(
-			"the bot couldn't walk after %s (moved %.2f in 4 ticks, %s; %s)"
+			"the bot couldn't walk after %s (moved %.2f in 3 ticks, %s; %s)"
 				+ " - reconnected",
 			lastTest, moved, flags.isEmpty() ? "no flags"
 				: AnticheatTest.summarize(flags) + " flags",

@@ -115,7 +115,6 @@ public final class TreeBotHack extends Hack
 		
 		if(currentBlock != null)
 		{
-			MC.gameMode.isDestroying = true;
 			MC.gameMode.stopDestroyBlock();
 			currentBlock = null;
 		}
@@ -226,8 +225,9 @@ public final class TreeBotHack extends Hack
 		// face block
 		faceTarget.face(params.hitVec());
 		
-		// damage block and swing hand
-		if(MC.gameMode.continueDestroyBlock(pos, params.side()))
+		// damage block and swing hand (once the server has the turn)
+		if(!BlockBreaker.isTurnPending(pos)
+			&& MC.gameMode.continueDestroyBlock(pos, params.side()))
 			swingHand.swing(InteractionHand.MAIN_HAND);
 		
 		// update progress

@@ -99,7 +99,6 @@ public final class AutoFarmHack extends Hack
 		
 		if(currentlyMining != null)
 		{
-			MC.gameMode.isDestroying = true;
 			MC.gameMode.stopDestroyBlock();
 			currentlyMining = null;
 		}
@@ -328,6 +327,8 @@ public final class AutoFarmHack extends Hack
 	private boolean breakOneBlock(BlockBreakingParams params)
 	{
 		faceTarget.face(params.hitVec());
+		if(BlockBreaker.isTurnPending(params.pos()))
+			return true;
 		
 		if(!MC.gameMode.continueDestroyBlock(params.pos(), params.side()))
 			return false;

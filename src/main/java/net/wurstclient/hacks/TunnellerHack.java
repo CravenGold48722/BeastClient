@@ -140,7 +140,6 @@ public final class TunnellerHack extends Hack
 		overlay.resetProgress();
 		if(currentBlock != null)
 		{
-			MC.gameMode.isDestroying = true;
 			MC.gameMode.stopDestroyBlock();
 			currentBlock = null;
 		}
@@ -878,6 +877,8 @@ public final class TunnellerHack extends Hack
 		
 		// face block
 		WURST.getRotationFaker().faceVectorClient(hitVecs[side.ordinal()]);
+		if(BlockBreaker.isTurnPending(pos))
+			return true;
 		
 		// damage block
 		if(!MC.gameMode.continueDestroyBlock(pos, side))

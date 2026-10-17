@@ -39,6 +39,7 @@ import net.wurstclient.settings.filterlists.EntityFilterList;
 import net.wurstclient.settings.filters.*;
 import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.EntityUtils;
+import net.wurstclient.util.HitCheck;
 import net.wurstclient.util.FakePlayerEntity;
 
 @DontSaveState
@@ -308,12 +309,12 @@ public final class ProtectHack extends Hack
 			// check cooldown
 			if(!speed.isTimeToAttack())
 				return;
-			
-			// while turning smoothly, only swing once the crosshair is on it
-			if(enemy == frameAimTarget
-				&& !CameraAim.isLookingAt(MC.player.getYRot(),
-					MC.player.getXRot(),
-					enemy.getBoundingBox().inflate(enemy.getPickRadius()), 7))
+				
+			// Only a hit the server can verify: within real reach, nothing in
+			// between, with the rotation it already has and the current one
+			// (see HitCheck). The current look alone, up to 7 blocks, sent a
+			// hit Intave saw "out of sight".
+			if(!HitCheck.isVerifiable(enemy))
 				return;
 			
 			// attack enemy

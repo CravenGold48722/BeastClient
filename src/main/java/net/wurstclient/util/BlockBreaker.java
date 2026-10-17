@@ -12,17 +12,21 @@ import java.util.function.Function;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.Vec3i;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket.Action;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import net.wurstclient.RotationFaker;
 import net.wurstclient.WurstClient;
 import net.wurstclient.settings.SwingHandSetting.SwingHand;
 
@@ -46,6 +50,8 @@ public enum BlockBreaker
 	{
 		// face block (turns the camera, no silent rotation)
 		WURST.getRotationFaker().faceVectorClient(params.hitVec);
+		if(isTurnPending(params.pos))
+			return true;
 		
 		// damage block
 		if(!MC.gameMode.continueDestroyBlock(params.pos, params.side))
@@ -54,6 +60,53 @@ public enum BlockBreaker
 		// swing arm
 		SwingHand.CLIENT.swing(InteractionHand.MAIN_HAND);
 		return true;
+	}
+	
+	/**
+	 * Whether the look just turned onto this block and the server doesn't
+	 * have it yet: true if the rotation about to be sent (client or faked)
+	 * puts the crosshair on it but the last one sent didn't. A break packet
+	 * goes out before this tick's movement packet, so breaking right away is
+	 * a break "looking at a different block" to the server (Intave's
+	 * interactionraytrace) - wait a tick instead, like a player whose
+	 * crosshair has to get there first. False when the look isn't on the
+	 * block at all (no rotation, out of sight): nothing to wait for.
+	 */
+	public static boolean isTurnPending(BlockPos pos)
+	{
+		LocalPlayer player = MC.player;
+		RotationFaker faker = WURST.getRotationFaker();
+		return isLookingAt(pos, faker.getServerYaw(), faker.getServerPitch())
+			&& !isLookingAt(pos, player.yRotLast, player.xRotLast);
+	}
+	
+	/** Whether a crosshair with this rotation would pick this block. */
+	public static boolean isLookingAt(BlockPos pos, float yaw, float pitch)
+	{
+		LocalPlayer player = MC.player;
+		Vec3 eyes = player.getEyePosition();
+		Vec3 end = eyes.add(Vec3.directionFromRotation(pitch, yaw)
+			.scale(player.blockInteractionRange()));
+		BlockHitResult hit = MC.level.clip(new ClipContext(eyes, end,
+			ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
+		return hit.getType() == HitResult.Type.BLOCK
+			&& hit.getBlockPos().equals(pos);
+	}
+	
+	/**
+	 * Whether a crosshair aimed from the eyes at this point on the block's
+	 * face would pick the block - the first outline the ray meets, the way
+	 * the crosshair sees it. (Collision shapes alone said a crop's bottom
+	 * face, flush on the farmland, was in sight.)
+	 */
+	private static boolean canSee(Vec3 eyes, BlockPos pos, Vec3 hitVec)
+	{
+		// a little past the face, into the block
+		Vec3 to = eyes.add(hitVec.subtract(eyes).scale(1.02));
+		BlockHitResult hit = MC.level.clip(new ClipContext(eyes, to,
+			ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, MC.player));
+		return hit.getType() == HitResult.Type.BLOCK
+			&& hit.getBlockPos().equals(pos);
 	}
 	
 	/**
@@ -110,7 +163,7 @@ public enum BlockBreaker
 			if(distancesSq[i] >= distanceSqToCenter)
 				continue;
 			
-			linesOfSight[i] = BlockUtils.hasLineOfSight(eyes, hitVecs[i]);
+			linesOfSight[i] = canSee(eyes, pos, hitVecs[i]);
 		}
 		
 		Direction side = sides[0];

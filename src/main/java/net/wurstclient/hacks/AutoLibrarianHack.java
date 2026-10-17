@@ -147,7 +147,6 @@ public final class AutoLibrarianHack extends Hack
 		
 		if(breakingJobSite)
 		{
-			MC.gameMode.isDestroying = true;
 			MC.gameMode.stopDestroyBlock();
 			breakingJobSite = false;
 		}
@@ -329,8 +328,9 @@ public final class AutoLibrarianHack extends Hack
 		// face block
 		faceTarget.face(params.hitVec());
 		
-		// damage block and swing hand
-		if(MC.gameMode.continueDestroyBlock(jobSite, params.side()))
+		// damage block and swing hand (once the server has the turn)
+		if(!BlockBreaker.isTurnPending(jobSite)
+			&& MC.gameMode.continueDestroyBlock(jobSite, params.side()))
 			swingHand.swing(InteractionHand.MAIN_HAND);
 		
 		// update progress

@@ -182,10 +182,11 @@ public final class NukerLegitHack extends Hack
 		if(MC.player.isUsingItem())
 			// This case doesn't cancel block breaking in vanilla Minecraft.
 			return true;
-		
-		if(!im.isDestroying())
-			im.startDestroyBlock(pos, side);
-		
+			
+		// like holding the attack button: continueDestroyBlock starts the
+		// next block itself, after vanilla's 5 ticks (destroyDelay) - calling
+		// startDestroyBlock here skipped them (Grim FastBreak, Intave "started
+		// breaking too quickly")
 		if(im.continueDestroyBlock(pos, side))
 		{
 			MC.level.addBreakingBlockEffect(pos, side);

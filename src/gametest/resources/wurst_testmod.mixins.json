@@ -6,7 +6,8 @@
     "ConnectionMixin"
   ],
   "client": [
-    "ScreenMixin"
+    "ScreenMixin",
+    "SodiumUniformsMixin"
   ],
   "injectors": {
     "defaultRequire": 1

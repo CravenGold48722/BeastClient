@@ -7,6 +7,7 @@
  */
 package net.wurstclient.gametest.tests;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -31,8 +32,11 @@ import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.gametest.SingleplayerTest;
 import net.wurstclient.gametest.UserSettings;
+import net.wurstclient.hacks.AimAssistHack;
+import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.Setting;
 import net.wurstclient.util.EntityUtils;
+import net.wurstclient.util.HitCheck;
 import net.wurstclient.util.RotationUtils;
 
 /**
@@ -42,7 +46,9 @@ import net.wurstclient.util.RotationUtils;
  * <li>sprint hits only, each as soon as the knockback is guaranteed (just
  * past 90% charge: 12 ticks with a sword, not the 13 of a full cooldown);
  * <li>hold W, hit, release W - W is let go right after every hit;
- * <li>no hit on a target that's falling (falling knockback);
+ * <li>with Skip falling targets, no hit on a target that's falling (falling
+ * knockback);
+ * <li>every sure chance at a sprint hit or a crit taken;
  * <li>in a real fight: only sprint hits and crits, a jump reset when the bot
  * hits us on the ground, and a crit on the way down.
  * </ul>
@@ -62,6 +68,12 @@ public final class AimAssistComboTest extends SingleplayerTest
 	/** Ticks where a hit could have gone out (see isChance). */
 	private final List<Boolean> chances = new ArrayList<>();
 	
+	/**
+	 * Ticks where a sprint hit or a crit could have landed (see
+	 * describeSureChance): what it looked like, or null.
+	 */
+	private final List<String> sureChances = new ArrayList<>();
+	
 	private record Attack(int tick, boolean sprintHit, boolean crit,
 		boolean targetFalling, boolean deflecting)
 	{}
@@ -79,6 +91,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		forwardDown.add(mc.options.keyUp.isDown());
 		backDown.add(mc.options.keyDown.isDown());
 		chances.add(isChance(mc));
+		sureChances.add(describeSureChance(mc));
 		// the input the last tick was moved with
 		jumped.add(player.input.keyPresses.jump());
 	};
@@ -247,17 +260,20 @@ public final class AimAssistComboTest extends SingleplayerTest
 	}
 	
 	/**
-	 * A bot dropping from 6 blocks up right in front: no hit while it falls
-	 * (that would knock it into the ground), but one once it has landed.
+	 * With Skip falling targets (off by default, user 2026-10-16): a bot
+	 * dropping from 6 blocks up right in front isn't hit while it falls (that
+	 * would knock it into the ground), but once it has landed.
 	 */
 	private void noHitWhileFalling()
 	{
 		startSpot();
 		spawnBot("~ ~6 ~-2");
 		clearRecording();
+		runWurstCommand("setcheckbox AimAssist Skip_falling_targets on");
 		runWurstCommand("t AimAssist on");
 		context.waitTicks(80);
 		runWurstCommand("t AimAssist off");
+		runWurstCommand("setcheckbox AimAssist Skip_falling_targets off");
 		context.waitTicks(3);
 		
 		List<Attack> hits = snapshotAttacks();
@@ -317,6 +333,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		if(hits.size() < 8)
 			throw new RuntimeException(
 				"Only " + hits.size() + " hits in a 300-tick fight");
+		boolean skipFalling = context.computeOnClient(mc -> isSkipFalling());
 		for(Attack hit : hits)
 		{
 			// (Sprint sweeps - on in the user's settings - chase a target
@@ -324,7 +341,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 			if(!hit.sprintHit() && !hit.crit() && !sweeps)
 				throw new RuntimeException("Hit at tick " + hit.tick()
 					+ " was neither a sprint hit nor a crit");
-			if(hit.targetFalling() && !hit.deflecting())
+			if(skipFalling && hit.targetFalling() && !hit.deflecting())
 				throw new RuntimeException("Hit the falling bot at tick "
 					+ hit.tick() + " (and it wasn't a deflection)");
 		}
@@ -402,6 +419,29 @@ public final class AimAssistComboTest extends SingleplayerTest
 		if(missed * 100 > chanceTicks * maxMissed)
 			throw new RuntimeException("Let " + missed + " of " + chanceTicks
 				+ " chances to hit go by (at most " + maxMissed + "%)");
+			
+		// A sure chance - a sprint hit or a crit that would have landed - is
+		// never let go (user: "100% of the time, unless a setting says not
+		// to").
+		// (with nulls - List.copyOf can't)
+		List<String> sure =
+			context.computeOnClient(mc -> new ArrayList<>(sureChances));
+		int sureTicks = 0;
+		List<String> sureMissed = new ArrayList<>();
+		for(int t = 0; t < sure.size() && t < fightEnd; t++)
+		{
+			if(sure.get(t) == null)
+				continue;
+			sureTicks++;
+			if(!hitTicks.contains(t))
+				sureMissed.add("tick " + t + ": " + sure.get(t));
+		}
+		logger.info("Fight: {} sure chances (sprint hit or crit), {} missed {}",
+			sureTicks, sureMissed.size(), sureMissed);
+		if(!sureMissed.isEmpty())
+			throw new RuntimeException(
+				"Let " + sureMissed.size() + " of " + sureTicks
+					+ " sure sprint-hit/crit chances go by: " + sureMissed);
 		
 		removeBot();
 	}
@@ -546,8 +586,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 		
 		for(Player p : mc.level.players())
 			if(p != player && p.getName().getString().equals(BOT))
-				return mc.crosshairPickEntity == p && !isFalling(p)
-					&& !p.isBlocking()
+				return mc.crosshairPickEntity == p
+					&& !(isSkipFalling() && isFalling(p)) && !p.isBlocking()
 					&& EntityUtils.distanceToHitboxSq(p) <= 2.8 * 2.8;
 		return false;
 	}
@@ -557,6 +597,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		context.runOnClient(mc -> {
 			backDown.clear();
 			chances.clear();
+			sureChances.clear();
 			forwardDown.clear();
 			jumped.clear();
 			attacks.clear();
@@ -620,6 +661,73 @@ public final class AimAssistComboTest extends SingleplayerTest
 	private <T> List<T> snapshot(List<T> list)
 	{
 		return context.computeOnClient(mc -> List.copyOf(list));
+	}
+	
+	private static Field baitTicks;
+	
+	/**
+	 * A sure chance (user, 2026-10-16: a sprint hit or crit "100% of the
+	 * time, unless a setting says not to"): a hit now would be a sprint hit
+	 * (the sprint state the server has) or a crit (vanilla's rule, the same),
+	 * charged, in reach, verifiable from the sent and the current rotation
+	 * (HitCheck - anything else is a hit the anticheat throws out), not on a
+	 * raised shield, and no setting holding it back (Skip falling targets,
+	 * Baits). Null if not, else what it looked like.
+	 */
+	private static String describeSureChance(Minecraft mc)
+	{
+		var player = mc.player;
+		AimAssistHack hack = WurstClient.INSTANCE.getHax().aimAssistHack;
+		if(!hack.isEnabled() || player.getAttackStrengthScale(-0.5F) <= 0.9F
+			|| player.isUsingItem())
+			return null;
+		
+		if(!(findBot(mc) instanceof Player bot) || bot.isBlocking()
+			|| EntityUtils.distanceToHitboxSq(bot) > 3 * 3
+			|| !HitCheck.isVerifiable(bot))
+			return null;
+		
+		if(isSkipFalling() && isFalling(bot) || isBaiting(hack))
+			return null;
+		
+		boolean sprintHit = player.isSprinting() && player.wasSprinting;
+		boolean crit = player.fallDistance > 0 && !player.onGround()
+			&& !player.isSprinting() && !player.wasSprinting;
+		if(!sprintHit && !crit)
+			return null;
+		
+		return String.format(Locale.ROOT,
+			"%s, %.2f blocks, %s, bot %s, W %s S %s",
+			sprintHit ? "sprint hit" : "crit",
+			Math.sqrt(EntityUtils.distanceToHitboxSq(bot)),
+			player.onGround() ? "on the ground" : "in the air",
+			bot.onGround() ? "on the ground" : "in the air",
+			mc.options.keyUp.isDown(), mc.options.keyDown.isDown());
+	}
+	
+	/** AimAssist's Skip falling targets. Client thread. */
+	private static boolean isSkipFalling()
+	{
+		return ((CheckboxSetting)WurstClient.INSTANCE.getHax().aimAssistHack
+			.getSettings().get("skip falling targets")).isChecked();
+	}
+	
+	/** AimAssist's Baits backing off right now (its private baitTicks). */
+	private static boolean isBaiting(AimAssistHack hack)
+	{
+		try
+		{
+			if(baitTicks == null)
+			{
+				baitTicks = AimAssistHack.class.getDeclaredField("baitTicks");
+				baitTicks.setAccessible(true);
+			}
+			return baitTicks.getInt(hack) > 0;
+			
+		}catch(ReflectiveOperationException e)
+		{
+			throw new RuntimeException(e);
+		}
 	}
 	
 	private static boolean isFalling(Entity e)

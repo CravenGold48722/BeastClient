@@ -247,11 +247,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ "- never hits a raised shield (see §lShield breaker§r) and"
 			+ " doesn't walk into a target stuck in a cobweb - crits it"
 			+ " instead\n"
-			+ "- doesn't hit a target that's falling (that knocks them into"
-			+ " the ground and lets them rebuild momentum first) - waits"
-			+ " until they land - but hits them at once while they're still"
-			+ " going up, so a jump reset that came too early gets them"
-			+ " launched\n"
+			+ "- takes every chance at a sprint hit or a crit, unless a"
+			+ " setting holds it back (§lSkip falling targets§r, §lBaits§r,"
+			+ " §lAura-Farming§r, §lShield breaker§r)\n"
 			+ "- in the air (a jump reset, a drop): holds W while rising,"
 			+ " lets go once falling and crits\n"
 			+ "- deflects: sprint-hits right back when the target hits you\n"
@@ -261,6 +259,18 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ " down.\n\n" + "Requires §lAuto attack§r to be enabled.\n\n"
 			+ "The combo is reset whenever you look clearly away from the"
 			+ " target (45°+) or click the attack button manually.",
+		false);
+	
+	private final CheckboxSetting skipFalling = new CheckboxSetting(
+		"Skip falling targets",
+		"With §lAuto attack§r: doesn't hit a target that's falling (that"
+			+ " knocks them into the ground and lets them rebuild momentum"
+			+ " first) - waits until they land - but hits them at once while"
+			+ " they're still going up, so a jump reset that came too early"
+			+ " gets them launched. A very laggy player (200+ ms) is hit"
+			+ " anyway.\n\n"
+			+ "Off: every chance at a sprint hit or crit is taken, falling"
+			+ " target or not.",
 		false);
 	
 	private final CheckboxSetting jumpReset = new CheckboxSetting("Jump reset",
@@ -728,6 +738,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(aimWhileBlocking);
 		addSetting(autoAttack);
 		addSetting(autoCombo);
+		addSetting(skipFalling);
 		addSetting(jumpReset);
 		addSetting(flyOuts);
 		addSetting(sprintCrits);
@@ -1283,6 +1294,33 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	}
 	
 	/**
+	 * Whether a sprint hit or a crit can go out right now: charged, in
+	 * reach, a moment worth hitting, and attackTarget() would land it. Only a
+	 * setting holds one back - Skip falling targets (isGoodMomentToHit),
+	 * Baits while backing off, Aura-Farming on the ground (it jumps for the
+	 * crit), Shield breaker while it switches to the axe (before the combo).
+	 */
+	private boolean isHitChance(double dist, boolean deflecting)
+	{
+		if(baitTicks > 0 || auraFarming.isChecked() && !isAirborne())
+			return false;
+		
+		return isHitCharged() && dist <= REACH
+			&& (deflecting || isGoodMomentToHit()) && canLandGoodHit();
+	}
+	
+	/** attackTarget() without the side effects: would it hit right now? */
+	private boolean canLandGoodHit()
+	{
+		LocalPlayer player = MC.player;
+		return !attackedThisTick && target != null && !player.isUsingItem()
+			&& HitCheck.isVerifiable(target)
+			&& (!isShieldUp(target)
+				|| isShieldBreaker(player.getMainHandItem()))
+			&& (isCritReady() || isSprintHitReady());
+	}
+	
+	/**
 	 * @param anyHit
 	 *            also an unsprinted or uncharged hit (Sprint sweeps, Weak
 	 *            hits) - the caller decided it's worth it
@@ -1402,6 +1440,20 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		sprintHeldOff = false;
 		updateShieldBlock(dist);
 		
+		// Every chance at a sprint hit or a crit is taken (user, 2026-10-16:
+		// "100% of the time, unless a setting says not to"). The ground
+		// combo's tricks below used to have some ticks to themselves - an
+		// S-tap deflection, a cobweb, a fly-out falling past the target with
+		// a crit ready - and the hit waited.
+		boolean chance = isHitChance(dist, deflecting);
+		if(chance && comboPhase != ComboPhase.IDLE && attackTarget())
+		{
+			// (the reset or fly-out carries on)
+			comboHitCount++;
+			lastHitTick = tickCount;
+			deflectSTapTicks = 0;
+		}
+		
 		switch(comboPhase)
 		{
 			case IDLE:
@@ -1410,7 +1462,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			else
 			{
 				airMode = AirMode.NONE;
-				if(updateGroundCombo(dist, deflecting, closing))
+				if(!chance && updateGroundCombo(dist, deflecting, closing))
 					break;
 			}
 			
@@ -1423,6 +1475,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			if(isHitCharged() && inReach && goodMoment
 				&& attackTarget(sweepChase))
 			{
+				deflectSTapTicks = 0;
 				afterHit(dist, deflecting, closing);
 				break;
 			}
@@ -2125,7 +2178,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	private boolean isGoodMomentToHit()
 	{
-		return isLaggy(target) || !isFalling(target);
+		return !skipFalling.isChecked() || isLaggy(target)
+			|| !isFalling(target);
 	}
 	
 	private static boolean isFalling(Entity e)

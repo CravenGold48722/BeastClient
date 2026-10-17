@@ -483,10 +483,15 @@ does it. When writing or touching a hack:
   (`Player.attack`: strength at +0.5 tick > 0.9 - fired a tick past that, 12 ticks with a sword
   instead of 13); hold W, hit, release W - between hits it coasts (no keys), backs off with S
   under 2.0 blocks, chases over 3.0, and holds W only `SPRINT_LEAD_TICKS` (2) before the next
-  hit; sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **no hit on a falling
-  target** (falling knockback sends them into the ground and they rebuild momentum first -
-  `isFalling(Entity)` from `getY() - yo`, other players' motion isn't sent) unless they're
-  200+ ms laggy (`PlayerInfo.getLatency`); a **deflection** (hit back whatever the spacing within
+  hit; sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **every chance at a
+  sprint hit or crit is taken** (user, 2026-10-16: "100% of the time, unless a setting says
+  not to" - `isHitChance` runs before the ground combo's tricks and in every combo phase; only
+  Baits, Aura-Farming on the ground, Shield breaker and Skip falling targets hold one back;
+  `AimAssistComboTest` records every tick a sprint hit/crit would land and HitCheck passes
+  and fails on any missed: 17 of 17 taken); **Skip falling targets** (checkbox, off by
+  default - user): no hit on a falling target (falling knockback sends them into the ground and
+  they rebuild momentum first - `isFalling(Entity)` from `getY() - yo`, other players' motion
+  isn't sent) unless they're 200+ ms laggy (`PlayerInfo.getLatency`); a **deflection** (hit back whatever the spacing within
   4 ticks after the target hits you); **in the air** (a jump reset, Aura-Farming's jump, a drop)
   W + sprint while rising, both let go once falling, then a **crit** (punish crit); against
   **their** jump resets no guessing (user): a target on the ground or still rising is hit at

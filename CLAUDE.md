@@ -481,15 +481,25 @@ does it. When writing or touching a hack:
   right now (hunger, blindness, item use, sneaking, riding, gliding, water). **Auto combo** (user, 2026-10-15, from two
   combo guides - `../howtocombotranscript*.txt`): a hit as soon as vanilla gives sprint knockback
   (`Player.attack`: strength at +0.5 tick > 0.9 - fired a tick past that, 12 ticks with a sword
-  instead of 13); hold W, hit, release W - between hits it coasts (no keys), backs off with S
-  under 2.0 blocks, chases over 3.0, and holds W only `SPRINT_LEAD_TICKS` (2) before the next
-  hit; sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **every chance at a
+  instead of 13); hold W, hit, release W - between hits it stays out of **their** reach
+  (user, 2026-10-17: knocked up and back, "the hypotenuse is always longer than the leg" -
+  `theirReachToUs()` = their eyes to our hitbox, so a target in the air has to come closer
+  than we do) with S while that's under 3.0 + `THEIR_REACH_MARGIN` 1.0 and they aren't backing
+  off, coasts otherwise, and sets off with W + sprint only `SPRINT_LEAD_TICKS` (3) +
+  `approachTicks(dist)` before the charge, so it arrives as the hit charges (it chased from
+  3.0 and backed off under 2.0: a VexBot landed 11 of its 16 hits during our cooldown from
+  0.3-2.4 blocks; score 18:16 -> 19:10; the fight logs every hit taken with both reaches);
+  Hops only replace backing off when too close (they hopped at any distance from 1.5); sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **every chance at a
   sprint hit or crit is taken** (user, 2026-10-16: "100% of the time, unless a setting says
   not to" - `isHitChance` runs before the ground combo's tricks and in every combo phase; only
   Baits, Aura-Farming on the ground, Shield breaker and Skip falling targets hold one back;
   `AimAssistComboTest` records every tick a sprint hit/crit would land and HitCheck passes
   and fails on any missed: 17 of 17 taken); **Skip falling targets** (checkbox, off by
-  default - user): no hit on a falling target (falling knockback sends them into the ground and
+  default - user; all "ticks since X" timers start at `NEVER`
+  = -1,000,000: with `Integer.MIN_VALUE`, `tickCount - lastX` overflowed and Crouch dodge,
+  Fly-outs and Weak hits never fired - found 2026-10-17; Crouch dodge now runs before the
+  look-away gate in every phase, skipped only for a hit that can go out now): no hit on a
+  falling target (falling knockback sends them into the ground and
   they rebuild momentum first - `isFalling(Entity)` from `getY() - yo`, other players' motion
   isn't sent) unless they're 200+ ms laggy (`PlayerInfo.getLatency`); a **deflection** (hit back whatever the spacing within
   4 ticks after the target hits you); **in the air** (a jump reset, Aura-Farming's jump, a drop)
@@ -922,8 +932,13 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
   Sodium 0.9.2 threw "Global terrain uniforms have not been updated" on every Fabric test
   screenshot (the screenshot's extra `GameRenderer.render` skips the extract step where Sodium
   re-arms its uniforms) - gametest `SodiumUniformsMixin` re-arms them at the end of each frame.
-  JVM: client `-Xms1G -Xmx3G`, servers `-Xms256M` + their old max, all G1 (pause 50 ms),
-  `UseCompactObjectHeaders` (JDK 25), string dedup, `G1PeriodicGCInterval=15000`.
+  JVM (user, 2026-10-17: "set a memory limit, it was using 5GB"): client `-Xms512M -Xmx2G`,
+  G1 (pause 50 ms), `UseCompactObjectHeaders` (JDK 25), string dedup, unused heap given back
+  (`MinHeapFreeRatio=10`, `MaxHeapFreeRatio=25`, `G1PeriodicGCInterval=10000`), code cache
+  192M; the Gradle daemon gives heap back too - peaks 1.4 GB client + 1.0 GB Gradle.
+  lite-cpu gets a test config (`config/lite_cpu.json`): its throttled chunk rebuilds and
+  distance culling made screenshots race block changes; `in_game` also waits for the wall's
+  block to reach the client (the template was once recorded without it).
 - `PacketBudgetTest` counts packets, swings per attack and aim settling in singleplayer; feel and
   accuracy still need a launch of the client.
 - **Real anticheats (`AnticheatTest`, user, 2026-10-13).** The gametests also join two real

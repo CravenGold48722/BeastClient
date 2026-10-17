@@ -27,6 +27,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContex
 import net.fabricmc.fabric.api.client.gametest.v1.world.TestWorldBuilder;
 import net.fabricmc.fabric.impl.client.gametest.TestSystemProperties;
 import net.minecraft.SharedConstants;
+import net.minecraft.core.BlockPos;
 import net.minecraft.client.gui.screens.worldselection.WorldCreationUiState;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.gamerules.GameRules;
@@ -209,6 +210,12 @@ public class WurstTest implements FabricClientGameTest
 		
 		LOGGER.info("Loading chunks");
 		context.waitTicks(2);
+		// The wall has to reach the client before the chunks count as drawn:
+		// with the performance mods the screenshot was taken now and then
+		// before the wall's block updates arrived (the template got recorded
+		// without it).
+		context.waitFor(mc -> mc.level.getBlockState(new BlockPos(0, -55, 10))
+			.is(Blocks.SMOOTH_STONE), 100);
 		world.waitForChunksRender();
 		
 		assertScreenshotEquals(context, "in_game",

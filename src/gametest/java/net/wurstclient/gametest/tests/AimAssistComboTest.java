@@ -23,8 +23,11 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContex
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import net.wurstclient.WurstClient;
 import net.wurstclient.event.EventManager;
 import net.wurstclient.events.PlayerAttacksEntityListener;
@@ -78,7 +81,12 @@ public final class AimAssistComboTest extends SingleplayerTest
 		boolean targetFalling, boolean deflecting)
 	{}
 	
-	private record HitTaken(int tick, boolean onGround)
+	/**
+	 * A hit the bot landed: where it came from (its eyes to our hitbox, ours
+	 * to its, its height over ours), how far our own hit was, our keys.
+	 */
+	private record HitTaken(int tick, boolean onGround, double theirReach,
+		double ourReach, double botAbove, int ourChargeIn, boolean w, boolean s)
 	{}
 	
 	private final UpdateListener recorder = () -> {
@@ -87,7 +95,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		// the hit that arrived since the last tick (see AimAssist's
 		// reactToTargetHit)
 		if(player.hurtTime > 0 && player.hurtTime == player.hurtDuration)
-			hitsTaken.add(new HitTaken(forwardDown.size(), player.onGround()));
+			hitsTaken.add(hitTaken(mc));
 		forwardDown.add(mc.options.keyUp.isDown());
 		backDown.add(mc.options.keyDown.isDown());
 		chances.add(isChance(mc));
@@ -322,7 +330,15 @@ public final class AimAssistComboTest extends SingleplayerTest
 			context.computeOnClient(mc -> List.copyOf(hitsTaken));
 		List<Boolean> jumps = snapshot(jumped);
 		logger.info("Fight: our hits {}", hits);
-		logger.info("Fight: hits taken {}", taken);
+		logger.info("Fight: score {} hits on the bot, {} taken", hits.size(),
+			taken.stream().filter(h -> h.tick() < fightEnd).count());
+		for(HitTaken h : taken)
+			logger.info(String.format(Locale.ROOT,
+				"Fight: hit taken at %d: its reach %.2f, ours %.2f, it %.2f"
+					+ " above us, our hit ready in %d, W %s S %s, %s",
+				h.tick(), h.theirReach(), h.ourReach(), h.botAbove(),
+				h.ourChargeIn(), h.w(), h.s(),
+				h.onGround() ? "on the ground" : "in the air"));
 		
 		boolean sweeps =
 			UserSettings.aimAssist().get("Sprint sweeps").getAsBoolean();
@@ -548,9 +564,10 @@ public final class AimAssistComboTest extends SingleplayerTest
 			+ " weapon.mainhand with diamond_sword");
 		runWurstCommand("setcheckbox AimAssist Shield_block on");
 		runWurstCommand("setcheckbox AimAssist Crouch_dodge on");
-		// the drops below are teleports, 3 blocks in a tick (60 blocks/s):
+		// the drops below are teleports, up to ~6 blocks in a tick from where
+		// knockback put it (120 blocks/s):
 		// the user's Filter speed 35 let go of the target every time
-		runWurstCommand("setslider AimAssist Filter_speed 100");
+		runWurstCommand("setslider AimAssist Filter_speed 200");
 		
 		int[] counts = new int[7];
 		final int BLOCKING = 0, SWINGS = 1, HURT = 2, DIVES = 3,
@@ -754,6 +771,31 @@ public final class AimAssistComboTest extends SingleplayerTest
 	private <T> List<T> snapshot(List<T> list)
 	{
 		return context.computeOnClient(mc -> List.copyOf(list));
+	}
+	
+	private HitTaken hitTaken(Minecraft mc)
+	{
+		var player = mc.player;
+		Player bot = findBot(mc);
+		int chargeIn = 0;
+		while(chargeIn < 40
+			&& player.getAttackStrengthScale(chargeIn - 0.5F) <= 0.9F)
+			chargeIn++;
+		double theirReach = Double.NaN, ourReach = Double.NaN, above = 0;
+		if(bot != null)
+		{
+			Vec3 eyes = bot.getEyePosition();
+			AABB box = player.getBoundingBox();
+			Vec3 nearest = new Vec3(Mth.clamp(eyes.x, box.minX, box.maxX),
+				Mth.clamp(eyes.y, box.minY, box.maxY),
+				Mth.clamp(eyes.z, box.minZ, box.maxZ));
+			theirReach = eyes.distanceTo(nearest);
+			ourReach = Math.sqrt(EntityUtils.distanceToHitboxSq(bot));
+			above = bot.getY() - player.getY();
+		}
+		return new HitTaken(forwardDown.size(), player.onGround(), theirReach,
+			ourReach, above, chargeIn, mc.options.keyUp.isDown(),
+			mc.options.keyDown.isDown());
 	}
 	
 	private static Field baitTicks;

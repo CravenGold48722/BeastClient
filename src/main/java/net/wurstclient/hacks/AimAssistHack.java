@@ -1405,9 +1405,11 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	/**
 	 * How many ticks before the hit W goes down: one to start sprinting, one
-	 * for the server to have it (see isSprintHitReady).
+	 * for the server to have it (see isSprintHitReady), one to spare - with
+	 * two, a VexBot charged at the same time got its hit in first 4 times in
+	 * a 300-tick fight while ours waited for the sprint.
 	 */
-	private static final int SPRINT_LEAD_TICKS = 2;
+	private static final int SPRINT_LEAD_TICKS = 3;
 	
 	/** How long after being hit a hit still counts as a deflection. */
 	private static final int DEFLECT_TICKS = 4;
@@ -1679,27 +1681,36 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			}
 		}
 		
-		if(dist > REACH || deflecting
-			|| ticksUntilCharged() <= SPRINT_LEAD_TICKS)
+		// Spacing (user, 2026-10-17: "they can't hit you but you can hit
+		// them"): go in only so as to arrive as the hit charges, and until
+		// then stay out of THEIR reach - from their eyes to our hitbox, so a
+		// target knocked up into the air has to come closer than we do. It
+		// used to chase as soon as they were past 3 blocks (arriving in their
+		// reach with 10 ticks of cooldown left) and only back off under 2.0:
+		// of 16 hits a VexBot landed in a 300-tick fight, 11 came while our
+		// own hit was 6-11 ticks away, from 0.3-2.4 blocks.
+		if(deflecting
+			|| ticksUntilCharged() <= SPRINT_LEAD_TICKS + approachTicks(dist))
 		{
-			// Spacing: chase from outside reach; just before the next hit
-			// hold W to be sprinting for it; otherwise coast, or back off
-			// with S when too close - never walk into their reach between
-			// hits.
 			releaseBackward();
 			holdForward();
 			pressSprint();
 			
-		}else if(hops.isChecked() && canJump && dist >= TOO_CLOSE - 0.5)
+		}else if(hops.isChecked() && canJump && dist < TOO_CLOSE
+			&& dist >= TOO_CLOSE - 0.5)
 		{
 			// Hops: jump without W, W in the air, a sprint hit on the way
-			// down - instead of backing off.
+			// down - instead of backing off when too close. (It hopped at any
+			// distance from 1.5 up, staying in their reach every cooldown.)
 			releaseForward();
 			releaseBackward();
 			KeyPresser.press(MC.options.keyJump);
 			airMode = AirMode.HOP;
 			
-		}else if(dist < TOO_CLOSE)
+		}else if(theirReachToUs() <= REACH + THEIR_REACH_MARGIN
+			&& closing > -TAP_SPEED && hasRoomBehind())
+		// (not from one that's backing off itself: it's no threat, and
+		// it's the one to keep up with)
 		{
 			releaseForward();
 			holdBackward();
@@ -1969,6 +1980,38 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return false;
 		
 		return targetTicksUntilCharged() <= 1;
+	}
+	
+	/**
+	 * How far beyond their reach we stay while our hit charges: they close
+	 * in at up to ~0.28 blocks a tick sprinting, we back off at ~0.22.
+	 */
+	private static final double THEIR_REACH_MARGIN = 1.0;
+	
+	/** Blocks a tick a sprint covers once going (for approachTicks). */
+	private static final double SPRINT_STEP = 0.28;
+	
+	/**
+	 * Ticks of sprinting it takes from this hitbox distance until the
+	 * target is in reach - how much earlier than the charge to set off.
+	 */
+	private static int approachTicks(double dist)
+	{
+		if(dist <= REACH)
+			return 0;
+		return (int)Math.ceil((dist - REACH + 0.1) / SPRINT_STEP);
+	}
+	
+	/**
+	 * The target's reach to us: its eyes to the nearest point of our
+	 * hitbox. Up in the air after our hit, its eyes are above our head and
+	 * this is the slanted line - longer than ours to it, which only spans the
+	 * gap. That's what holds a combo: we can hit them, they can't hit us.
+	 */
+	private double theirReachToUs()
+	{
+		Vec3 eyes = target.getEyePosition();
+		return eyes.distanceTo(closestPoint(MC.player.getBoundingBox(), eyes));
 	}
 	
 	private static Vec3 closestPoint(AABB box, Vec3 p)

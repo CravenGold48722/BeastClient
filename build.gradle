@@ -300,6 +300,23 @@ def preparePerfMods = tasks.register("preparePerfMods") {
 			java.nio.file.Files.copy(it.toPath(), new File(mods, it.name).toPath(),
 				java.nio.file.StandardCopyOption.REPLACE_EXISTING)
 		}
+		// lite-cpu rebuilds chunks outside radius 1 at most every 250 ms and
+		// culls block entities/entities by distance: a screenshot right after
+		// a block change raced the rebuild ("all chunks rendered" was true
+		// before it was even scheduled) - in_game was recorded without the
+		// wall in front. Its particle throttling and frustum culling stay.
+		def config = new File(runDir, "config")
+		config.mkdirs()
+		new File(config, "lite_cpu.json").text = """{
+  "throttleDistantChunkUpdates": false,
+  "cullDistantBlockEntities": false,
+  "autoEntityDistanceCulling": false,
+  "entityRenderDistance": 0,
+  "adaptivePerformanceEnabled": false,
+  "optimizeWhenUnfocused": false,
+  "limitFpsInMenus": false
+}
+"""
 		logger.lifecycle("Gametest client: ${jars.size()} performance mods, lowest graphics")
 	}
 }

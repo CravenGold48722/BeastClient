@@ -582,22 +582,30 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private int tickCount;
 	
 	/**
+	 * The tick of something that hasn't happened yet: far in the past, but
+	 * not Integer.MIN_VALUE - `tickCount - lastX` overflowed with that, so
+	 * every `> N ticks since` check failed until the first time (Crouch
+	 * dodge, Fly-outs and Weak hits could never happen; found 2026-10-17).
+	 */
+	private static final int NEVER = -1_000_000;
+	
+	/**
 	 * Until this tick a hit goes out as a deflection: right after the target
 	 * hit you, whatever the spacing or the target's fall.
 	 */
-	private int deflectUntilTick = Integer.MIN_VALUE;
+	private int deflectUntilTick = NEVER;
 	
 	/** Ticks of S left before an S-tap deflection (too close to deflect). */
 	private int deflectSTapTicks;
 	
 	/** When the combo last hit the target (tickCount), for fly-outs. */
-	private int lastHitTick = Integer.MIN_VALUE;
+	private int lastHitTick = NEVER;
 	
 	/** What the jump in progress is for; decides the keys in the air. */
 	private AirMode airMode = AirMode.NONE;
 	
 	/** A fly-out in progress: ticks so far, and whether the hit came. */
-	private int lastFlyOutTick = Integer.MIN_VALUE;
+	private int lastFlyOutTick = NEVER;
 	private int flyOutTicks;
 	private boolean flyOutHit;
 	
@@ -609,7 +617,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private boolean sweepChase;
 	
 	/** When the last weak hit went out (tickCount). */
-	private int lastWeakHitTick = Integer.MIN_VALUE;
+	private int lastWeakHitTick = NEVER;
 	
 	/** Ticks in a row sprinting forward on the ground (full speed: ~10). */
 	private int sprintTicks;
@@ -618,7 +626,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private boolean sprintHeldOff;
 	
 	/** The target's last swing (tickCount) and what its swing looked like. */
-	private int targetSwingTick = Integer.MIN_VALUE;
+	private int targetSwingTick = NEVER;
 	private boolean targetWasSwinging;
 	private int targetLastSwingTime;
 	private Entity swingTracked;
@@ -629,7 +637,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private Entity motionTracked;
 	
 	/** Until this tick a hit goes out like a deflection (Punish openings). */
-	private int punishUntilTick = Integer.MIN_VALUE;
+	private int punishUntilTick = NEVER;
 	private boolean targetWasBlocking;
 	
 	/**
@@ -641,7 +649,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private int shieldBreakTicks;
 	
 	/** When the last crouch dodge started (tickCount). */
-	private int lastCrouchDodgeTick = Integer.MIN_VALUE;
+	private int lastCrouchDodgeTick = NEVER;
 	
 	/** Combo strafe: which side, flipped after every hit. */
 	private boolean strafeLeft;
@@ -795,24 +803,24 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		backwardKeyForced = false;
 		resetTicksLeft = 0;
 		comboHitCount = 0;
-		deflectUntilTick = Integer.MIN_VALUE;
+		deflectUntilTick = NEVER;
 		spinRemaining = 0F;
 		spinTriggered = false;
 		attackedThisTick = false;
 		resetCombo();
-		lastHitTick = Integer.MIN_VALUE;
-		lastWeakHitTick = Integer.MIN_VALUE;
+		lastHitTick = NEVER;
+		lastWeakHitTick = NEVER;
 		sprintTicks = 0;
 		swingTracked = null;
 		motionTracked = null;
 		lastTargetPos = null;
 		targetMotion = Vec3.ZERO;
-		punishUntilTick = Integer.MIN_VALUE;
-		lastFlyOutTick = Integer.MIN_VALUE;
+		punishUntilTick = NEVER;
+		lastFlyOutTick = NEVER;
 		targetWasBlocking = false;
 		shieldBreakStage = 0;
 		shieldBreakPrevSlot = -1;
-		lastCrouchDodgeTick = Integer.MIN_VALUE;
+		lastCrouchDodgeTick = NEVER;
 		comboStrafing = false;
 		shieldBlocking = false;
 		shieldBlockTicks = 0;
@@ -942,6 +950,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		trackTargetMotion();
 		trackSprint();
 		reactToTargetHit();
+		updateCrouchDodge();
 		
 		// Apply the aim. Server-side keeps the camera still and only rewrites
 		// the rotation in the outgoing movement packet (silent aim, the way
@@ -1559,15 +1568,6 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return true;
 		}
 		
-		// Crouch dodge: they drop onto us for a crit and our hit isn't
-		// ready - a smaller hitbox for a moment.
-		if(crouchDodge.isChecked() && tickCount - lastCrouchDodgeTick > 15
-			&& ticksUntilCharged() > 2 && isCritDiveIncoming())
-		{
-			KeyPresser.press(MC.options.keyShift, 3);
-			lastCrouchDodgeTick = tickCount;
-		}
-		
 		// Stuck in a cobweb, knockback can't move them and walking in
 		// would trap us too: stay out and crit (a hop, a crit on the way
 		// down).
@@ -1886,7 +1886,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		if(target != swingTracked)
 		{
 			swingTracked = target;
-			targetSwingTick = Integer.MIN_VALUE;
+			targetSwingTick = NEVER;
 			targetWasSwinging = false;
 			targetLastSwingTime = 0;
 		}
@@ -1930,7 +1930,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	private int targetTicksUntilCharged()
 	{
-		if(targetSwingTick == Integer.MIN_VALUE)
+		if(targetSwingTick == NEVER)
 			return 0;
 		
 		double cooldown = 20;
@@ -1990,7 +1990,35 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		return MC.level.noCollision(MC.player, moved);
 	}
 	
-	/** The target drops onto us, charged, from our height or above. */
+	/**
+	 * Crouch dodge: the target drops onto us for a crit - a smaller hitbox
+	 * for a moment, unless our own hit can go out right now. (User,
+	 * 2026-10-17: "crouch dodge doesn't work" - it only ran standing between
+	 * hits with our hit 3+ ticks away and the crosshair within 45 degrees of
+	 * the target; a diver that just appeared above is further off than that,
+	 * and with nobody being hit our hit is ready most of the time. The
+	 * gametest dropped a VexBot onto us 10 times: 38 ticks of dives, no
+	 * crouch.)
+	 */
+	private void updateCrouchDodge()
+	{
+		if(!crouchDodge.isChecked() || !autoAttack.isChecked()
+			|| !autoCombo.isChecked())
+			return;
+		if(tickCount - lastCrouchDodgeTick <= 15 || !isCritDiveIncoming())
+			return;
+		if(isHitCharged() && canLandGoodHit())
+			return;
+		
+		KeyPresser.press(MC.options.keyShift, 3);
+		lastCrouchDodgeTick = tickCount;
+	}
+	
+	/**
+	 * The target drops onto us from our height or above, within reach. (It
+	 * also wanted their hit fully charged by our count from their last
+	 * swing - a spam-clicker swings so often that never was the case.)
+	 */
 	private boolean isCritDiveIncoming()
 	{
 		if(!(target instanceof LivingEntity) || target.onGround())
@@ -2000,7 +2028,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return false;
 		
 		return EntityUtils.distanceToHitboxSq(target) <= (REACH + 0.5)
-			* (REACH + 0.5) && targetTicksUntilCharged() == 0;
+			* (REACH + 0.5);
 	}
 	
 	private static boolean isInCobweb(Entity e)

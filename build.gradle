@@ -117,10 +117,17 @@ def updateScreenshots = project.hasProperty("updateScreenshots")
 // Only some of the gametests: -Ponly=mace,scaffold (see gametest.cmd)
 def onlyTests = project.findProperty("only")
 
-def gameTestJvmFlags = ["-Xms1G", "-Xmx3G", "-XX:+UseG1GC",
+// The test client's memory (user, 2026-10-17: "set a memory limit, it was
+// using 5GB"): a 2 GB heap at most (it was 3), started small; unused heap
+// given back to Windows after each collection and every 10 s instead of
+// kept; compact object headers (JDK 25: smaller objects); compiled code
+// capped. What's left on top of the heap is Minecraft's own native memory
+// (textures, LWJGL buffers, class metadata).
+def gameTestJvmFlags = ["-Xms512M", "-Xmx2G", "-XX:+UseG1GC",
 	"-XX:MaxGCPauseMillis=50", "-XX:+ParallelRefProcEnabled",
 	"-XX:+UseCompactObjectHeaders", "-XX:+UseStringDeduplication",
-	"-XX:G1PeriodicGCInterval=15000"]
+	"-XX:G1PeriodicGCInterval=10000", "-XX:MinHeapFreeRatio=10",
+	"-XX:MaxHeapFreeRatio=25", "-XX:ReservedCodeCacheSize=192M"]
 
 loom {
 	accessWidenerPath = file("src/main/resources/wurst.accesswidener")

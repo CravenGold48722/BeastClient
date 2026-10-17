@@ -168,6 +168,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 			noHitWhileFalling();
 			tapChoice();
 			realFight();
+			shieldAndCrouchDodge();
 			
 		}finally
 		{
@@ -530,6 +531,98 @@ public final class AimAssistComboTest extends SingleplayerTest
 	 * The same open spot on the ground for every part, facing north - away
 	 * from what the other tests built around the origin.
 	 */
+	/**
+	 * Shield block and Crouch dodge (user, 2026-10-17: "doesn't work"), with
+	 * a shield in the offhand against a VexBot: the shield goes up while the
+	 * bot's hit is due before ours, and a crit dive onto us gets a crouch.
+	 */
+	private void shieldAndCrouchDodge()
+	{
+		startSpot();
+		spawnBot("~ ~ ~-4");
+		context.waitTicks(20);
+		runAsMe("gamemode survival");
+		makeTough("@s");
+		runAsMe("item replace entity @s weapon.offhand with shield");
+		runAsMe("item replace entity " + BOT
+			+ " weapon.mainhand with diamond_sword");
+		runWurstCommand("setcheckbox AimAssist Shield_block on");
+		runWurstCommand("setcheckbox AimAssist Crouch_dodge on");
+		// the drops below are teleports, 3 blocks in a tick (60 blocks/s):
+		// the user's Filter speed 35 let go of the target every time
+		runWurstCommand("setslider AimAssist Filter_speed 100");
+		
+		int[] counts = new int[7];
+		final int BLOCKING = 0, SWINGS = 1, HURT = 2, DIVES = 3,
+			DIVE_CROUCHED = 4, CROUCHING = 5, TICKS = 6;
+		boolean[] botWasSwinging = new boolean[1];
+		UpdateListener watch = () -> {
+			Minecraft mc = WurstClient.MC;
+			var player = mc.player;
+			counts[TICKS]++;
+			if(player.isBlocking())
+				counts[BLOCKING]++;
+			if(player.isShiftKeyDown())
+				counts[CROUCHING]++;
+			if(player.hurtTime > 0 && player.hurtTime == player.hurtDuration)
+				counts[HURT]++;
+			Player bot = findBot(mc);
+			if(bot == null)
+				return;
+			if(bot.swinging && !botWasSwinging[0])
+				counts[SWINGS]++;
+			botWasSwinging[0] = bot.swinging;
+			boolean dive = !bot.onGround() && bot.getY() - bot.yo < -0.05
+				&& bot.getY() >= player.getY() - 0.1
+				&& EntityUtils.distanceToHitboxSq(bot) <= 3.5 * 3.5;
+			if(dive)
+			{
+				counts[DIVES]++;
+				if(player.isShiftKeyDown())
+					counts[DIVE_CROUCHED]++;
+			}
+		};
+		context.runOnClient(mc -> WurstClient.INSTANCE.getEventManager()
+			.add(UpdateListener.class, watch));
+		try
+		{
+			runAsMe("vexbot attack " + me + " " + BOT);
+			runWurstCommand("t AimAssist on");
+			// VexBot rarely drops onto us by itself (0 in 300 ticks once):
+			// every 25 ticks it comes down from 3 blocks up, just in front
+			context.waitTicks(40);
+			for(int i = 0; i < 10; i++)
+			{
+				runAsMe("tp " + BOT + " ~ ~3 ~-1.5");
+				context.waitTicks(25);
+			}
+			context.waitTicks(10);
+			runWurstCommand("t AimAssist off");
+			runAsMe("vexbot attack stop " + BOT);
+			context.waitTicks(3);
+			
+		}finally
+		{
+			context.runOnClient(mc -> WurstClient.INSTANCE.getEventManager()
+				.remove(UpdateListener.class, watch));
+			runAsMe("item replace entity @s weapon.offhand with air");
+			removeBot();
+		}
+		
+		logger.info(
+			"Shield & crouch dodge: {} ticks, shield up {}, bot swung {} times,"
+				+ " hurt {} times; crit dives onto us {} ticks, crouched in {}"
+				+ " of them, crouching {} ticks in all",
+			counts[TICKS], counts[BLOCKING], counts[SWINGS], counts[HURT],
+			counts[DIVES], counts[DIVE_CROUCHED], counts[CROUCHING]);
+		if(counts[SWINGS] > 3 && counts[BLOCKING] == 0)
+			throw new RuntimeException("Shield block never raised the shield ("
+				+ counts[SWINGS] + " bot swings)");
+		if(counts[DIVES] > 0 && counts[CROUCHING] == 0)
+			throw new RuntimeException("Crouch dodge never crouched ("
+				+ counts[DIVES] + " ticks of crit dives onto us)");
+	}
+	
 	private void startSpot()
 	{
 		runAsMe("tp @s 0.5 -60 -20.5 180 0");

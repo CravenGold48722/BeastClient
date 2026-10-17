@@ -2019,30 +2019,48 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 		hack("MobSpawnESP", () -> screenChange("MobSpawnESP", 30, null));
 		
 		hack("NameTags", () -> {
-			// far away, where a normal name tag is too small to read
-			mob("husk", 0, 0, 40, "CustomName:\"Bob\",CustomNameVisible:1b");
+			// named, but not "always visible": vanilla shows the name only
+			// with the crosshair on it - NameTags' "Always show named mobs"
+			// always (with CustomNameVisible vanilla showed
+			// it already: no difference to see)
+			// (off to the side: right under the crosshair vanilla showed it
+			// even from 16 blocks; out of reach but close enough for the tag
+			// to be more than a few pixels - at 16 it rounded to 0.0%)
+			mob("husk", 3, 0, 7, "CustomName:\"Bob\"");
+			// a tag at normal size is ~0.1% of the screen, under the 0.3% a
+			// change has to reach
+			set("NameTags", "Scale", 3);
 			awaitEntities(Husk.class, 1);
 			return screenChange("NameTags", 3, null);
 		});
 		
 		hack("NewChunks", () -> {
-			// it marks chunks as they arrive, so: on, then somewhere the
-			// server has never generated, looking down the new chunks
-			// it draws at a set height (default y 0: 60 above this floor)
-			set("NewChunks", "Altitude", home.getY() - 1);
+			// It marks a chunk new when liquid starts flowing in it (block
+			// updates of flowing water: fresh terrain settling) and old when
+			// flowing liquid is already there as it arrives. This flat world
+			// has none - going far away to never-generated chunks showed
+			// nothing - so: on, then a water source that flows out. Its
+			// chunk gets the square, drawn at a set height (default y 0: 60
+			// above this floor), here a block above the floor, looked down at.
+			set("NewChunks", "Altitude", home.getY() + 1);
+			set("NewChunks", "Show counter", true);
 			boolean enabled = on("NewChunks");
-			at(240, 0, 0, 90, 20);
-			waitUntil(
-				mc -> mc.level.getChunkSource().getLoadedChunksCount() > 50,
-				60);
-			context.waitTicks(40);
-			java.nio.file.Path onShot = shot("NewChunks_on");
+			at(0, 0, 0, 0, 35);
+			block(0, 0, 6, "water");
+			// it flows ~7 blocks out, 5 ticks a block: settled before the
+			// shots, which then differ only by the square
+			context.waitTicks(45);
+			// the square shows on the screenshot (kept for a look), but the
+			// water's animation changes 20% of the screen between any two
+			// shots - so its own counter decides: "[new/old]"
+			shot("NewChunks_on");
+			String counted = context.computeOnClient(mc -> WurstClient.INSTANCE
+				.getHax().getHackByName("NewChunks").getRenderName());
 			off("NewChunks");
-			context.waitTicks(3);
-			java.nio.file.Path off1 = shot("NewChunks_off1");
-			context.waitTicks(3);
-			java.nio.file.Path off2 = shot("NewChunks_off2");
-			return verdictOf(enabled, off1, off2, onShot);
+			boolean found = counted.matches(".*\\[[1-9]\\d*/\\d+\\].*");
+			return check(enabled && found,
+				"marked the chunk the water flowed in as new: " + counted,
+				enabled ? "no new chunk: " + counted : "turned itself off");
 		});
 		
 		hack("NoBackground", () -> screenChange("NoBackground", 2, () -> {
@@ -2053,13 +2071,27 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 		}));
 		
 		hack("NoFireOverlay", () -> {
-			String result = removesEffect("NoFireOverlay", () -> {
-				block(0, 0, 0, "fire");
-				waitUntil(mc -> mc.player.isOnFire(), 20);
-			}, null);
-			block(0, 0, 0, "water");
-			context.waitTicks(3);
-			return result;
+			// burning hurts: the hurt tilt tipped the whole view in both
+			// shots with fire and drowned out the overlay (42% of the screen
+			// either way) - not what this hack is about
+			double tilt = context
+				.computeOnClient(mc -> mc.options.damageTiltStrength().get());
+			context.runOnClient(mc -> mc.options.damageTiltStrength().set(0.0));
+			try
+			{
+				String result = removesEffect("NoFireOverlay", () -> {
+					block(0, 0, 0, "fire");
+					waitUntil(mc -> mc.player.isOnFire(), 20);
+				}, null);
+				block(0, 0, 0, "water");
+				context.waitTicks(3);
+				return result;
+				
+			}finally
+			{
+				context.runOnClient(
+					mc -> mc.options.damageTiltStrength().set(tilt));
+			}
 		});
 		
 		hack("NoFog", () -> screenChange("NoFog", 3, null));
@@ -2113,8 +2145,10 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 		});
 		
 		hack("Overlay", () -> {
-			block(0, 0, 2, "obsidian");
-			awaitBlock(0, 0, 2, Blocks.OBSIDIAN);
+			// a block that breaks in ~1.5 s by hand: obsidian barely started
+			// in the time the shots take, so the box (its progress) was a dot
+			block(0, 0, 2, "pumpkin");
+			awaitBlock(0, 0, 2, Blocks.PUMPKIN);
 			lookAt(Vec3.atCenterOf(p(0, 0, 2)));
 			holdMouse(LEFT);
 			context.waitTicks(5);
@@ -2484,14 +2518,16 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 			pickaxe();
 			fill(-3, 0, 1, 3, 2, 6, "stone");
 			awaitBlock(3, 2, 6, Blocks.STONE);
-			type("dig 2 2 2");
-			// it digs from the front-left-top corner, floor included
+			// the area's front-left-top corner is your own head's block, so 3
+			// long reaches 2 blocks into the wall: 8 of stone (2 2 2 dug 4)
+			type("dig 3 2 2");
 			waitUntil(mc -> countBox(mc, Blocks.AIR, -3, -3, 1, 3, 2, 6) >= 8,
 				200);
 			type("dig stop");
 			messy();
 			int dug = count(Blocks.AIR, -3, -3, 1, 3, 2, 6);
-			return check(dug >= 8, fmt("dug out the 2x2x2 (%d blocks)", dug),
+			return check(dug >= 8,
+				fmt("dug out the 2x2x2 in front (%d blocks)", dug),
 				fmt("dug %d of 8", dug));
 		});
 		

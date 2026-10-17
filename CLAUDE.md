@@ -1072,9 +1072,22 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
     `stopDestroyBlock()` on disable - an abort for a dig the server never had. Gone.
   - Intave interactionraytrace ("broke X, but looking at a different block"): the break went
     out in the tick the camera turned to the block, before the movement packet with that turn.
-    `BlockBreaker.isTurnPending(pos)` (the rotation about to be sent is on it, the last sent
-    one isn't -> wait a tick) in every mining hack; line of sight is now the crosshair's
-    (OUTLINE shapes, first block hit = the target) instead of collision shapes.
+    `BlockBreaker.isTurnPending(pos)` in every mining hack and CrystalAura's placing: the
+    first tick on a new block only turns, then it breaks once the last sent rotation is on it
+    too (an "old look within 3 degrees" rule instead kept `.excavate` waiting forever while it
+    walked up close; just "the old look reaches it" broke the wheat behind a just-broken one,
+    which Intave still had in front); line of sight is now the crosshair's (OUTLINE shapes,
+    first block hit = the target) instead of collision shapes. AutoFarm 17 -> 0 flags.
+  - CrystalAura placed and hit in the tick it turned (Grim RotationPlace "post-flying"; on
+    one run it never hurt the husk): placing waits for the turn, hits for `HitCheck`.
+  - AntiWobble: 26.1's wobble is max(portal lerp, `getEffectBlendFactor(NAUSEA)`) - the mixin
+    only zeroed the portal part, so nausea still wobbled; now both.
+  - Test scenes that couldn't show the effect: NameTags (CustomNameVisible = vanilla shows
+    it anyway; husk off the crosshair at 7 blocks, Scale 3), Overlay (obsidian by hand barely
+    started - a pumpkin), NewChunks (only marks chunks where liquid starts flowing: a water
+    source, and its own counter decides - the water's animation is 20% screen noise),
+    NoFireOverlay (burn damage tilted the view in every shot - damage tilt off), `.dig`
+    (the area starts at your own head's block: `dig 3 2 2` reaches 8 stone).
   - NukerLegit called `startDestroyBlock` itself, skipping vanilla's 5-tick `destroyDelay`
     (Grim FastBreak, Intave "started breaking too quickly") - only `continueDestroyBlock` now.
   - FightBot (Range 4.25 -> Grim Reach at 4.19) and Protect (any look within 7 -> Intave

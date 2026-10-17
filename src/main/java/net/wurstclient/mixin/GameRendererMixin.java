@@ -17,8 +17,12 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.mojang.blaze3d.vertex.PoseStack;
 
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.core.Holder;
+import net.minecraft.world.effect.MobEffect;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
 import net.wurstclient.WurstClient;
 import net.wurstclient.event.EventManager;
@@ -57,6 +61,24 @@ public abstract class GameRendererMixin implements AutoCloseable
 			return original.call(delta, start, end);
 		
 		return 0;
+	}
+	
+	/**
+	 * The wobble is max(portal effect, nausea) in 26.1 - the lerp above is
+	 * only the portal's, so nausea still wobbled the screen with AntiWobble on
+	 * (found by the anticheat sweep's screenshots).
+	 */
+	@WrapOperation(method = "renderLevel(Lnet/minecraft/client/DeltaTracker;)V",
+		at = @At(value = "INVOKE",
+			target = "Lnet/minecraft/client/player/LocalPlayer;getEffectBlendFactor(Lnet/minecraft/core/Holder;F)F"))
+	private float onRenderWorldNauseaFactor(LocalPlayer player,
+		Holder<MobEffect> effect, float partialTicks, Operation<Float> original)
+	{
+		if(effect == MobEffects.NAUSEA
+			&& WurstClient.INSTANCE.getHax().antiWobbleHack.isEnabled())
+			return 0;
+		
+		return original.call(player, effect, partialTicks);
 	}
 	
 	@Inject(

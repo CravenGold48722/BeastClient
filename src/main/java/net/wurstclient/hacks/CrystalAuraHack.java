@@ -39,9 +39,11 @@ import net.wurstclient.settings.TakeItemsFromSetting;
 import net.wurstclient.settings.TakeItemsFromSetting.TakeItemsFrom;
 import net.wurstclient.settings.filterlists.CrystalAuraFilterList;
 import net.wurstclient.settings.filterlists.EntityFilterList;
+import net.wurstclient.util.BlockBreaker;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.EntityUtils;
 import net.wurstclient.util.FakePlayerEntity;
+import net.wurstclient.util.HitCheck;
 import net.wurstclient.util.InventoryUtils;
 import net.wurstclient.util.RotationUtils;
 
@@ -145,18 +147,26 @@ public final class CrystalAuraHack extends Hack implements UpdateListener
 		{
 			ArrayList<BlockPos> freeBlocks = getFreeBlocksNear(target);
 			
+			boolean turned = false;
 			for(BlockPos pos : freeBlocks)
-				if(placeCrystal(pos))
+			{
+				Placing result = placeCrystal(pos);
+				if(result == Placing.NONE)
+					continue;
+				
+				if(result == Placing.PLACED)
 				{
 					shouldSwing = true;
 					newCrystals.add(pos);
-					
-					// TODO optional speed limit(?)
-					break;
-				}
+				}else
+					turned = true;
+				
+				// TODO optional speed limit(?)
+				break;
+			}
 			
 			// only one rotation per tick unless it is spammed or off
-			if(!newCrystals.isEmpty()
+			if((turned || !newCrystals.isEmpty())
 				&& !faceTarget.canFaceMultipleTargetsPerTick())
 				break;
 		}
@@ -169,21 +179,38 @@ public final class CrystalAuraHack extends Hack implements UpdateListener
 	
 	private void detonate(ArrayList<Entity> crystals)
 	{
+		boolean attacked = false;
 		for(Entity e : crystals)
 		{
 			faceTarget.face(e.getBoundingBox().getCenter());
-			MC.gameMode.attack(MC.player, e);
+			
+			// once the server has the turn (see HitCheck): hitting in the tick
+			// the look turned to it is a hit with a rotation it hasn't seen
+			if(HitCheck.isVerifiable(e))
+			{
+				MC.gameMode.attack(MC.player, e);
+				attacked = true;
+			}
 			
 			// only one rotation per tick unless it is spammed or off
 			if(!faceTarget.canFaceMultipleTargetsPerTick())
 				break;
 		}
 		
-		if(!crystals.isEmpty())
+		if(attacked)
 			swingHand.swing(InteractionHand.MAIN_HAND);
 	}
 	
-	private boolean placeCrystal(BlockPos pos)
+	private enum Placing
+	{
+		/** No side of this spot can be clicked. */
+		NONE,
+		/** Turned toward it; the click goes out once the server has that. */
+		TURNING,
+		PLACED
+	}
+	
+	private Placing placeCrystal(BlockPos pos)
 	{
 		Vec3 eyesPos = RotationUtils.getEyesPos();
 		double rangeSq = Math.pow(range.getValue(), 2);
@@ -216,18 +243,24 @@ public final class CrystalAuraHack extends Hack implements UpdateListener
 			InventoryUtils.selectItem(Items.END_CRYSTAL,
 				takeItemsFrom.getMaxInvSlot());
 			if(!MC.player.isHolding(Items.END_CRYSTAL))
-				return false;
+				return Placing.NONE;
 			
 			faceTarget.face(hitVec);
+			
+			// The click goes out before this tick's movement packet: only once
+			// the rotation the server has is on that block (Grim RotationPlace
+			// "post-flying" when it went out in the tick of the turn).
+			if(BlockBreaker.isTurnPending(neighbor))
+				return Placing.TURNING;
 			
 			// place block
 			IMC.getInteractionManager().rightClickBlock(neighbor,
 				side.getOpposite(), hitVec);
 			
-			return true;
+			return Placing.PLACED;
 		}
 		
-		return false;
+		return Placing.NONE;
 	}
 	
 	private ArrayList<Entity> getNearbyCrystals()

@@ -76,9 +76,30 @@ public enum BlockBreaker
 	{
 		LocalPlayer player = MC.player;
 		RotationFaker faker = WURST.getRotationFaker();
-		return isLookingAt(pos, faker.getServerYaw(), faker.getServerPitch())
-			&& !isLookingAt(pos, player.yRotLast, player.xRotLast);
+		float yaw = faker.getServerYaw();
+		float pitch = faker.getServerPitch();
+		if(!isLookingAt(pos, yaw, pitch))
+			return false;
+			
+		// The first tick on a new block only turns, even if the old look
+		// reaches it too: right after breaking the block in front, the old
+		// look runs through where that block was - which the server can still
+		// have there (Intave: "wheat block, but looking at a different wheat
+		// block"). (A "turned more than 3 degrees" rule did that too, but kept
+		// .excavate waiting forever while walking up close to a block.)
+		int now = player.tickCount;
+		boolean newBlock = !pos.equals(turnTarget) || now - turnTargetTick > 1;
+		turnTarget = pos.immutable();
+		turnTargetTick = now;
+		if(newBlock)
+			return true;
+		
+		return !isLookingAt(pos, player.yRotLast, player.xRotLast);
 	}
+	
+	/** The block isTurnPending() was last asked about, and when. */
+	private static BlockPos turnTarget;
+	private static int turnTargetTick;
 	
 	/** Whether a crosshair with this rotation would pick this block. */
 	public static boolean isLookingAt(BlockPos pos, float yaw, float pitch)

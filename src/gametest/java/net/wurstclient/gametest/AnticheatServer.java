@@ -136,14 +136,18 @@ public final class AnticheatServer
 			// servers
 			// for seconds - lag flags everywhere (Intave, a bigger plugin:
 			// more)
-			String heap = flagLogDir != null ? "-Xmx1536M" : "-Xmx1G";
+			// (user, 2026-10-17: a memory limit for the tests - Grim 768 MB,
+			// Intave 1 GB, were 1 / 1.5)
+			String heap = flagLogDir != null ? "-Xmx1G" : "-Xmx768M";
 			// the client's flags too (build.gradle): G1 with short pauses,
-			// compact object headers, unused heap given back every 15 s
+			// compact object headers, unused heap given back to Windows
 			process = new ProcessBuilder(java, "-Xms256M", heap, "-XX:+UseG1GC",
 				"-XX:MaxGCPauseMillis=50", "-XX:+ParallelRefProcEnabled",
 				"-XX:+UseCompactObjectHeaders", "-XX:+UseStringDeduplication",
-				"-XX:G1PeriodicGCInterval=15000", "-jar", jar, "nogui")
-					.directory(dir).redirectErrorStream(true).start();
+				"-XX:G1PeriodicGCInterval=10000", "-XX:MinHeapFreeRatio=10",
+				"-XX:MaxHeapFreeRatio=25", "-XX:ReservedCodeCacheSize=128M",
+				"-jar", jar, "nogui").directory(dir).redirectErrorStream(true)
+					.start();
 			
 		}catch(IOException e)
 		{

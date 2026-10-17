@@ -497,7 +497,26 @@ does it. When writing or touching a hack:
   strafing, no W inside it, jump whenever the charge is <= 6 ticks away (falls = crit as it
   charges), hit from ~3 blocks, S + sneak 3 ticks after the hit. Against VexBot (which sticks
   at 0.5-1.7 blocks) Sprint combo 20:13, Crit trader 10 (7 crits):13 - roughly even in damage;
-  `AimAssistComboTest.critTraderFight` logs both; sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **every chance at a
+  `AimAssistComboTest.critTraderFight` logs both; **Adaptive** (default, user 2026-10-17
+  "adapt to who it's fighting"): per target, 120-tick windows of Sprint combo / Crit trader
+  scored by hits landed (crit 1.5) minus taken, the better one played, 20% exploration (an
+  adaptive VexBot learns too: the sprint combo won its first 400 ticks 25:12, lost the next
+  200 10:15). **Races** (both charged, both in reach): `isChargedToStrike` strikes on
+  vanilla's 0.9 threshold a tick sooner against a target that swung in the last 40 ticks, and
+  falling with the hit charged and the target in reach keeps sprint (letting go for a crit
+  left a tick of neither - the server still had us sprinting). VexBot fight (hardest
+  settings, 600 ticks): 30:27 -> 36:25, longest combo ours 7 / theirs 4; the remaining lost
+  races all had our look not verifiable (the sent rotation off a strafing bot at 2.6-3.0).
+  **VexBot as hard as it gets** (user: "absolute highest difficulty ... excluding gear"):
+  from its jar - difficulty PERFECT (no misses, 0-tick reactions, perfect crit timing, full
+  reach; `vexbot_settings.json` sets it, `vexbot difficulty <preset>` doesn't exist - that
+  command takes knobs), `vexbot settings jumpresetchance 100` / `counterstunchance 100`
+  (defaults 50/30), `strafeincombo true`, `vexbot playstyle adaptive Vex` (style first;
+  hardest of aggressive/adaptive/default); reach stays vanilla 3.0 (up to 6 = a reach hack).
+  The user saw the first seconds of every fight go to AimAssist ("Vex isn't doing anything")
+  and then VexBot lock it in combos - so the fight logs hits per 100 ticks and the longest
+  combo each side, and records one screenshot every 2 ticks (`recordFight`; the harness keeps
+  client and server in lockstep) for an mp4; sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **every chance at a
   sprint hit or crit is taken** (user, 2026-10-16: "100% of the time, unless a setting says
   not to" - `isHitChance` runs before the ground combo's tricks and in every combo phase; only
   Baits, Aura-Farming on the ground, Shield breaker and Skip falling targets hold one back;

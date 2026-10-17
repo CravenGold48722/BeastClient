@@ -13,6 +13,7 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
@@ -264,13 +265,17 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private final EnumSetting<CombatStyle> combatStyle = new EnumSetting<>(
 		"Combat style",
 		"With §lAuto combo§r, how it fights.\n\n"
+			+ "§lAdaptive§r: learns who it's fighting - plays each of the"
+			+ " styles below for a few seconds at a time against this"
+			+ " opponent, keeps to the one that lands more hits than it takes,"
+			+ " and keeps checking (an opponent can adapt too).\n\n"
 			+ "§lSprint combo§r: sprint hits that knock the target up and away,"
 			+ " then out of its reach until the next one - the combo guides.\n\n"
 			+ "§lCrit trader§r: the way the ECHO PvP AI beat HT1 players -"
 			+ " stays at the edge of reach strafing, jumps so it falls (a"
 			+ " crit) as the hit charges, hits from ~3 blocks, then backs off"
 			+ " with a sneak. Never walks into the target's reach to hit.",
-		CombatStyle.values(), CombatStyle.SPRINT_COMBO);
+		CombatStyle.values(), CombatStyle.ADAPTIVE);
 	
 	private final CheckboxSetting skipFalling = new CheckboxSetting(
 		"Skip falling targets",
@@ -1364,7 +1369,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		if(baitTicks > 0 || auraFarming.isChecked() && !isAirborne())
 			return false;
 		
-		return isHitCharged() && dist <= REACH
+		return isChargedToStrike() && dist <= REACH
 			&& (deflecting || isGoodMomentToHit()) && canLandGoodHit();
 	}
 	
@@ -1416,7 +1421,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		}
 		
 		attackedThisTick = true;
+		boolean crit = isCritReady();
 		MC.gameMode.attack(MC.player, target);
+		noteHitLanded(crit);
 		MC.player.swing(InteractionHand.MAIN_HAND);
 		return true;
 	}
@@ -1500,6 +1507,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		boolean deflecting = isDeflecting();
 		double closing = closingSpeed(target);
 		sprintHeldOff = false;
+		updateAdaptiveStyle();
 		updateShieldBlock(dist);
 		
 		// Every chance at a sprint hit or a crit is taken (user, 2026-10-16:
@@ -1534,7 +1542,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			// when they'll jump.
 			boolean inReach = dist <= REACH;
 			boolean goodMoment = deflecting || isGoodMomentToHit();
-			if(isHitCharged() && inReach && goodMoment
+			if(isChargedToStrike() && inReach && goodMoment
 				&& attackTarget(sweepChase))
 			{
 				deflectSTapTicks = 0;
@@ -1611,7 +1619,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return true;
 		}
 		
-		if(combatStyle.getSelected() == CombatStyle.CRIT_TRADER)
+		if(currentStyle() == CombatStyle.CRIT_TRADER)
 			return updateCritTrader(dist, canJump);
 		
 		// S-tap deflection: too close to stun them, so a tick of S first.
@@ -1823,7 +1831,14 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			default ->
 			{
 				releaseBackward();
-				if(rising)
+				// Falling with the hit charged and the target in reach: keep
+				// sprinting and sprint-hit now. Letting go for a crit left a
+				// tick or two of neither - the server still had us sprinting -
+				// and a VexBot struck first in that gap (half the races it won
+				// were with us in the air, charged, 2.6-3.2 blocks off).
+				boolean hitNow = player.isSprinting() && isChargedToStrike()
+					&& EntityUtils.distanceToHitboxSq(target) <= REACH * REACH;
+				if(rising || hitNow)
 				{
 					holdForward();
 					pressSprint();
@@ -1846,6 +1861,98 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 * a deflection, double crit from up close) or keep W down (sprint
 	 * sweeps).
 	 */
+	// ── Adaptive style ──
+	// User, 2026-10-17: "make aimassist able to adapt to who it's fighting".
+	// Against an adaptive VexBot the sprint combo won the first 400 ticks of
+	// a fight (25:12) and lost the next 200 (10:15) - it learns, so this has
+	// to keep learning too: each style gets windows of play against this
+	// target, scored by hits landed (crits 1.5) minus hits taken.
+	
+	/** Ticks a style plays before the next choice. */
+	private static final int STYLE_WINDOW = 120;
+	
+	/** Chance to give the other style a window anyway. */
+	private static final double STYLE_EXPLORE = 0.2;
+	
+	private CombatStyle activeStyle = CombatStyle.SPRINT_COMBO;
+	private Entity styleTarget;
+	private int styleSince;
+	private final double[] styleScore = new double[2];
+	private final int[] styleTicks = new int[2];
+	
+	/** The style playing now (Adaptive: the one it picked). */
+	private CombatStyle currentStyle()
+	{
+		CombatStyle style = combatStyle.getSelected();
+		return style == CombatStyle.ADAPTIVE ? activeStyle : style;
+	}
+	
+	private static int styleIndex(CombatStyle style)
+	{
+		return style == CombatStyle.CRIT_TRADER ? 1 : 0;
+	}
+	
+	private void updateAdaptiveStyle()
+	{
+		if(combatStyle.getSelected() != CombatStyle.ADAPTIVE)
+			return;
+		
+		if(target != styleTarget)
+		{
+			// someone new: start over, sprint combo first
+			styleTarget = target;
+			activeStyle = CombatStyle.SPRINT_COMBO;
+			styleSince = tickCount;
+			Arrays.fill(styleScore, 0);
+			Arrays.fill(styleTicks, 0);
+			return;
+		}
+		
+		styleTicks[styleIndex(activeStyle)]++;
+		if(tickCount - styleSince < STYLE_WINDOW)
+			return;
+			
+		// an untried style first, then the better one per tick played -
+		// now and then the other anyway, it may have learned since
+		CombatStyle other = activeStyle == CombatStyle.CRIT_TRADER
+			? CombatStyle.SPRINT_COMBO : CombatStyle.CRIT_TRADER;
+		CombatStyle next;
+		if(styleTicks[styleIndex(other)] == 0)
+			next = other;
+		else if(random.nextDouble() < STYLE_EXPLORE)
+			next = other;
+		else
+			next =
+				rate(CombatStyle.CRIT_TRADER) > rate(CombatStyle.SPRINT_COMBO)
+					? CombatStyle.CRIT_TRADER : CombatStyle.SPRINT_COMBO;
+		
+		if(next != activeStyle)
+		{
+			releaseComboStrafe();
+			comboPhase = ComboPhase.IDLE;
+		}
+		activeStyle = next;
+		styleSince = tickCount;
+	}
+	
+	private double rate(CombatStyle style)
+	{
+		int i = styleIndex(style);
+		return styleScore[i] / Math.max(1, styleTicks[i]);
+	}
+	
+	/** Our hit landed on the target (Adaptive's score). */
+	private void noteHitLanded(boolean crit)
+	{
+		styleScore[styleIndex(currentStyle())] += crit ? 1.5 : 1;
+	}
+	
+	/** The target hit us (Adaptive's score). */
+	private void noteHitTaken()
+	{
+		styleScore[styleIndex(currentStyle())] -= 1;
+	}
+	
 	/**
 	 * Combat style: Crit trader - the way ECHO (Minecraft Combat AI's v29,
 	 * which beat HT1 players 45:18) fights, read off its overlay in Janus's
@@ -1911,7 +2018,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		strafeLeft = !strafeLeft;
 		boolean onGround = !isAirborne();
 		
-		if(combatStyle.getSelected() == CombatStyle.CRIT_TRADER)
+		if(currentStyle() == CombatStyle.CRIT_TRADER)
 		{
 			// back off with a sneak - their counter-hit comes now, at a
 			// smaller hitbox
@@ -2489,6 +2596,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	private enum CombatStyle
 	{
+		ADAPTIVE("Adaptive"),
 		SPRINT_COMBO("Sprint combo"),
 		CRIT_TRADER("Crit trader");
 		
@@ -2549,6 +2657,26 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private boolean isHitCharged()
 	{
 		return ticksUntilCharged() == 0;
+	}
+	
+	/**
+	 * Charged enough to strike now: isHitCharged(), or - when the target's
+	 * hit is charged too and it can reach us - vanilla's own threshold, a
+	 * tick sooner. The extra tick is a margin for the server's count; in a
+	 * race it lost every time: a VexBot on PERFECT struck first at 2.5-3.0
+	 * blocks on 6 of the last 16 hits it landed (user, 2026-10-17: "VexBot
+	 * keeps locking AimAssist in combos").
+	 */
+	private boolean isChargedToStrike()
+	{
+		if(isHitCharged())
+			return true;
+		// (only against one that's fighting: a target that never swings
+		// isn't racing anyone - the frozen test bot got non-sprint hits)
+		return MC.player.getAttackStrengthScale(0.5F) > 0.9F
+			&& tickCount - targetSwingTick <= 40
+			&& targetTicksUntilCharged() == 0
+			&& theirReachToUs() <= REACH + 0.2;
 	}
 	
 	private int ticksUntilCharged()
@@ -2629,6 +2757,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// it just attacked, so its cooldown starts over (its swing packet
 		// may come a tick later)
 		targetSwingTick = tickCount;
+		noteHitTaken();
 		
 		boolean combo = autoAttack.isChecked() && autoCombo.isChecked();
 		

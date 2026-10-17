@@ -69,6 +69,30 @@ public final class AimAssistComboTest extends SingleplayerTest
 	private final List<HitTaken> hitsTaken = new ArrayList<>();
 	private final List<Boolean> backDown = new ArrayList<>();
 	
+	/** AimAssist's Adaptive style choice, tick by tick. */
+	private final List<String> styles = new ArrayList<>();
+	
+	private static Field activeStyle;
+	
+	private static String activeStyle()
+	{
+		try
+		{
+			if(activeStyle == null)
+			{
+				activeStyle =
+					AimAssistHack.class.getDeclaredField("activeStyle");
+				activeStyle.setAccessible(true);
+			}
+			return String.valueOf(
+				activeStyle.get(WurstClient.INSTANCE.getHax().aimAssistHack));
+			
+		}catch(ReflectiveOperationException e)
+		{
+			throw new RuntimeException(e);
+		}
+	}
+	
 	/** Ticks where a hit could have gone out (see isChance). */
 	private final List<Boolean> chances = new ArrayList<>();
 	
@@ -87,7 +111,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 	 * to its, its height over ours), how far our own hit was, our keys.
 	 */
 	private record HitTaken(int tick, boolean onGround, double theirReach,
-		double ourReach, double botAbove, int ourChargeIn, boolean w, boolean s)
+		double ourReach, double botAbove, int ourChargeIn, boolean w, boolean s,
+		boolean sprintReady, boolean verifiable)
 	{}
 	
 	private final UpdateListener recorder = () -> {
@@ -100,6 +125,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		forwardDown.add(mc.options.keyUp.isDown());
 		backDown.add(mc.options.keyDown.isDown());
 		chances.add(isChance(mc));
+		styles.add(activeStyle());
 		sureChances.add(describeSureChance(mc));
 		// the input the last tick was moved with
 		jumped.add(player.input.keyPresses.jump());
@@ -173,9 +199,13 @@ public final class AimAssistComboTest extends SingleplayerTest
 		
 		try
 		{
+			// the combo's mechanics with its own style; Adaptive (the default)
+			// only in the real fight
+			runWurstCommand("setmode AimAssist Combat_style sprint_combo");
 			comboOnStillTarget();
 			noHitWhileFalling();
 			tapChoice();
+			runWurstCommand("setmode AimAssist Combat_style adaptive");
 			realFight();
 			critTraderFight();
 			shieldAndCrouchDodge();
@@ -318,7 +348,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		clearRecording();
 		runAsMe("vexbot attack " + me + " " + BOT);
 		runWurstCommand("t AimAssist on");
-		context.waitTicks(300);
+		recordFight("sprint_fight", 300);
 		jitter("fight");
 		// hits that land after this (the bot stops a few ticks late) found
 		// AimAssist off
@@ -334,13 +364,23 @@ public final class AimAssistComboTest extends SingleplayerTest
 		logger.info("Fight: our hits {}", hits);
 		logger.info("Fight: score {} hits on the bot, {} taken", hits.size(),
 			taken.stream().filter(h -> h.tick() < fightEnd).count());
+		logFightFlow("Fight", hits, taken, fightEnd);
+		List<String> styleTrace = snapshot(styles);
+		StringBuilder switches = new StringBuilder();
+		for(int i = 0; i < Math.min(fightEnd, styleTrace.size()); i++)
+			if(i == 0 || !styleTrace.get(i).equals(styleTrace.get(i - 1)))
+				switches.append(" ").append(i).append(": ")
+					.append(styleTrace.get(i));
+		logger.info("Fight: Adaptive played{}", switches);
 		for(HitTaken h : taken)
 			logger.info(String.format(Locale.ROOT,
 				"Fight: hit taken at %d: its reach %.2f, ours %.2f, it %.2f"
-					+ " above us, our hit ready in %d, W %s S %s, %s",
+					+ " above us, our hit ready in %d, W %s S %s, %s,"
+					+ " sprint for the server %s, our look verifiable %s",
 				h.tick(), h.theirReach(), h.ourReach(), h.botAbove(),
 				h.ourChargeIn(), h.w(), h.s(),
-				h.onGround() ? "on the ground" : "in the air"));
+				h.onGround() ? "on the ground" : "in the air", h.sprintReady(),
+				h.verifiable()));
 		
 		boolean sweeps =
 			UserSettings.aimAssist().get("Sprint sweeps").getAsBoolean();
@@ -549,6 +589,62 @@ public final class AimAssistComboTest extends SingleplayerTest
 	}
 	
 	/**
+	 * The fight, one screenshot a tick (user, 2026-10-17: "record them as
+	 * mp4 and watch them" - the harness runs client and server in lockstep,
+	 * so the screenshots don't slow the fight down): <name>.png in the
+	 * screenshots folder, numbered - 20 a second of game time for a video.
+	 */
+	private void recordFight(String name, int ticks)
+	{
+		for(int i = 0; i < ticks; i++)
+		{
+			context.waitTick();
+			context.takeScreenshot(name);
+		}
+	}
+	
+	/**
+	 * Who held the fight (user: "VexBot keeps locking AimAssist in combos,
+	 * while AimAssist can't lock Vex at all"): hits each side per 100 ticks,
+	 * and the longest run of hits one side landed with no answer.
+	 */
+	private void logFightFlow(String label, List<Attack> ours,
+		List<HitTaken> theirs, int end)
+	{
+		List<int[]> events = new ArrayList<>();
+		for(Attack a : ours)
+			events.add(new int[]{a.tick(), 0});
+		for(HitTaken h : theirs)
+			if(h.tick() < end)
+				events.add(new int[]{h.tick(), 1});
+		events.sort((a, b) -> Integer.compare(a[0], b[0]));
+		
+		int[] longest = new int[2];
+		int run = 0, side = -1;
+		for(int[] e : events)
+		{
+			run = e[1] == side ? run + 1 : 1;
+			side = e[1];
+			longest[side] = Math.max(longest[side], run);
+		}
+		
+		StringBuilder windows = new StringBuilder();
+		for(int from = 0; from < end; from += 100)
+		{
+			int f = from;
+			long o = events.stream()
+				.filter(e -> e[1] == 0 && e[0] >= f && e[0] < f + 100).count();
+			long t = events.stream()
+				.filter(e -> e[1] == 1 && e[0] >= f && e[0] < f + 100).count();
+			windows.append(String.format(Locale.ROOT, " %d-%d: %d:%d", from,
+				from + 100, o, t));
+		}
+		logger.info(
+			"{}: per 100 ticks (ours:theirs){}; longest combo ours {}, theirs {}",
+			label, windows, longest[0], longest[1]);
+	}
+	
+	/**
 	 * Combat style "Crit trader" (ECHO's way of fighting, see AimAssist) in
 	 * the same 300-tick VexBot fight as realFight: only sprint hits and
 	 * crits, crits among them, and the score next to the sprint combo's.
@@ -566,11 +662,11 @@ public final class AimAssistComboTest extends SingleplayerTest
 		clearRecording();
 		runAsMe("vexbot attack " + me + " " + BOT);
 		runWurstCommand("t AimAssist on");
-		context.waitTicks(300);
+		recordFight("crit_fight", 300);
 		int fightEnd = context.computeOnClient(mc -> forwardDown.size());
 		runWurstCommand("t AimAssist off");
 		runAsMe("vexbot attack stop " + BOT);
-		runWurstCommand("setmode AimAssist Combat_style sprint_combo");
+		runWurstCommand("setmode AimAssist Combat_style adaptive");
 		context.waitTicks(3);
 		
 		List<Attack> hits = snapshotAttacks();
@@ -583,6 +679,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 			"Crit trader: score {} hits on the bot, {} taken; {} crits,"
 				+ " {} neither sprint hits nor crits",
 			hits.size(), taken, crits, neither);
+		logFightFlow("Crit trader", hits,
+			context.computeOnClient(mc -> List.copyOf(hitsTaken)), fightEnd);
 		removeBot();
 		
 		if(hits.size() < 5)
@@ -730,7 +828,30 @@ public final class AimAssistComboTest extends SingleplayerTest
 		context.waitFor(mc -> mc.level.players().stream()
 			.anyMatch(p -> p.getName().getString().equals(BOT)), 300);
 		makeTough(BOT);
+		hardestVexBot();
 	}
+	
+	/**
+	 * VexBot as hard as it gets (user, 2026-10-17: "the absolute highest
+	 * difficulty, everything configured so it's as hard to beat as
+	 * possible, excluding gear"). Read from its jar: difficulty PERFECT (no
+	 * misses, 0-tick reactions, perfect crit timing, always full reach - its
+	 * default, set in vexbot_settings.json by build.gradle too), jump resets
+	 * and counter-stuns (flying out of a hard hit) 100% (default 50 / 30),
+	 * combo strafing on, playstyle adaptive (the hardest of aggressive,
+	 * adaptive, default in 4 runs, 2026-10-17). Its reach stays vanilla 3.0:
+	 * more would be a reach hack, not a better player.
+	 */
+	private void hardestVexBot()
+	{
+		runCommand("vexbot settings jumpresetchance 100");
+		runCommand("vexbot settings counterstunchance " + VEX_COUNTER_STUN);
+		runCommand("vexbot settings strafeincombo true");
+		runCommand("vexbot playstyle " + VEX_PLAYSTYLE + " " + BOT);
+	}
+	
+	private static final String VEX_PLAYSTYLE = "adaptive";
+	private static final String VEX_COUNTER_STUN = "100";
 	
 	private void makeTough(String target)
 	{
@@ -785,6 +906,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 			backDown.clear();
 			chances.clear();
 			sureChances.clear();
+			styles.clear();
 			forwardDown.clear();
 			jumped.clear();
 			attacks.clear();
@@ -872,7 +994,9 @@ public final class AimAssistComboTest extends SingleplayerTest
 		}
 		return new HitTaken(forwardDown.size(), player.onGround(), theirReach,
 			ourReach, above, chargeIn, mc.options.keyUp.isDown(),
-			mc.options.keyDown.isDown());
+			mc.options.keyDown.isDown(),
+			player.isSprinting() && player.wasSprinting,
+			bot != null && HitCheck.isVerifiable(bot));
 	}
 	
 	private static Field baitTicks;

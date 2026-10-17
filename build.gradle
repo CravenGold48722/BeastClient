@@ -225,7 +225,7 @@ def prepareVexbot = tasks.register("prepareVexbot") {
 			logger.warn("VexBot jar not found at $vexbotJar - AimAssistComboTest will fail (-PvexbotJar=...)")
 			return
 		}
-		new File(runDir, "vexbot_settings.json").text = '{"global": {"statsOn": false}}\n'
+		new File(runDir, "vexbot_settings.json").text = '{"global": {"statsOn": false, "difficulty": "PERFECT", "jumpResetChance": 100, "counterStunChance": 100, "strafeInCombo": true}}\n'
 		java.nio.file.Files.copy(vexbotJar.toPath(), new File(mods, vexbotJar.name).toPath())
 	}
 }

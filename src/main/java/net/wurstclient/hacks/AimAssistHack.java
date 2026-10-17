@@ -13,9 +13,12 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Random;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
@@ -56,6 +59,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
+import net.wurstclient.hacks.aimassist.OpponentModel;
 import net.wurstclient.events.MouseUpdateListener;
 import net.wurstclient.events.MouseUpdateListener.MouseUpdateEvent;
 import net.wurstclient.events.PacketInputListener;
@@ -899,6 +903,11 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		resetShieldSwaps();
 		resetDodge();
 		stopMusic();
+		// what was learned stays in opponentModels for a rematch
+		model = null;
+		modelTarget = null;
+		lastPlayedStyle = null;
+		watchHitTick = NEVER;
 	}
 	
 	@Override
@@ -1422,8 +1431,10 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		
 		attackedThisTick = true;
 		boolean crit = isCritReady();
+		boolean race = tickCount - targetSwingTick <= 40
+			&& targetTicksUntilCharged() == 0 && theirReachToUs() <= REACH;
 		MC.gameMode.attack(MC.player, target);
-		noteHitLanded(crit);
+		noteHitLanded(crit, race);
 		MC.player.swing(InteractionHand.MAIN_HAND);
 		return true;
 	}
@@ -1507,7 +1518,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		boolean deflecting = isDeflecting();
 		double closing = closingSpeed(target);
 		sprintHeldOff = false;
-		updateAdaptiveStyle();
+		updateOpponentModel();
 		updateShieldBlock(dist);
 		
 		// Every chance at a sprint hit or a crit is taken (user, 2026-10-16:
@@ -1769,7 +1780,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			KeyPresser.press(MC.options.keyJump);
 			airMode = AirMode.HOP;
 			
-		}else if(theirReachToUs() <= REACH + THEIR_REACH_MARGIN
+		}else if(theirReachToUs() <= REACH + reachMargin()
 			&& closing > -TAP_SPEED && hasRoomBehind())
 		// (not from one that's backing off itself: it's no threat, and
 		// it's the one to keep up with)
@@ -1854,103 +1865,155 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		}
 	}
 	
-	/**
-	 * After a hit: release W and reset sprint - an S-tap when they come at
-	 * us (it makes room), a W-tap when they back off (it keeps up), else by
-	 * distance - or, with the settings for it, jump at once (hop crit after
-	 * a deflection, double crit from up close) or keep W down (sprint
-	 * sweeps).
-	 */
-	// ── Adaptive style ──
-	// User, 2026-10-17: "make aimassist able to adapt to who it's fighting".
-	// Against an adaptive VexBot the sprint combo won the first 400 ticks of
-	// a fight (25:12) and lost the next 200 (10:15) - it learns, so this has
-	// to keep learning too: each style gets windows of play against this
-	// target, scored by hits landed (crits 1.5) minus hits taken.
+	// ── Adaptive: what it has learned about this opponent ──
+	// User, 2026-10-17: "make it adapt as fast as possible and as smart as
+	// possible" (the first version tried a style for 6 s at a time and only
+	// chose after 12). OpponentModel learns on every hit either way; with
+	// Combat style Adaptive it picks the style and shapes the tactics - the
+	// fixed styles stay fixed.
 	
-	/** Ticks a style plays before the next choice. */
-	private static final int STYLE_WINDOW = 120;
+	/** Per opponent for the session: a rematch starts where it left off. */
+	private final Map<UUID, OpponentModel> opponentModels = new HashMap<>();
+	private OpponentModel model;
+	private Entity modelTarget;
+	private CombatStyle lastPlayedStyle;
 	
-	/** Chance to give the other style a window anyway. */
-	private static final double STYLE_EXPLORE = 0.2;
+	/** Our last hit on the target, to see what followed it. */
+	private int watchHitTick = NEVER;
+	private double watchHitDist;
+	private boolean watchCountered;
 	
-	private CombatStyle activeStyle = CombatStyle.SPRINT_COMBO;
-	private Entity styleTarget;
-	private int styleSince;
-	private final double[] styleScore = new double[2];
-	private final int[] styleTicks = new int[2];
+	private boolean isAdaptive()
+	{
+		return combatStyle.getSelected() == CombatStyle.ADAPTIVE;
+	}
 	
-	/** The style playing now (Adaptive: the one it picked). */
+	/** The style playing now (Adaptive: the one the model picked). */
 	private CombatStyle currentStyle()
 	{
-		CombatStyle style = combatStyle.getSelected();
-		return style == CombatStyle.ADAPTIVE ? activeStyle : style;
+		if(!isAdaptive())
+			return combatStyle.getSelected();
+		return model != null && model.style() == OpponentModel.CRIT_TRADER
+			? CombatStyle.CRIT_TRADER : CombatStyle.SPRINT_COMBO;
 	}
 	
-	private static int styleIndex(CombatStyle style)
+	/** The style playing now, as OpponentModel counts it. */
+	private int playedStyle()
 	{
-		return style == CombatStyle.CRIT_TRADER ? 1 : 0;
+		return currentStyle() == CombatStyle.CRIT_TRADER
+			? OpponentModel.CRIT_TRADER : OpponentModel.SPRINT_COMBO;
 	}
 	
-	private void updateAdaptiveStyle()
+	/**
+	 * What Adaptive has learned about the target, for the tests' logs: the
+	 * style, its scores and the opponent's rates; null without a target.
+	 */
+	public String describeOpponentModel()
 	{
-		if(combatStyle.getSelected() != CombatStyle.ADAPTIVE)
-			return;
-		
-		if(target != styleTarget)
+		if(model == null)
+			return null;
+		return String.format(Locale.ROOT,
+			"%s (sprint %.2f, crit %.2f), counters %.2f, shrugs %.2f,"
+				+ " races lost %.2f, their reach %.2f, margin %.2f",
+			currentStyle(), model.mean(OpponentModel.SPRINT_COMBO),
+			model.mean(OpponentModel.CRIT_TRADER), model.counterRate(),
+			model.knockbackShrugRate(), model.raceLossRate(),
+			model.theirReach(), model.reachMargin());
+	}
+	
+	/** The style playing now, by name (tests). */
+	public String getPlayingStyle()
+	{
+		return currentStyle().name();
+	}
+	
+	/** Forget every opponent (tests: a fight against a stranger). */
+	public void forgetOpponents()
+	{
+		opponentModels.clear();
+		model = null;
+		modelTarget = null;
+	}
+	
+	/** The target's model, and what followed our last hit on it. */
+	private void updateOpponentModel()
+	{
+		if(target != modelTarget)
 		{
-			// someone new: start over, sprint combo first
-			styleTarget = target;
-			activeStyle = CombatStyle.SPRINT_COMBO;
-			styleSince = tickCount;
-			Arrays.fill(styleScore, 0);
-			Arrays.fill(styleTicks, 0);
-			return;
+			modelTarget = target;
+			model = target == null ? null : opponentModels
+				.computeIfAbsent(target.getUUID(), u -> new OpponentModel());
+			watchHitTick = NEVER;
 		}
 		
-		styleTicks[styleIndex(activeStyle)]++;
-		if(tickCount - styleSince < STYLE_WINDOW)
-			return;
-			
-		// an untried style first, then the better one per tick played -
-		// now and then the other anyway, it may have learned since
-		CombatStyle other = activeStyle == CombatStyle.CRIT_TRADER
-			? CombatStyle.SPRINT_COMBO : CombatStyle.CRIT_TRADER;
-		CombatStyle next;
-		if(styleTicks[styleIndex(other)] == 0)
-			next = other;
-		else if(random.nextDouble() < STYLE_EXPLORE)
-			next = other;
-		else
-			next =
-				rate(CombatStyle.CRIT_TRADER) > rate(CombatStyle.SPRINT_COMBO)
-					? CombatStyle.CRIT_TRADER : CombatStyle.SPRINT_COMBO;
-		
-		if(next != activeStyle)
+		CombatStyle style = currentStyle();
+		if(lastPlayedStyle != null && style != lastPlayedStyle)
 		{
 			releaseComboStrafe();
 			comboPhase = ComboPhase.IDLE;
 		}
-		activeStyle = next;
-		styleSince = tickCount;
+		lastPlayedStyle = style;
+		
+		if(model == null || watchHitTick == NEVER)
+			return;
+		
+		// did our knockback move them? (a jump reset keeps them in reach)
+		int since = tickCount - watchHitTick;
+		if(since == 3)
+			model.knockbackObserved(
+				Math.sqrt(EntityUtils.distanceToHitboxSq(target))
+					- watchHitDist < 0.8);
+		
+		// did they answer it?
+		if(since >= 6)
+		{
+			model.counterObserved(watchCountered);
+			watchHitTick = NEVER;
+		}
 	}
 	
-	private double rate(CombatStyle style)
+	/** Our hit landed on the target. */
+	private void noteHitLanded(boolean crit, boolean race)
 	{
-		int i = styleIndex(style);
-		return styleScore[i] / Math.max(1, styleTicks[i]);
+		if(model == null)
+			return;
+		model.ourHitLanded(crit, playedStyle());
+		if(race)
+			model.raceObserved(false);
+		watchHitTick = tickCount;
+		watchHitDist = Math.sqrt(EntityUtils.distanceToHitboxSq(target));
+		watchCountered = false;
 	}
 	
-	/** Our hit landed on the target (Adaptive's score). */
-	private void noteHitLanded(boolean crit)
-	{
-		styleScore[styleIndex(currentStyle())] += crit ? 1.5 : 1;
-	}
-	
-	/** The target hit us (Adaptive's score). */
+	/** The target hit us. */
 	private void noteHitTaken()
 	{
-		styleScore[styleIndex(currentStyle())] -= 1;
+		if(model == null)
+			return;
+		// our hit was charged and could reach too: a race it won
+		if(isHitCharged() && EntityUtils
+			.distanceToHitboxSq(target) <= (REACH + 0.2) * (REACH + 0.2))
+			model.raceObserved(true);
+		model.hitTaken(theirReachToUs(), playedStyle());
+		if(watchHitTick != NEVER)
+			watchCountered = true;
+	}
+	
+	/** How far beyond their reach to wait while our hit charges. */
+	private double reachMargin()
+	{
+		return isAdaptive() && model != null ? model.reachMargin()
+			: THEIR_REACH_MARGIN;
+	}
+	
+	/**
+	 * Back off after our hit: Crit trader does (Adaptive picks it against
+	 * one that answers our hits when that scores better - S + sneak after
+	 * every sprint hit, decided by a rule, cost the combo against VexBot).
+	 */
+	private boolean backOffAfterHit()
+	{
+		return currentStyle() == CombatStyle.CRIT_TRADER;
 	}
 	
 	/**
@@ -2011,6 +2074,13 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		return false;
 	}
 	
+	/**
+	 * After a hit: release W and reset sprint - an S-tap when they come at
+	 * us (it makes room), a W-tap when they back off (it keeps up), else by
+	 * distance - or, with the settings for it, jump at once (hop crit after
+	 * a deflection, double crit from up close) or keep W down (sprint
+	 * sweeps).
+	 */
 	private void afterHit(double dist, boolean deflecting, double closing)
 	{
 		comboHitCount++;
@@ -2018,7 +2088,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		strafeLeft = !strafeLeft;
 		boolean onGround = !isAirborne();
 		
-		if(currentStyle() == CombatStyle.CRIT_TRADER)
+		if(backOffAfterHit())
 		{
 			// back off with a sneak - their counter-hit comes now, at a
 			// smaller hitbox

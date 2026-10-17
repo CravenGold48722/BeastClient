@@ -54,6 +54,183 @@ public final class MaceTriggerTest extends SingleplayerTest
 		testRiptideDive();
 		testHeavyFall();
 		testCobweb();
+		testPearlCatchHeight();
+		testPearlChain();
+	}
+	
+	/**
+	 * A pearl catch from a throw like the user's (70 degrees up, not
+	 * straight up): MaceAssist turns onto the pearl and its wind charge hits
+	 * it, which puts you where the pearl was. "Straight up" missed it (0
+	 * blocks; now 22.5). Delays past the slider's 5 ticks missed: at 25-30
+	 * blocks the wind charge's own random spread is as wide as the pearl.
+	 */
+	private void testPearlCatchHeight()
+	{
+		logger.info("Testing MaceAssist pearl catch height");
+		Vec3 home = context.computeOnClient(mc -> mc.player.position());
+		StringBuilder heights = new StringBuilder();
+		double atDefault = 0;
+		try
+		{
+			runWurstCommand("t MaceAssist on");
+			for(int delay : new int[]{2, 5})
+			{
+				runCommand("gamemode survival");
+				runCommand("effect give @s resistance 60 4 true");
+				clearInventory();
+				runCommand(
+					"item replace entity @s hotbar.3 with ender_pearl 16");
+				runCommand(
+					"item replace entity @s hotbar.5 with wind_charge 64");
+				context.runOnClient(
+					mc -> mc.player.getInventory().setSelectedSlot(3));
+				runWurstCommand(
+					"setslider MaceAssist Pearl_catch_delay " + delay);
+				runCommand(String.format(Locale.ROOT,
+					"tp @s %.3f %.3f %.3f 0 -70", home.x, home.y, home.z));
+				context.waitTicks(10);
+				
+				input.pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+				double best = 0;
+				for(int t = 0; t < 80; t++)
+				{
+					context.waitTick();
+					best = Math.max(best,
+						context.computeOnClient(mc -> mc.player.getY())
+							- home.y);
+				}
+				heights.append(String.format(Locale.ROOT, " delay %d: %.1f,",
+					delay, best));
+				if(delay == 2)
+					atDefault = best;
+				runCommand("kill @e[type=ender_pearl]");
+				context.waitFor(mc -> mc.player.onGround(), 400);
+			}
+			logger.info("Pearl catch from a 70-degree throw, highest point:{}",
+				heights);
+			if(atDefault < 10)
+				throw new RuntimeException(String.format(Locale.ROOT,
+					"The pearl catch only went %.1f blocks up", atDefault));
+			
+		}finally
+		{
+			runWurstCommand("t MaceAssist off");
+			runWurstCommand("setslider MaceAssist Pearl_catch_delay 2");
+			runCommand("kill @e[type=ender_pearl]");
+			runCommand("kill @e[type=wind_charge]");
+			context.waitFor(mc -> mc.player.onGround(), 400);
+			runCommand("gamemode creative");
+			runCommand("effect clear @s");
+			clearInventory();
+			context
+				.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
+			runCommand(String.format(Locale.ROOT, "tp @s %.3f %.3f %.3f 0 0",
+				home.x, home.y, home.z));
+			clearChat();
+			clearParticles();
+			clearToasts();
+			context.runOnClient(
+				mc -> mc.gui.setOverlayMessage(Component.empty(), false));
+			context.waitTicks(10);
+		}
+	}
+	
+	/**
+	 * Chaining (user, 2026-10-17): one right-click with a pearl, looking up
+	 * past the catch angle, starts it; MaceAssist then turns up, throws and
+	 * catches pearl after pearl by itself, and a second right-click ends it
+	 * (no pearl thrown after that). Logs how high each catch went.
+	 */
+	private void testPearlChain()
+	{
+		logger.info("Testing MaceAssist pearl catch chaining");
+		Vec3 home = context.computeOnClient(mc -> mc.player.position());
+		try
+		{
+			clearInventory();
+			runCommand("gamemode survival");
+			runCommand("effect give @s resistance 120 4 true");
+			runCommand("effect give @s regeneration 120 4 true");
+			runCommand("item replace entity @s hotbar.0 with diamond_sword");
+			runCommand("item replace entity @s hotbar.3 with ender_pearl 16");
+			runCommand("item replace entity @s hotbar.5 with wind_charge 64");
+			context
+				.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(3));
+			runCommand("tp @s ~ ~ ~ 0 -70");
+			runWurstCommand("setcheckbox MaceAssist Chaining on");
+			runWurstCommand("t MaceAssist on");
+			context.waitTicks(7);
+			double startY = context.computeOnClient(mc -> mc.player.getY());
+			
+			input.pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+			// three pearls thrown without another click, highest point of each
+			// stretch logged
+			double[] best = new double[1];
+			int thrown = 0;
+			StringBuilder heights = new StringBuilder();
+			for(int t = 0; t < 400 && thrown < 3; t++)
+			{
+				context.waitTick();
+				double y = context.computeOnClient(mc -> mc.player.getY());
+				best[0] = Math.max(best[0], y - startY);
+				int left = context.computeOnClient(
+					mc -> mc.player.getInventory().getItem(3).getCount());
+				if(16 - left > thrown)
+				{
+					heights
+						.append(String.format(Locale.ROOT, " %.1f", best[0]));
+					thrown = 16 - left;
+					best[0] = 0;
+				}
+			}
+			logger.info(
+				"Pearl chain: {} pearls thrown by one click; highest"
+					+ " point before each throw (blocks over the start):{}",
+				thrown, heights);
+			if(thrown < 3)
+				throw new RuntimeException("Chaining threw only " + thrown
+					+ " pearls in 400 ticks (should keep going)");
+			// the catches between the throws took us up
+			if(!heights.toString().matches(".*\\b([1-9][0-9])\\.\\d.*"))
+				throw new RuntimeException(
+					"No catch of the chain went 10+ blocks up:" + heights);
+			
+			// a click of yours ends it
+			input.pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+			context.waitTicks(10);
+			int atStop = context.computeOnClient(
+				mc -> mc.player.getInventory().getItem(3).getCount());
+			context.waitTicks(80);
+			int after = context.computeOnClient(
+				mc -> mc.player.getInventory().getItem(3).getCount());
+			logger.info("Pearl chain: {} pearls left at the stop click, {} 80"
+				+ " ticks later", atStop, after);
+			if(after != atStop)
+				throw new RuntimeException(
+					"Chaining kept throwing after the right-click that ends it");
+			
+		}finally
+		{
+			runWurstCommand("t MaceAssist off");
+			runWurstCommand("setcheckbox MaceAssist Chaining off");
+			runCommand("kill @e[type=ender_pearl]");
+			runCommand("kill @e[type=wind_charge]");
+			context.waitFor(mc -> mc.player.onGround(), 400);
+			runCommand("gamemode creative");
+			runCommand("effect clear @s");
+			clearInventory();
+			context
+				.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
+			runCommand(String.format(Locale.ROOT, "tp @s %.3f %.3f %.3f 0 0",
+				home.x, home.y, home.z));
+			clearChat();
+			clearParticles();
+			clearToasts();
+			context.runOnClient(
+				mc -> mc.gui.setOverlayMessage(Component.empty(), false));
+			context.waitTicks(25);
+		}
 	}
 	
 	/**

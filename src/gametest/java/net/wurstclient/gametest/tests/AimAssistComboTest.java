@@ -72,27 +72,6 @@ public final class AimAssistComboTest extends SingleplayerTest
 	/** AimAssist's Adaptive style choice, tick by tick. */
 	private final List<String> styles = new ArrayList<>();
 	
-	private static Field activeStyle;
-	
-	private static String activeStyle()
-	{
-		try
-		{
-			if(activeStyle == null)
-			{
-				activeStyle =
-					AimAssistHack.class.getDeclaredField("activeStyle");
-				activeStyle.setAccessible(true);
-			}
-			return String.valueOf(
-				activeStyle.get(WurstClient.INSTANCE.getHax().aimAssistHack));
-			
-		}catch(ReflectiveOperationException e)
-		{
-			throw new RuntimeException(e);
-		}
-	}
-	
 	/** Ticks where a hit could have gone out (see isChance). */
 	private final List<Boolean> chances = new ArrayList<>();
 	
@@ -125,7 +104,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 		forwardDown.add(mc.options.keyUp.isDown());
 		backDown.add(mc.options.keyDown.isDown());
 		chances.add(isChance(mc));
-		styles.add(activeStyle());
+		styles
+			.add(WurstClient.INSTANCE.getHax().aimAssistHack.getPlayingStyle());
 		sureChances.add(describeSureChance(mc));
 		// the input the last tick was moved with
 		jumped.add(player.input.keyPresses.jump());
@@ -207,6 +187,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 			tapChoice();
 			runWurstCommand("setmode AimAssist Combat_style adaptive");
 			realFight();
+			rematchFight();
 			critTraderFight();
 			shieldAndCrouchDodge();
 			
@@ -346,6 +327,9 @@ public final class AimAssistComboTest extends SingleplayerTest
 		runAsMe("item replace entity " + BOT
 			+ " weapon.mainhand with diamond_sword");
 		clearRecording();
+		// a stranger: nothing learned from the parts before
+		context.runOnClient(mc -> WurstClient.INSTANCE.getHax().aimAssistHack
+			.forgetOpponents());
 		runAsMe("vexbot attack " + me + " " + BOT);
 		runWurstCommand("t AimAssist on");
 		recordFight("sprint_fight", 300);
@@ -353,6 +337,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		// hits that land after this (the bot stops a few ticks late) found
 		// AimAssist off
 		int fightEnd = context.computeOnClient(mc -> forwardDown.size());
+		logger.info("Fight: learned {}", learned());
 		runWurstCommand("t AimAssist off");
 		runAsMe("vexbot attack stop " + BOT);
 		context.waitTicks(3);
@@ -364,14 +349,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 		logger.info("Fight: our hits {}", hits);
 		logger.info("Fight: score {} hits on the bot, {} taken", hits.size(),
 			taken.stream().filter(h -> h.tick() < fightEnd).count());
-		logFightFlow("Fight", hits, taken, fightEnd);
-		List<String> styleTrace = snapshot(styles);
-		StringBuilder switches = new StringBuilder();
-		for(int i = 0; i < Math.min(fightEnd, styleTrace.size()); i++)
-			if(i == 0 || !styleTrace.get(i).equals(styleTrace.get(i - 1)))
-				switches.append(" ").append(i).append(": ")
-					.append(styleTrace.get(i));
-		logger.info("Fight: Adaptive played{}", switches);
+		firstFightOpening = logFightFlow("Fight", hits, taken, fightEnd);
+		logStyleSwitches("Fight", fightEnd);
 		for(HitTaken h : taken)
 			logger.info(String.format(Locale.ROOT,
 				"Fight: hit taken at %d: its reach %.2f, ours %.2f, it %.2f"
@@ -505,6 +484,79 @@ public final class AimAssistComboTest extends SingleplayerTest
 		removeBot();
 	}
 	
+	/** What Adaptive has learned about the target (AimAssist on). */
+	private String learned()
+	{
+		return context
+			.computeOnClient(mc -> WurstClient.INSTANCE.getHax().aimAssistHack
+				.describeOpponentModel());
+	}
+	
+	/** realFight's first 100 ticks, ours:theirs. */
+	private int[] firstFightOpening;
+	
+	private void logStyleSwitches(String label, int end)
+	{
+		List<String> styleTrace = snapshot(styles);
+		StringBuilder switches = new StringBuilder();
+		for(int i = 0; i < Math.min(end, styleTrace.size()); i++)
+			if(i == 0 || !styleTrace.get(i).equals(styleTrace.get(i - 1)))
+				switches.append(" ").append(i).append(": ")
+					.append(styleTrace.get(i));
+		logger.info("{}: Adaptive played{}", label, switches);
+	}
+	
+	/**
+	 * The same bot again (same name, so the same UUID): Adaptive remembers
+	 * it per opponent for the session (user, 2026-10-17: "adapt as fast as
+	 * possible"), so the rematch starts already adapted - its first 100 ticks
+	 * against realFight's, where it knew nothing yet.
+	 */
+	private void rematchFight()
+	{
+		startSpot();
+		spawnBot("~ ~ ~-4");
+		context.waitTicks(20);
+		runAsMe("gamemode survival");
+		makeTough("@s");
+		runAsMe("item replace entity " + BOT
+			+ " weapon.mainhand with diamond_sword");
+		clearRecording();
+		runAsMe("vexbot attack " + me + " " + BOT);
+		runWurstCommand("t AimAssist on");
+		context.waitTick();
+		logger.info("Rematch: starts with {}", learned());
+		recordFight("rematch", 299);
+		int fightEnd = context.computeOnClient(mc -> forwardDown.size());
+		logger.info("Rematch: learned {}", learned());
+		runWurstCommand("t AimAssist off");
+		runAsMe("vexbot attack stop " + BOT);
+		context.waitTicks(3);
+		
+		List<Attack> hits = snapshotAttacks();
+		List<HitTaken> taken =
+			context.computeOnClient(mc -> List.copyOf(hitsTaken));
+		logger.info("Rematch: score {} hits on the bot, {} taken", hits.size(),
+			taken.stream().filter(h -> h.tick() < fightEnd).count());
+		int[] opening = logFightFlow("Rematch", hits, taken, fightEnd);
+		logStyleSwitches("Rematch", fightEnd);
+		if(firstFightOpening != null)
+			logger.info("Rematch: first 100 ticks {}:{}, first fight {}:{}",
+				opening[0], opening[1], firstFightOpening[0],
+				firstFightOpening[1]);
+		removeBot();
+		
+		boolean sweeps =
+			UserSettings.aimAssist().get("Sprint sweeps").getAsBoolean();
+		if(hits.size() < 8)
+			throw new RuntimeException(
+				"Rematch: only " + hits.size() + " hits in a 300-tick fight");
+		for(Attack hit : hits)
+			if(!hit.sprintHit() && !hit.crit() && !sweeps)
+				throw new RuntimeException("Rematch: hit at tick " + hit.tick()
+					+ " was neither a sprint hit nor a crit");
+	}
+	
 	/**
 	 * The sprint reset after a hit by how the target moves: an S-tap when it
 	 * comes at us (makes room), a W-tap when it backs off (keeps up). The
@@ -608,9 +660,10 @@ public final class AimAssistComboTest extends SingleplayerTest
 	 * while AimAssist can't lock Vex at all"): hits each side per 100 ticks,
 	 * and the longest run of hits one side landed with no answer.
 	 */
-	private void logFightFlow(String label, List<Attack> ours,
+	private int[] logFightFlow(String label, List<Attack> ours,
 		List<HitTaken> theirs, int end)
 	{
+		int[] opening = new int[2];
 		List<int[]> events = new ArrayList<>();
 		for(Attack a : ours)
 			events.add(new int[]{a.tick(), 0});
@@ -638,10 +691,13 @@ public final class AimAssistComboTest extends SingleplayerTest
 				.filter(e -> e[1] == 1 && e[0] >= f && e[0] < f + 100).count();
 			windows.append(String.format(Locale.ROOT, " %d-%d: %d:%d", from,
 				from + 100, o, t));
+			if(from == 0)
+				opening = new int[]{(int)o, (int)t};
 		}
 		logger.info(
 			"{}: per 100 ticks (ours:theirs){}; longest combo ours {}, theirs {}",
 			label, windows, longest[0], longest[1]);
+		return opening;
 	}
 	
 	/**
@@ -829,7 +885,19 @@ public final class AimAssistComboTest extends SingleplayerTest
 			.anyMatch(p -> p.getName().getString().equals(BOT)), 300);
 		makeTough(BOT);
 		hardestVexBot();
+		// The still-bot part sets knockback resistance 1 and jump strength 0,
+		// and the bot comes back with the same UUID - its saved player data
+		// with them (user, 2026-10-17: "it looks like vex is taking no KB").
+		// Logged as spawned, then vanilla's values.
+		runAsMe("attribute " + BOT + " minecraft:knockback_resistance get");
+		runAsMe("attribute " + BOT + " minecraft:jump_strength get");
+		runAsMe(
+			"attribute " + BOT + " minecraft:knockback_resistance base set 0");
+		runAsMe("attribute " + BOT + " minecraft:jump_strength base set "
+			+ VANILLA_JUMP_STRENGTH);
 	}
+	
+	private static final String VANILLA_JUMP_STRENGTH = "0.41999998688697815";
 	
 	/**
 	 * VexBot as hard as it gets (user, 2026-10-17: "the absolute highest
@@ -938,13 +1006,17 @@ public final class AimAssistComboTest extends SingleplayerTest
 		logger.info("Jitter - {}", line);
 		// A camera that zig-zags more than its target is the aim's own
 		// jitter: "Aim at: Auto" worked from the tick's eye position made
-		// it 9-11% of the fight's frames (the bot's own: under 1%).
-		if(camYaw > MAX_ZIGZAG || camPitch > MAX_ZIGZAG)
+		// it 9-11% of the fight's frames (the bot's own: under 1%). A bot
+		// that takes knockback and jumps zig-zags itself (pitch 1.7% once its
+		// leftover "no knockback, no jumps" attributes were gone) and the
+		// camera following it does too - so up to the bot's own + 1 point.
+		if(camYaw > Math.max(MAX_ZIGZAG, botYaw + 1)
+			|| camPitch > Math.max(MAX_ZIGZAG, botPitch + 1))
 			throw new RuntimeException("Jittery aim - " + line);
 		return line;
 	}
 	
-	/** Frames the camera may zig-zag on, percent (see jitter()). */
+	/** Frames the camera may zig-zag on at least, percent (see jitter()). */
 	private static final double MAX_ZIGZAG = 2;
 	
 	private static double zigzags(List<float[]> f, int i)

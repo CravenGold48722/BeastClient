@@ -498,10 +498,19 @@ does it. When writing or touching a hack:
   charges), hit from ~3 blocks, S + sneak 3 ticks after the hit. Against VexBot (which sticks
   at 0.5-1.7 blocks) Sprint combo 20:13, Crit trader 10 (7 crits):13 - roughly even in damage;
   `AimAssistComboTest.critTraderFight` logs both; **Adaptive** (default, user 2026-10-17
-  "adapt to who it's fighting"): per target, 120-tick windows of Sprint combo / Crit trader
-  scored by hits landed (crit 1.5) minus taken, the better one played, 20% exploration (an
-  adaptive VexBot learns too: the sprint combo won its first 400 ticks 25:12, lost the next
-  200 10:15). **Races** (both charged, both in reach): `isChargedToStrike` strikes on
+  "adapt to who it's fighting"; then "as fast as possible and as smart as possible"):
+  `hacks/aimassist/OpponentModel` (no MC classes; `OpponentModelTest`), one per opponent
+  **UUID for the session** (`opponentModels`; a rematch starts adapted; `forgetOpponents()`
+  for tests). Learns on every hit either way: a discounted UCB1 bandit (discount 0.88,
+  2-exchange dwell) picks the style from hits landed (crit 1.5) minus taken - credited to the
+  style actually played, so fixed-style play counts too - nudged by what the opponent showed;
+  EMA rates (alpha 0.35, the first sample replaces the 0.5 prior) of countering our hit within
+  6 ticks, shrugging our knockback (< 0.8 blocks after 3 ticks = jump reset), and winning
+  races; Adaptive then backs off with S + sneak after hits against a counterer/shrugger and
+  waits 0.6-1.4 blocks outside their reach (by races lost) instead of the fixed 1.0. (The
+  first version, 120-tick windows, only chose after 12 s; an adaptive VexBot learns too.)
+  `AimAssistComboTest.rematchFight` fights the same bot again and logs both openings.
+  **Races** (both charged, both in reach): `isChargedToStrike` strikes on
   vanilla's 0.9 threshold a tick sooner against a target that swung in the last 40 ticks, and
   falling with the hit charged and the target in reach keeps sprint (letting go for a crit
   left a tick of neither - the server still had us sprinting). VexBot fight (hardest
@@ -570,7 +579,11 @@ does it. When writing or touching a hack:
   2026-10-15: a server-side Fabric PvP bot mod, `../vexbot-3.0.14mc26.1.2.jar`, MIT; it
   w-taps, strafes, jumps, crits and jump-resets): a frozen bot with jump strength 0 and
   knockback resistance 1 (12-tick gaps, sprint hits, W let go - a frozen VexBot still jumps out
-  of a combo and takes knockback, so it isn't still otherwise), a bot dropped from 6 blocks (no
+  of a combo and takes knockback, so it isn't still otherwise; **the bot respawns with the
+  same UUID and its saved attributes** - every later fight had knockback resistance 1 and
+  jump strength 0 until 2026-10-17, user: "it looks like vex is taking no KB"; `spawnBot`
+  logs and resets both to vanilla, and the jitter limit is the bot's own zig-zag + 1 point
+  (min 2%) since a bot that really bounces zig-zags itself), a bot dropped from 6 blocks (no
   hit while it falls), and a 300-tick real fight in survival, both with diamond swords and
   resistance 3 + regeneration 4 (only sprint hits/crits, no non-deflection/punish hit on a
   falling bot, every hit taken on the ground answered with a jump reset or S (fly-out / S-tap
@@ -883,6 +896,23 @@ Design points that were deliberate, don't "fix" them blindly:
   tick in reach, hits in the air), a 10,000-block drop at max gravity 2 blocks to the side facing
   away (hits after landing), and the cobweb. Test mobs need `PersistenceRequired` - hostile mobs
   despawn instantly >128 blocks (3D) from players.
+- **Pearl catch = the wind charge hits your own pearl in the air** (measured 2026-10-17 in
+  `MaceTriggerTest`; vanilla: the pearl "lands" on whatever it hits and puts you at its last
+  position, **keeping your velocity**, fall distance reset, 5 damage). Pearl + wind charge
+  straight up 4 ticks apart = 18.5 blocks; a wind charge at your feet instead, 6.1 at most.
+  The old "snap straight up, fire straight up" missed any pearl that wasn't exactly straight
+  up (a 70° throw: 0 blocks). Now the camera turns onto the pearl (humanized, `pearlAim`, its
+  own `CameraAim`) at `windAimPoint`: the pearl moved on with vanilla physics (gravity 0.03,
+  then x0.99) until the wind charge (1.5 blocks/tick, straight, no drag, moving **2 ticks**
+  after the use - with 1 it passed 0.7 behind) reaches it; it fires once on it
+  (`isWindOnPearl`, atan(0.25/dist)) or after 10 ticks. 70° throw: 22.5 blocks. Delays of
+  8-19 ticks missed (the wind charge's ~0.4° spread is the pearl's width at 25-30 blocks),
+  so "Pearl catch delay" stays 1-5. **Chaining** (checkbox, off; user: others "get WAY
+  higher" in an elytra mace kit): after the catch's pearl is gone (`findOwnPearl` removed),
+  2-4 ticks, turn up, wait out the 20-tick pearl cooldown, throw (`rightClickItem`), catch
+  again - until a fresh right-click of yours (cancelled, does nothing else; the start click
+  must be let go first) or no pearls/wind charges. Gametest: 3 pearls from one click, links
+  21-23 blocks, none after the stop click.
 - **Cobweb on right click** (default on): a fresh right-click on a block with a sword puts a
   cobweb there from the hotbar (offhand: vanilla does it, the sword has no use), before Wind on
   right click. Placed the tick after the click and switched back the tick after that (vanilla's

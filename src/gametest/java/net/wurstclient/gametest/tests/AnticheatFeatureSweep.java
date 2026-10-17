@@ -440,8 +440,7 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 	{
 		hack("AimAssist", () -> {
 			sword();
-			// nobody moves the mouse here: AimAssist turns the camera itself
-			set("AimAssist", "Turning", "Auto");
+			useMyAimAssistSettings();
 			String husk = husk(1.5, 2);
 			awaitEntities(Husk.class, 1);
 			at(0, 0, 0, 10, 0);
@@ -456,31 +455,36 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 					: "never turned onto the husk");
 		});
 		
-		// Turning: Sticky - the mouse turns; AimAssist slows it on the husk
-		hack("AimAssist (Sticky)", () -> {
+		// the mouse pulls the camera away; the aim brings it back (like the
+		// reference video)
+		hack("AimAssist (pulled away)", () -> {
 			sword();
-			set("AimAssist", "Turning", "Sticky");
-			set("AimAssist", "Dodging", false);
+			useMyAimAssistSettings();
 			String husk = husk(1.5, 2);
 			awaitEntities(Husk.class, 1);
-			// the husk is at yaw -36.9: start 35 beside it, sweep 10 past
-			at(0, 0, 0, -71.9F, 15);
+			// facing the husk (yaw -36.9)
+			at(0, 0, 0, -36.9F, 15);
 			on("AimAssist");
-			sweepMouse(45, 16);
-			boolean aimed =
-				waitUntil(mc -> mc.crosshairPickEntity instanceof Husk, 5);
-			boolean hit = aimed && awaitHurt(Husk.class, 40);
-			return check(hit,
-				fmt("swept the mouse across the husk, stopped on it and hit"
-					+ " it (%.1f damage)", damage(husk)),
-				aimed ? "stopped on the husk but never hit it"
-					: "the mouse sweep didn't stop on the husk");
+			waitUntil(mc -> mc.crosshairPickEntity instanceof Husk, 20);
+			// a hard flick, 120 degrees of hand in 0.1 s
+			boolean freed = flickMouse(1200, 2,
+				mc -> !(mc.crosshairPickEntity instanceof Husk)) > 0;
+			boolean back =
+				waitUntil(mc -> mc.crosshairPickEntity instanceof Husk, 30);
+			boolean hit = back && awaitHurt(Husk.class, 40);
+			return check(freed && hit,
+				fmt("flicked off the husk, the aim brought the"
+					+ " camera back and hit it (%.1f damage)", damage(husk)),
+				!freed ? "the flick didn't get off the husk"
+					: back ? "came back onto the husk but never hit it"
+						: "never came back onto the husk");
 		});
 		
 		// the combo: W/S taps, sprint resets, held-back hits
 		hack("AimAssist (Auto combo)", () -> {
 			sword();
-			set("AimAssist", "Turning", "Auto");
+			useMyAimAssistSettings();
+			// (the user has these on already; the test is about them)
 			set("AimAssist", "Auto combo", true);
 			set("AimAssist", "Dodging", false);
 			if(hasVexBot())

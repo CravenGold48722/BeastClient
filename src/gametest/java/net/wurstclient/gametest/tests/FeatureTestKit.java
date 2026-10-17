@@ -28,6 +28,7 @@ import org.lwjgl.glfw.GLFW;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;
 import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.fabricmc.fabric.api.client.gametest.v1.TestInput;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
@@ -45,12 +46,17 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Feature;
 import net.wurstclient.WurstClient;
+import net.wurstclient.event.EventManager;
+import net.wurstclient.events.MouseUpdateListener;
+import net.wurstclient.events.RenderListener;
+import net.wurstclient.gametest.UserSettings;
 import net.wurstclient.gametest.AnticheatServer;
 import net.wurstclient.gametest.PacketTrace;
 import net.wurstclient.gametest.WurstClientTestHelper;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.mixinterface.IChatComponent;
 import net.wurstclient.settings.Setting;
+import net.wurstclient.util.GameClock;
 import net.wurstclient.util.Rotation;
 
 /**
@@ -385,6 +391,23 @@ abstract class FeatureTestKit
 						: new JsonPrimitive(value.toString());
 			s.fromJson(json);
 		});
+	}
+	
+	/**
+	 * The user's own AimAssist settings for this test (see UserSettings),
+	 * put back by the next cleanup like set().
+	 */
+	void useMyAimAssistSettings()
+	{
+		UserSettings.aimAssist().entrySet().forEach(
+			e -> set("AimAssist", e.getKey(), jsonValue(e.getValue())));
+	}
+	
+	private static Object jsonValue(JsonElement json)
+	{
+		var p = json.getAsJsonPrimitive();
+		return p.isBoolean() ? p.getAsBoolean()
+			: p.isNumber() ? p.getAsNumber() : p.getAsString();
 	}
 	
 	/**
@@ -738,20 +761,66 @@ abstract class FeatureTestKit
 	}
 	
 	/**
-	 * Moves the mouse to the right by this many degrees of hand, evenly over
-	 * the given ticks, like a player sweeping across something.
+	 * Moves the mouse to the right at this many degrees of hand a second for
+	 * the given ticks, a bit every frame like a real hand (moveCursor arrives
+	 * once a tick, in bursts that AimAssist pulls back from between ticks).
+	 * Returns on how many frames {@code off} was true meanwhile.
 	 */
-	void sweepMouse(double degrees, int ticks)
+	int flickMouse(double degPerSec, int ticks, Predicate<Minecraft> off)
 	{
-		double counts =
-			degrees / context.computeOnClient(mc -> Rotation.getMouseStep());
-		long done = 0;
-		for(int i = 1; i <= ticks; i++)
+		Hand hand = new Hand(degPerSec, off);
+		context.runOnClient(mc -> {
+			EventManager events = WurstClient.INSTANCE.getEventManager();
+			// before AimAssist's own mouse handling, like a real mouse
+			events.addFirst(MouseUpdateListener.class, hand);
+			events.add(RenderListener.class, hand);
+		});
+		try
 		{
-			long next = Math.round(counts * i / ticks);
-			input.moveCursor(next - done, 0);
-			done = next;
-			context.waitTick();
+			context.waitTicks(ticks);
+		}finally
+		{
+			context.runOnClient(mc -> {
+				EventManager events = WurstClient.INSTANCE.getEventManager();
+				events.remove(MouseUpdateListener.class, hand);
+				events.remove(RenderListener.class, hand);
+			});
+		}
+		return hand.offFrames;
+	}
+	
+	private static final class Hand
+		implements MouseUpdateListener, RenderListener
+	{
+		private final double degPerSec;
+		private final Predicate<Minecraft> off;
+		private long lastFrame = GameClock.nanoTime();
+		private double carry;
+		volatile int offFrames;
+		
+		Hand(double degPerSec, Predicate<Minecraft> off)
+		{
+			this.degPerSec = degPerSec;
+			this.off = off;
+		}
+		
+		@Override
+		public void onMouseUpdate(MouseUpdateEvent event)
+		{
+			long now = GameClock.nanoTime();
+			double dt = (now - lastFrame) / 1e9;
+			lastFrame = now;
+			double counts = degPerSec * dt / Rotation.getMouseStep() + carry;
+			long whole = Math.round(counts);
+			carry = counts - whole;
+			event.setDeltaX(event.getDeltaX() + whole);
+		}
+		
+		@Override
+		public void onRender(PoseStack matrices, float partialTicks)
+		{
+			if(off.test(WurstClient.MC))
+				offFrames++;
 		}
 	}
 	

@@ -423,28 +423,50 @@ does it. When writing or touching a hack:
   while closing fast (no windup overshoot), filtered D, and setpoint feed-forward (the wanted
   angle's own rate, measured per frame) - that last part is what keeps it on A/D strafers;
   the per-tick tracking estimate alone lags each reversal. `PidAimTest` compares it with the old
-  aim (strafer 40°/s: 96% vs 81% on target). Within "Smooth aim distance" (once caught up) it snaps; "Smooth aim speed" 360-2000 overrides
+  aim (strafer 40°/s: 96% vs 81% on target). Within "Smooth aim distance" (once caught up, and
+  not right after your mouse moved it) it snaps; "Smooth aim speed" 360-2000 overrides
   the PID with a fixed top speed (old humanStep/linearStep), its top end "auto" (the value reads "auto") = PID.
-  **AimAssist "Turning" (user, 2026-10-16, from a "Sensitivity Based Aim-Assist" video - you
-  flick yourself, the crosshair decelerates onto the zombie in ~100 ms with no overshoot and
-  creeps before breaking free; inspiration Kclient/Raven's AimAssist, ideas only):** default
-  **Sticky** = `util/StickyAim` in `onMouseUpdate`, which only bends the frame's mouse counts:
-  friction near the target (full "Stickiness" while leaving the aim point, half at the hitbox
-  edge growing to full at the aim point while closing - half-then-full on crossing stopped it
-  dead), "Magnetism" (part of the hand's movement while closing, plus part of the target's own
-  movement across the view, toward the aim point, never past it - pulling back while leaving
-  made a steady hand unable to leave), "Tracking" (follow the target's angular motion, 100%;
-  85% + fading from the hitbox edge trailed a strafer by 6°), all fading out over "Assist zone"
-  degrees outside the hitbox. Still hand + still target = no turn. Output is whole mouse
-  counts with the fraction carried. With Aim at: Auto it follows the hitbox's middle at eye
-  height - Auto's closest-to-eyes point stays put while a target slides sideways. Off while
-  scoping/cinematic camera. **Auto** = the old camera-driving aim below (Face target, Smooth
-  aim...); tests that don't move the mouse (`AimAssistComboTest`, `PacketBudgetTest`, the
-  sweep's AimAssist/Auto combo) set Auto. `StickyAimTest` (JUnit) and `AimAssistStickyTest`
-  (gametest, real mouse: a sweep 10° past a husk misses without it and stops on it with it,
-  still hand = no turn, a husk sliding 0.08/tick stays under the crosshair, a 60° flick leaves);
-  sweep `AimAssist (Sticky)` clean on Grim and Intave.
-  With Turning: Auto, while AimAssist has a target and turns the camera, `onMouseUpdate` zeroes your mouse input
+  **Turning like the reference video (user, 2026-10-16, `../whataimassistturningshouldbelike.mp4`
+  "Sensitivity Based Aim-Assist"; ideas from Kclient/Raven's AimAssist in
+  `../AimAssistTurning Inspirations`, no code). Watched at 20-30 fps and measured from the
+  zombie's position per frame (`motion.py` in a scratchpad, FOV 70 assumed):** the aim pulls
+  the camera onto the target by itself AND your mouse still works - pulling away the crosshair
+  first only creeps (0.4-2°/frame at 30 fps), a flick breaks free, and once you stop it comes
+  straight back: the clean 45° return goes 44.9 42.5 31.4 19.9 9.5 5.2 2.4 1.2 0.6 -0.1 (every
+  1/30 s): ~11°/frame (~340°/s), then half of what's left per frame (k ~21/s), no overshoot.
+  A first try ("Turning: Sticky", a mouse-only friction/magnetism/tracking mode) was wrong -
+  the user: "i didn't mean a new setting that doesn't even turn towards it automatically" -
+  removed. Now: `HumanAim` KP_OFF 21 / KP_ON 16 (were 12/6), the humanized hand response is
+  critically damped with the current gain (`1/(4 kp)`; the fixed HAND_RESPONSE tuned for the
+  old gain overshot), the integral only builds for a moving target (it swung small turns past
+  a still one), auto speed `max(340, 8 x angle left)` (was a flat 720; 180° in < 0.5 s).
+  `VideoAimTest` replays the 45° return (20 seeds, within 3° per frame) and checks no overshoot.
+  **Mouse:** no longer zeroed - `onMouseUpdate` slows it near the target (`util/AimFriction`,
+  "Stickiness" 75%: full while leaving the aim point, half at the hitbox edge growing to full at
+  the aim point while closing, fading out 5° outside the hitbox; applied in 0.25° slices along
+  the movement - all of a big per-frame burst at the start position's factor kept a 60° flick
+  at 5°; whole mouse counts with the fraction carried), and `absorbMouseMovement` shifts the
+  aim by what the mouse did (`HumanAim.shift`, `clearIntegral`, `smoothCatchUp` so it doesn't
+  snap back) - the aim continues from there. Gametest `AimAssistTurningTest` (the user's
+  settings; a per-frame "virtual hand" `MouseUpdateListener` added first - the test's
+  `moveCursor` arrives once a tick, bursts the pull undoes between ticks): 45° -> on in 4 ticks,
+  no swing past; still = no movement; 100°/s pull creeps 1.5°, stays on; 1200°/s flick 72°
+  off, back 4 ticks after; sliding husk within 0.1°. Sweep `AimAssist (pulled away)` flicks
+  the same way (`FeatureTestKit.flickMouse`, 1200°/s for 2 ticks; a 60° `moveCursor` sweep in
+  3 bursts never got off a husk 2.5 blocks away - ±13° hitbox at 75% stickiness): clean on
+  both, off and back.
+  **Jitter (user: "aimassist is jittery in the tests"):** Aim at: Auto used `AimAtSetting`'s
+  closest point from the **tick** eye position inside the per-frame aim - it jumped once a
+  tick while moving and the aim chased it (camera zig-zag on 9-11% of a VexBot fight's frames,
+  the bot's own 1%); now `frameAimPoint` from this frame's eyes: 0.1%. `AimAssistComboTest`
+  records every frame and fails over 2% zig-zag. The AimAssist tests run with the user's own
+  settings (`gametest/UserSettings`, a copy of their settings.json from 2026-10-16 - Aim at
+  Center, Auto combo, Sprint sweeps...; tests override only what they must, e.g. Auto attack
+  off for the turning test, Auto combo off for PacketBudget - it walks in and out, every step
+  a new angle, a rotation every tick; the fight allows sprint-sweep hits when that's on, up to
+  80% chances let by with Hops/Baits on (they hold hits back on purpose: 36/54 with them,
+  14/34 without; 65% otherwise), and only counts hits taken while AimAssist was still on).
+  While AimAssist has a target and turns the camera your mouse is slowed, never zeroed
   (the old "you moved the mouse >1.5° = steering" release made it let go of targets). Gate attacks on the crosshair actually
   being on the target while turning. All three steps lead the target's motion by one frame
   (`leadDt`: the previous step's dt), never by the current dt - after a 150 ms lag spike that

@@ -13,6 +13,8 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.google.gson.JsonElement;
+
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.minecraft.network.chat.Component;
@@ -29,6 +31,8 @@ import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
 import net.wurstclient.WurstClient;
 import net.wurstclient.events.ConnectionPacketOutputListener;
 import net.wurstclient.gametest.SingleplayerTest;
+import net.wurstclient.gametest.UserSettings;
+import net.wurstclient.settings.Setting;
 
 /**
  * Packet budget: with nothing to do (standing still, no targets), hacks that
@@ -110,10 +114,19 @@ public final class PacketBudgetTest extends SingleplayerTest
 			context.waitTicks(5);
 			checkEngaged("KillauraLegit");
 			checkEngaged("Killaura");
-			// (Sticky turns only with the mouse - AimAssistStickyTest)
-			runWurstCommand("setmode AimAssist Turning Auto");
-			checkEngaged("AimAssist");
-			runWurstCommand("setmode AimAssist Turning Sticky");
+			// the user's own settings, except Auto combo: it walks in and out
+			// (every step changes the angle to the husk, so a rotation every
+			// tick); the combo has AimAssistComboTest
+			Map<Setting, JsonElement> before =
+				context.computeOnClient(mc -> UserSettings.applyAimAssist());
+			runWurstCommand("setcheckbox AimAssist Auto_combo off");
+			try
+			{
+				checkEngaged("AimAssist");
+			}finally
+			{
+				context.runOnClient(mc -> UserSettings.restore(before));
+			}
 			checkMaceSwapOrder();
 			
 		}finally

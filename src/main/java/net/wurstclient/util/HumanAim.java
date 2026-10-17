@@ -100,14 +100,14 @@ public final class HumanAim
 	 * closes about 45% of the gap every tick, the same pull as the ease-out
 	 * of {@link #humanStep}.
 	 */
-	public static final double KP_OFF = 12;
+	public static final double KP_OFF = 21;
 	
 	/**
 	 * Proportional gain while the crosshair is on the target: a gentle pull
 	 * toward the aim point that keeps it on the hitbox without chasing every
 	 * tiny change.
 	 */
-	public static final double KP_ON = 6;
+	public static final double KP_ON = 16;
 	
 	/** Derivative gain, seconds - damps the approach. */
 	public static final double KD = 0.04;
@@ -118,6 +118,12 @@ public final class HumanAim
 	 * wind up during a big turn.
 	 */
 	public static final double I_DEPTH = 2;
+	
+	/**
+	 * The integral only builds while the wanted rotation moves faster than
+	 * this, degrees per second.
+	 */
+	private static final double MOVING = 2;
 	
 	/** The most the integral can add, degrees per second. */
 	public static final double I_LIMIT = 120;
@@ -268,6 +274,16 @@ public final class HumanAim
 	{
 		yaw = Mth.wrapDegrees(yaw + dYaw);
 		pitch = Mth.clamp(pitch + dPitch, -90F, 90F);
+	}
+	
+	/**
+	 * Forgets the integral - after the player held the aim off the target
+	 * with the mouse, so it doesn't swing back past it.
+	 */
+	public void clearIntegral()
+	{
+		integYaw = 0;
+		integPitch = 0;
 	}
 	
 	/** Seconds since the last step (capped), and marks this as the last. */
@@ -562,7 +578,11 @@ public final class HumanAim
 			boolean saturated = Math.hypot(wantYaw, wantPitch) >= maxSpeed;
 			double closing = distance < 1e-6 ? 0
 				: -(errYaw * derivYaw + errPitch * derivPitch) / distance;
-			if(depth < I_DEPTH && !saturated && closing < kp * distance / 2)
+			// Only for a target that moves, too: it's there for the steady lag
+			// behind one, and on a still target it swung small turns past the
+			// aim point.
+			if(depth < I_DEPTH && !saturated && closing < kp * distance / 2
+				&& Math.hypot(ffYaw, ffPitch) > MOVING)
 			{
 				integYaw =
 					Mth.clamp(integYaw + ki * errYaw * dt, -I_LIMIT, I_LIMIT);
@@ -595,8 +615,9 @@ public final class HumanAim
 		
 		if(humanize)
 		{
-			// the hand eases into the speed instead of jumping to it
-			double response = ease(dt, HAND_RESPONSE);
+			// the hand eases into the speed - critically damped with the P pull
+			// (the fixed HAND_RESPONSE, tuned for the old gain, overshot)
+			double response = ease(dt, 1 / (4 * kp));
 			velYaw += (wantYaw - velYaw) * response;
 			velPitch += (wantPitch - velPitch) * response;
 			

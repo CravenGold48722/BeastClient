@@ -24,6 +24,9 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.wurstclient.WurstClient;
 import net.wurstclient.hacks.HealthTagsHack;
+import net.wurstclient.hack.HackList;
+import net.wurstclient.hacks.MobHealthHack;
+import net.minecraft.world.entity.Mob;
 
 @Mixin(EntityRenderer.class)
 public abstract class EntityRendererMixin<T extends Entity, S extends EntityRenderState>
@@ -60,6 +63,36 @@ public abstract class EntityRendererMixin<T extends Entity, S extends EntityRend
 		@Share("actualDistanceSq") LocalDoubleRef actualDistanceSq)
 	{
 		state.distanceToCameraSq = actualDistanceSq.get();
+	}
+	
+	/**
+	 * Name tag changes of RenderAdjust, MobOwners and MobHealth (ported from
+	 * the CevAPI fork). Runs before HealthTags below.
+	 */
+	@Inject(
+		method = "extractRenderState(Lnet/minecraft/world/entity/Entity;Lnet/minecraft/client/renderer/entity/state/EntityRenderState;F)V",
+		at = @At("TAIL"))
+	private void applyCevNameTagHacks(T entity, S state, float tickProgress,
+		CallbackInfo ci)
+	{
+		HackList hax = WurstClient.INSTANCE.getHax();
+		if(hax.renderAdjustHack.shouldRemoveNameTag(entity, state.nameTag))
+		{
+			state.nameTag = null;
+			return;
+		}
+		
+		state.nameTag = hax.mobOwnersHack.addOwnerInfo(entity, state.nameTag);
+		
+		MobHealthHack mobHealth = hax.mobHealthHack;
+		if(entity instanceof Mob mob && mobHealth.isEnabled()
+			&& mobHealth.shouldDisplayForMob(mob))
+		{
+			if(mobHealth.shouldShowAsNumber())
+				state.nameTag = mobHealth.getDisplayText(mob);
+			else if(!mobHealth.shouldShowNames())
+				state.nameTag = null;
+		}
 	}
 	
 	/**

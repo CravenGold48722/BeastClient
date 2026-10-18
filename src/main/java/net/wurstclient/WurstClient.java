@@ -45,6 +45,9 @@ import net.wurstclient.settings.SettingsFile;
 import net.wurstclient.update.ProblematicResourcePackDetector;
 import net.wurstclient.update.WurstUpdater;
 import net.wurstclient.util.json.JsonException;
+import net.wurstclient.util.PlayerRangeAlertManager;
+import net.wurstclient.util.ServerObserver;
+import net.wurstclient.util.timer.TimerManager;
 
 public enum WurstClient
 {
@@ -65,6 +68,9 @@ public enum WurstClient
 	
 	private PlausibleAnalytics plausible;
 	private EventManager eventManager;
+	private PlayerRangeAlertManager playerRangeAlertManager;
+	private ServerObserver serverObserver;
+	private TimerManager timerManager;
 	private AltManager altManager;
 	private HackList hax;
 	private CmdList cmds;
@@ -121,6 +127,12 @@ public enum WurstClient
 		plausible.pageview("/");
 		
 		eventManager = new EventManager(this);
+		playerRangeAlertManager = new PlayerRangeAlertManager(eventManager);
+		serverObserver = new ServerObserver(MC);
+		eventManager.add(net.wurstclient.events.PacketInputListener.class,
+			serverObserver);
+		timerManager = new TimerManager();
+		eventManager.add(UpdateListener.class, timerManager);
 		
 		Path enabledHacksFile = wurstFolder.resolve("enabled-hacks.json");
 		hax = new HackList(enabledHacksFile,
@@ -212,6 +224,21 @@ public enum WurstClient
 	public PlausibleAnalytics getPlausible()
 	{
 		return plausible;
+	}
+	
+	public PlayerRangeAlertManager getPlayerRangeAlertManager()
+	{
+		return playerRangeAlertManager;
+	}
+	
+	public ServerObserver getServerObserver()
+	{
+		return serverObserver;
+	}
+	
+	public TimerManager getTimerManager()
+	{
+		return timerManager;
 	}
 	
 	public EventManager getEventManager()

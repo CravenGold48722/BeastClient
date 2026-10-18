@@ -8,6 +8,7 @@
 package net.wurstclient.mixin;
 
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -19,10 +20,12 @@ import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.commands.CommandSource;
 import net.minecraft.world.Nameable;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.entity.EntityAccess;
 import net.wurstclient.WurstClient;
 import net.wurstclient.event.EventManager;
+import net.wurstclient.hack.HackList;
 import net.wurstclient.events.VelocityFromEntityCollisionListener.VelocityFromEntityCollisionEvent;
 import net.wurstclient.events.VelocityFromFluidListener.VelocityFromFluidEvent;
 
@@ -80,5 +83,60 @@ public abstract class EntityMixin
 		if(WurstClient.INSTANCE.getHax().trueSightHack
 			.shouldBeVisible((Entity)(Object)this))
 			cir.setReturnValue(false);
+	}
+	
+	/**
+	 * Glowing outlines for MaceAssist's spear targets, MobSearch and WardenESP
+	 * (ported from the CevAPI
+	 * fork): an entity they highlight glows in their color.
+	 */
+	@Inject(at = @At("RETURN"),
+		method = "isCurrentlyGlowing",
+		cancellable = true)
+	private void onIsCurrentlyGlowing(CallbackInfoReturnable<Boolean> cir)
+	{
+		if(cir.getReturnValueZ()
+			|| !((Object)this instanceof LivingEntity living))
+			return;
+		
+		if(getEspGlowColor(living) != null)
+			cir.setReturnValue(true);
+	}
+	
+	@Inject(at = @At("RETURN"), method = "getTeamColor", cancellable = true)
+	private void onGetTeamColor(CallbackInfoReturnable<Integer> cir)
+	{
+		if(!((Object)this instanceof LivingEntity living))
+			return;
+		
+		Integer color = getEspGlowColor(living);
+		if(color != null)
+			cir.setReturnValue(color);
+	}
+	
+	@Unique
+	private static Integer getEspGlowColor(LivingEntity living)
+	{
+		HackList hax = WurstClient.INSTANCE.getHax();
+		if(hax == null)
+			return null;
+		
+		try
+		{
+			Integer color = hax.maceAssistHack.getSpearGlowColor(living);
+			if(color != null)
+				return color;
+			
+			color = hax.mobSearchHack.getGlowColor(living);
+			if(color != null)
+				return color;
+			
+			return hax.wardenEspHack.getGlowColor(living);
+			
+		}catch(IllegalStateException e)
+		{
+			// entity without an ID yet (e.g. a spawner's display entity)
+			return null;
+		}
 	}
 }

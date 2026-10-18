@@ -58,6 +58,22 @@ public final class ItemListSetting extends Setting
 		return Collections.unmodifiableList(itemNames);
 	}
 	
+	public boolean isEmpty()
+	{
+		return itemNames.isEmpty();
+	}
+	
+	public boolean contains(String name)
+	{
+		return name != null && Collections.binarySearch(itemNames, name) >= 0;
+	}
+	
+	public boolean contains(Item item)
+	{
+		return item != null
+			&& contains(BuiltInRegistries.ITEM.getKey(item).toString());
+	}
+	
 	public void add(Item item)
 	{
 		String name = BuiltInRegistries.ITEM.getKey(item).toString();

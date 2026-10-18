@@ -26,6 +26,11 @@ import net.minecraft.world.item.alchemy.PotionContents;
 import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.equipment.Equippable;
 import net.wurstclient.WurstClient;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.entity.ExperienceOrb;
+import net.minecraft.world.item.Items;
+import net.minecraft.network.chat.Component;
 
 public enum ItemUtils
 {
@@ -39,6 +44,77 @@ public enum ItemUtils
 	 *            numeric ID.
 	 * @return the requested item, or null if the item doesn't exist.
 	 */
+	/**
+	 * The item's ID, or the "synthetic_id" a server put into its custom data.
+	 */
+	public static String getStackId(ItemStack stack)
+	{
+		if(stack == null)
+			return null;
+		
+		CompoundTag tag =
+			stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY)
+				.copyTag();
+		if(tag != null && tag.contains("synthetic_id"))
+			return tag.getString("synthetic_id").orElse(null);
+		
+		Identifier id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+		return id != null ? id.toString() : null;
+	}
+	
+	/**
+	 * ItemHandler (ported from the CevAPI fork) lists XP orbs as experience
+	 * bottles marked with these custom data entries.
+	 */
+	public static boolean isSyntheticXp(ItemStack stack)
+	{
+		if(stack == null)
+			return false;
+		
+		CompoundTag tag =
+			stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY)
+				.copyTag();
+		return tag != null && tag.contains("isXpOrb");
+	}
+	
+	public static int getXpAmount(ItemStack stack)
+	{
+		if(stack == null)
+			return 0;
+		
+		CompoundTag tag =
+			stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY)
+				.copyTag();
+		return tag != null && tag.contains("xp_amount")
+			? tag.getInt("xp_amount").orElse(0) : 0;
+	}
+	
+	public static int getXpAge(ItemStack stack)
+	{
+		if(stack == null)
+			return 0;
+		
+		CompoundTag tag =
+			stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY)
+				.copyTag();
+		return tag != null && tag.contains("xp_age")
+			? tag.getInt("xp_age").orElse(0) : 0;
+	}
+	
+	public static ItemStack createSyntheticXpStack(ExperienceOrb orb)
+	{
+		ItemStack stack = new ItemStack(Items.EXPERIENCE_BOTTLE);
+		CompoundTag tag = new CompoundTag();
+		tag.putString("synthetic_id", "minecraft:experience_orb");
+		tag.putInt("xp_amount", orb.getValue());
+		tag.putInt("xp_age", orb.tickCount);
+		tag.putByte("isXpOrb", (byte)1);
+		stack.set(DataComponents.CUSTOM_DATA, CustomData.of(tag));
+		stack.set(DataComponents.CUSTOM_NAME,
+			Component.literal("XP Orb (+" + orb.getValue() + " XP)"));
+		return stack;
+	}
+	
 	public static Item getItemFromNameOrID(String nameOrId)
 	{
 		if(MathUtils.isInteger(nameOrId))

@@ -69,6 +69,9 @@ import net.wurstclient.util.InteractionSimulator;
 import net.wurstclient.util.PacketOrder;
 import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
+import net.wurstclient.events.PacketOutputListener;
+import net.wurstclient.hacks.maceassist.SpearAssist;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 
 /**
  * Port of the "BetterMaceSwap" mod as a single Wurst hack. Everything that mod
@@ -78,9 +81,9 @@ import net.wurstclient.util.RotationUtils;
 @SearchTags({"mace assist", "MaceAssist", "better mace swap", "mace swap",
 	"attribute swap", "pearl catch", "lunge swap", "mace aim assist",
 	"mace trigger bot", "auto chestplate", "stun slam", "wind charge"})
-public final class MaceAssistHack extends Hack
-	implements UpdateListener, RenderListener, PlayerAttacksEntityListener,
-	LeftClickListener, RightClickListener, PacketInputListener
+public final class MaceAssistHack extends Hack implements UpdateListener,
+	RenderListener, PlayerAttacksEntityListener, LeftClickListener,
+	RightClickListener, PacketInputListener, PacketOutputListener
 {
 	// ── Attribute swapping ───────────────────────────────────────────────
 	
@@ -489,6 +492,9 @@ public final class MaceAssistHack extends Hack
 	private boolean airPotThrown;
 	private int airPotWindDelay;
 	
+	// spear features from the CevAPI fork's SpearAssist
+	private final SpearAssist spear = new SpearAssist();
+	
 	private boolean lungeSwapPending;
 	private int lungeReturnSlot = -1;
 	private int lungeDelay;
@@ -572,6 +578,7 @@ public final class MaceAssistHack extends Hack
 		
 		addSetting(lungeSwapping);
 		addSetting(lungeSwapDelay);
+		spear.getSettings().forEach(this::addSetting);
 		
 		addSetting(maceAimAssist);
 		addSetting(aimSpeed);
@@ -612,6 +619,7 @@ public final class MaceAssistHack extends Hack
 		EVENTS.add(LeftClickListener.class, this);
 		EVENTS.add(RightClickListener.class, this);
 		EVENTS.add(PacketInputListener.class, this);
+		EVENTS.add(PacketOutputListener.class, this);
 	}
 	
 	@Override
@@ -623,6 +631,7 @@ public final class MaceAssistHack extends Hack
 		EVENTS.remove(LeftClickListener.class, this);
 		EVENTS.remove(RightClickListener.class, this);
 		EVENTS.remove(PacketInputListener.class, this);
+		EVENTS.remove(PacketOutputListener.class, this);
 		
 		if(MC.player != null)
 		{
@@ -662,6 +671,7 @@ public final class MaceAssistHack extends Hack
 			triggerCooldownTimer--;
 		
 		tickLungeSwap();
+		spear.onUpdate();
 		tickTargeting();
 		
 		// (a pearl catch turns the camera up in onRender)
@@ -1550,6 +1560,9 @@ public final class MaceAssistHack extends Hack
 		if(MC.player == null)
 			return;
 		
+		if(spear.onRightClick(event))
+			return;
+		
 		// While launching first, the launch throws the pearl.
 		if(launchStep != null)
 		{
@@ -1662,6 +1675,9 @@ public final class MaceAssistHack extends Hack
 	@Override
 	public void onReceivedPacket(PacketInputEvent event)
 	{
+		if(event.getPacket() instanceof ClientboundPlayerPositionPacket)
+			spear.onSetback();
+			
 		// netty thread: only note it (tickCatch uses it). An entity's spawn
 		// comes inside a bundle with its data - the bundle is what arrives.
 		if(event.getPacket() instanceof ClientboundBundlePacket bundle)
@@ -2534,8 +2550,23 @@ public final class MaceAssistHack extends Hack
 		return stack.is(ItemTags.SPEARS);
 	}
 	
+	@Override
+	public void onSentPacket(PacketOutputEvent event)
+	{
+		spear.onSentPacket(event);
+	}
+	
+	/**
+	 * The glow of a spear target highlight, or null (EntityMixin).
+	 */
+	public Integer getSpearGlowColor(LivingEntity entity)
+	{
+		return isEnabled() ? spear.getGlowColor(entity) : null;
+	}
+	
 	private void fullReset()
 	{
+		spear.reset();
 		originalSlot = -1;
 		swapBackTimer = 0;
 		maceSwapped = false;

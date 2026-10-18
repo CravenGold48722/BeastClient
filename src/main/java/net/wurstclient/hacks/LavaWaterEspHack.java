@@ -1,0 +1,276 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.hacks;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import java.awt.Color;
+import java.util.Arrays;
+import java.util.List;
+import java.util.PriorityQueue;
+import java.util.function.BiPredicate;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import net.wurstclient.Category;
+import net.wurstclient.SearchTags;
+import net.wurstclient.events.CameraTransformViewBobbingListener;
+import net.wurstclient.events.RenderListener;
+import net.wurstclient.events.UpdateListener;
+import net.wurstclient.hack.Hack;
+import net.wurstclient.hacks.portalesp.LiquidEspBlockGroup;
+import net.wurstclient.settings.CheckboxSetting;
+import net.wurstclient.settings.ChunkAreaSetting;
+import net.wurstclient.settings.ColorSetting;
+import net.wurstclient.settings.EspStyleSetting;
+import net.wurstclient.settings.SliderSetting;
+import net.wurstclient.settings.SliderSetting.ValueDisplay;
+import net.wurstclient.util.RotationUtils;
+import net.wurstclient.util.RenderUtils;
+import net.wurstclient.util.chunk.ChunkSearcher.Result;
+import net.wurstclient.util.chunk.ChunkSearcherCoordinator;
+
+@SearchTags({"lavaesp", "wateresp", "lava water", "LavaWaterESP"})
+public final class LavaWaterEspHack extends Hack implements UpdateListener,
+	CameraTransformViewBobbingListener, RenderListener
+{
+	private final EspStyleSetting style = new EspStyleSetting();
+	private final CheckboxSetting stickyArea =
+		new CheckboxSetting("Sticky area",
+			"Off: Re-centers every chunk to match ESP drop-off.\n"
+				+ "On: Keeps results anchored so you can path back to them.",
+			false);
+	private final ChunkAreaSetting area = new ChunkAreaSetting("Area",
+		"The area around the player to search in.\n"
+			+ "Higher values require a faster computer.",
+		ChunkAreaSetting.ChunkArea.A3);
+	
+	// Default colors: lava orange, water blue
+	private final LiquidEspBlockGroup lavaGroup =
+		new LiquidEspBlockGroup(Blocks.LAVA,
+			new ColorSetting("Lava color",
+				"Lava will be highlighted in this color.", new Color(0xFF8C00)),
+			new CheckboxSetting("Include lava", true));
+	private final LiquidEspBlockGroup waterGroup = new LiquidEspBlockGroup(
+		Blocks.WATER,
+		new ColorSetting("Water color",
+			"Water will be highlighted in this color.", new Color(0x3F76E4)),
+		new CheckboxSetting("Include water", true));
+	private final List<LiquidEspBlockGroup> groups =
+		Arrays.asList(lavaGroup, waterGroup);
+	
+	// Transparency sliders per type (0-255)
+	private final SliderSetting lavaAlpha =
+		new SliderSetting("Lava transparency",
+			"Transparency for lava (0 = fully transparent, 255 = opaque).", 64,
+			0, 255, 1, ValueDisplay.INTEGER);
+	private final SliderSetting waterAlpha =
+		new SliderSetting("Water transparency",
+			"Transparency for water (0 = fully transparent, 255 = opaque).", 64,
+			0, 255, 1, ValueDisplay.INTEGER);
+	
+	// How many blocks to render (100 - 1000)
+	private final SliderSetting renderAmount = new SliderSetting(
+		"Render amount", "Maximum number of blocks to render at once.", 100,
+		100, 1000, 10, ValueDisplay.INTEGER);
+	private final CheckboxSetting tracerFlash = new CheckboxSetting(
+		"Tracer flash", "Make tracers pulse with a smooth fade.", false);
+	
+	private final BiPredicate<BlockPos, BlockState> query =
+		(pos, state) -> isEnabledTargetBlock(state.getBlock());
+	private final ChunkSearcherCoordinator coordinator =
+		new ChunkSearcherCoordinator(query, area);
+	private boolean groupsUpToDate;
+	private ChunkAreaSetting.ChunkArea lastAreaSelection;
+	private ChunkPos lastPlayerChunk;
+	private int lastMatchesVersion;
+	
+	public LavaWaterEspHack()
+	{
+		super("LavaWaterESP");
+		setCategory(Category.RENDER);
+		addSetting(style);
+		groups.stream().flatMap(LiquidEspBlockGroup::getSettings)
+			.forEach(this::addSetting);
+		addSetting(area);
+		addSetting(stickyArea);
+		// add transparency and render amount settings
+		addSetting(lavaAlpha);
+		addSetting(waterAlpha);
+		addSetting(renderAmount);
+		addSetting(tracerFlash);
+	}
+	
+	private boolean isTargetBlock(Block b)
+	{
+		for(LiquidEspBlockGroup g : groups)
+			if(g.getBlock() == b)
+				return true;
+		return false;
+	}
+	
+	private boolean isEnabledTargetBlock(Block b)
+	{
+		return groups.stream()
+			.anyMatch(g -> g.getBlock() == b && g.isEnabled());
+	}
+	
+	@Override
+	protected void onEnable()
+	{
+		groupsUpToDate = false;
+		lastAreaSelection = area.getSelected();
+		lastPlayerChunk = ChunkPos.containing(MC.player.blockPosition());
+		lastMatchesVersion = coordinator.getMatchesVersion();
+		EVENTS.add(UpdateListener.class, this);
+		EVENTS.add(CameraTransformViewBobbingListener.class, this);
+		EVENTS.add(RenderListener.class, this);
+		EVENTS.add(net.wurstclient.events.PacketInputListener.class,
+			coordinator);
+	}
+	
+	@Override
+	protected void onDisable()
+	{
+		EVENTS.remove(UpdateListener.class, this);
+		EVENTS.remove(CameraTransformViewBobbingListener.class, this);
+		EVENTS.remove(RenderListener.class, this);
+		EVENTS.remove(net.wurstclient.events.PacketInputListener.class,
+			coordinator);
+		coordinator.reset();
+		lastMatchesVersion = coordinator.getMatchesVersion();
+		groups.forEach(LiquidEspBlockGroup::clear);
+	}
+	
+	@Override
+	public void onUpdate()
+	{
+		ChunkAreaSetting.ChunkArea currentArea = area.getSelected();
+		if(currentArea != lastAreaSelection)
+		{
+			lastAreaSelection = currentArea;
+			coordinator.reset();
+			groupsUpToDate = false;
+		}
+		// Recenter per chunk when sticky is off
+		ChunkPos currentChunk = ChunkPos.containing(MC.player.blockPosition());
+		if(!stickyArea.isChecked() && !currentChunk.equals(lastPlayerChunk))
+		{
+			lastPlayerChunk = currentChunk;
+			coordinator.reset();
+			groupsUpToDate = false;
+		}
+		boolean searchersChanged = coordinator.update();
+		if(searchersChanged)
+			groupsUpToDate = false;
+		int matchesVersion = coordinator.getMatchesVersion();
+		if(matchesVersion != lastMatchesVersion)
+		{
+			lastMatchesVersion = matchesVersion;
+			groupsUpToDate = false;
+		}
+		boolean partialScan = false;
+		if(!groupsUpToDate && (partialScan ? coordinator.hasReadyMatches()
+			: coordinator.isDone()))
+			updateGroupBoxes();
+	}
+	
+	@Override
+	public void onCameraTransformViewBobbing(
+		CameraTransformViewBobbingEvent event)
+	{
+		if(style.getSelected().hasLines())
+			event.cancel();
+	}
+	
+	@Override
+	public void onRender(PoseStack matrixStack, float partialTicks)
+	{
+		if(style.getSelected().hasBoxes())
+			renderBoxes(matrixStack);
+		if(style.getSelected().hasLines())
+			renderTracers(matrixStack, partialTicks);
+	}
+	
+	private void renderBoxes(PoseStack matrixStack)
+	{
+		for(LiquidEspBlockGroup group : groups)
+		{
+			if(!group.isEnabled())
+				continue;
+			List<AABB> boxes = group.getBoxes();
+			int alpha = group == lavaGroup ? lavaAlpha.getValueI()
+				: waterAlpha.getValueI();
+			int quadsColor = group.getColorI(alpha);
+			int linesColor = group.getColorI(alpha);
+			RenderUtils.drawSolidBoxes(matrixStack, boxes, quadsColor, false);
+			RenderUtils.drawOutlinedBoxes(matrixStack, boxes, linesColor,
+				false);
+		}
+	}
+	
+	private void renderTracers(PoseStack matrixStack, float partialTicks)
+	{
+		for(LiquidEspBlockGroup group : groups)
+		{
+			if(!group.isEnabled())
+				continue;
+			List<AABB> boxes = group.getBoxes();
+			List<Vec3> ends = boxes.stream().map(AABB::getCenter).toList();
+			int alpha = group == lavaGroup ? lavaAlpha.getValueI()
+				: waterAlpha.getValueI();
+			int color = group.getColorI(alpha);
+			if(tracerFlash.isChecked())
+				color = RenderUtils.flashColor(color);
+			RenderUtils.drawTracers("LavaWaterESP", matrixStack, partialTicks,
+				ends, color, false);
+		}
+	}
+	
+	private void updateGroupBoxes()
+	{
+		groups.forEach(LiquidEspBlockGroup::clear);
+		int limit = getEffectiveRenderLimit();
+		var eyesPos = RotationUtils.getEyesPos();
+		PriorityQueue<Result> heap = new PriorityQueue<>((limit + 1),
+			(a, b) -> Double.compare(b.pos().distToCenterSqr(eyesPos),
+				a.pos().distToCenterSqr(eyesPos)));
+		coordinator.getReadyMatches().forEach(result -> {
+			if(heap.size() < limit)
+				heap.offer(result);
+			else if(result.pos().distToCenterSqr(eyesPos) < heap.peek().pos()
+				.distToCenterSqr(eyesPos))
+			{
+				heap.poll();
+				heap.offer(result);
+			}
+		});
+		heap.forEach(this::addToGroupBoxes);
+		groupsUpToDate = true;
+	}
+	
+	private int getEffectiveRenderLimit()
+	{
+		int localLimit = renderAmount.getValueI();
+		int effective = localLimit;
+		return Math.max(1, effective);
+	}
+	
+	private void addToGroupBoxes(Result result)
+	{
+		for(LiquidEspBlockGroup group : groups)
+			if(result.state().getBlock() == group.getBlock())
+			{
+				group.add(result.pos());
+				break;
+			}
+	}
+}

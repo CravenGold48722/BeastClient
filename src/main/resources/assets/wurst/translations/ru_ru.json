@@ -319,5 +319,10 @@
   "description.wurst.nochatreports.message_is_reportable": "Это сообщение имеет действительную подпись, поэтому на него можно отправить жалобу.",
   "gui.wurst.generic.allcaps_blocked": "ЗАБЛОКИРОВАНО",
   "gui.wurst.generic.allcaps_allowed": "РАЗРЕШЕНО",
-  "key.wurst.zoom": "Зум (Приближение)"
+  "key.wurst.zoom": "Зум (Приближение)",
+  "description.wurst.setting.bonemealaura.multimeal": "Использует костную муку на нескольких растениях одновременно.\nБыстрее, но может быть обнаружено анти-читами.",
+  "description.wurst.setting.bonemealaura.check_los": "Гарантирует, что BonemealAura не будет пытаться достать до растений сквозь блоки при использовании костной муки.\nМедленнее, но может помочь с анти-читами.",
+  "description.wurst.setting.bonemealaura.always_fastplace": "Использует костную муку так, как будто включён FastPlace, даже если он выключен.",
+  "description.wurst.setting.bonemealaura.use_while_breaking": "Использует костную муку даже во время ломания блока.\nЭто можно сделать с помощью хаков, но в обычной игре это не сработает. Может выглядеть подозрительно.",
+  "description.wurst.setting.bonemealaura.use_while_riding": "Позволяет использовать костную муку во время езды, не слезая с транспорта.\nЭто можно сделать с помощью хаков, но в обычной игре это не сработает. Может выглядеть подозрительно."
 }

@@ -1,0 +1,2187 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.hacks.itemhandler;
+
+import it.unimi.dsi.fastutil.ints.Int2IntMap;
+import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
+import net.wurstclient.settings.SliderSetting;
+import net.wurstclient.settings.SliderSetting.ValueDisplay;
+import net.wurstclient.settings.CheckboxSetting;
+import net.wurstclient.settings.ButtonSetting;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
+import java.util.LinkedHashSet;
+import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Method;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.Nameable;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.ExperienceOrb;
+import net.minecraft.world.entity.OwnableEntity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.entity.HumanoidArm;
+import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.entity.decoration.ItemFrame;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.ItemEnchantments;
+import net.minecraft.world.item.component.ResolvableProfile;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.ShelfBlockEntity;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.entity.SignText;
+import net.minecraft.world.level.block.entity.SkullBlockEntity;
+import net.minecraft.world.phys.Vec3;
+import net.wurstclient.Category;
+import net.wurstclient.events.UpdateListener;
+import net.wurstclient.events.RenderListener;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.world.phys.AABB;
+import net.wurstclient.util.RenderUtils;
+import net.wurstclient.util.ChatUtils;
+import net.wurstclient.util.OwnerResolver;
+import net.wurstclient.hack.Hack;
+import net.wurstclient.mixinterface.IKeyBinding;
+import net.wurstclient.util.text.WText;
+import it.unimi.dsi.fastutil.objects.Object2IntMap;
+// no screen import needed; we embed ItemESP's editor component directly
+import net.wurstclient.util.InventoryUtils;
+import net.wurstclient.util.ShelfUtils;
+import net.wurstclient.util.chunk.ChunkUtils;
+import net.wurstclient.settings.ItemListSetting;
+
+public class ItemHandlerHack extends Hack
+	implements UpdateListener, RenderListener
+{
+	private static final double SCAN_RADIUS = 2.5;
+	// When the popup is set to "infinite", use this large but finite
+	// radius to avoid passing Infinity into AABB.inflate which breaks
+	// entity queries. 1024m should be more than enough for a "global" popup
+	// and avoids pathological behavior.
+	private static final double INFINITE_SCAN_RADIUS = 1024.0;
+	private static final int WHITELIST_TICKS = 3;
+	private static final Set<String> DEFAULT_MOB_EQUIPMENT_IDS =
+		Set.of("minecraft:bow", "minecraft:crossbow", "minecraft:trident",
+			"minecraft:wooden_sword", "minecraft:stone_sword",
+			"minecraft:iron_sword", "minecraft:golden_sword",
+			"minecraft:wooden_axe", "minecraft:stone_axe", "minecraft:iron_axe",
+			"minecraft:golden_axe", "minecraft:wooden_pickaxe",
+			"minecraft:stone_pickaxe", "minecraft:iron_pickaxe",
+			"minecraft:golden_pickaxe", "minecraft:wooden_shovel",
+			"minecraft:stone_shovel", "minecraft:iron_shovel",
+			"minecraft:golden_shovel", "minecraft:wooden_hoe",
+			"minecraft:stone_hoe", "minecraft:iron_hoe", "minecraft:golden_hoe",
+			"minecraft:leather_helmet", "minecraft:leather_chestplate",
+			"minecraft:leather_leggings", "minecraft:leather_boots",
+			"minecraft:iron_helmet", "minecraft:iron_chestplate",
+			"minecraft:iron_leggings", "minecraft:iron_boots",
+			"minecraft:golden_helmet", "minecraft:golden_chestplate",
+			"minecraft:golden_leggings", "minecraft:golden_boots");
+	private static final String[] DEFAULT_MOB_EQUIPMENT_MATERIALS =
+		{"copper", "steel", "gold", "golden"};
+	private static final String[] DEFAULT_MOB_EQUIPMENT_SUFFIXES =
+		{"_helmet", "_chestplate", "_leggings", "_boots", "_sword", "_axe",
+			"_pickaxe", "_shovel", "_hoe", "_spear"};
+	
+	public enum ListSort
+	{
+		DISTANCE,
+		VALUE,
+		TYPE;
+		
+		@Override
+		public String toString()
+		{
+			String name = name().toLowerCase(Locale.ROOT);
+			return Character.toUpperCase(name.charAt(0)) + name.substring(1);
+		}
+	}
+	
+	private final net.wurstclient.settings.EnumSetting<ListSort> listSort =
+		new net.wurstclient.settings.EnumSetting<>("List sort",
+			"Sort the item list by distance, value, or equipment type.",
+			ListSort.values(), ListSort.DISTANCE);
+	
+	public ListSort getListSort()
+	{
+		return listSort.getSelected();
+	}
+	
+	public void cycleListSort()
+	{
+		listSort.setSelected(ListSort.values()[(getListSort().ordinal() + 1)
+			% ListSort.values().length]);
+	}
+	
+	private final List<GroundItem> trackedItems = new ArrayList<>();
+	private final List<NearbyLabel> trackedLabels = new ArrayList<>();
+	private int signScanCooldown;
+	private final Int2IntOpenHashMap pickupWhitelist = new Int2IntOpenHashMap();
+	private final Deque<Integer> pickupQueue = new ArrayDeque<>();
+	private boolean autoWalking;
+	// Rejection rules: match by item id, apply within radius, expire after
+	// seconds
+	private final List<RejectedRule> rejectedRules = new ArrayList<>();
+	private final java.util.Map<String, Integer> prevInventoryCounts =
+		new java.util.HashMap<>();
+	// Items explicitly traced/highlighted via ItemHandler GUI
+	private final java.util.Set<String> tracedItems =
+		new java.util.LinkedHashSet<>();
+	
+	private final SliderSetting rejectRadius = new SliderSetting(
+		"Reject radius", 3.0, 0.5, 8.0, 0.25, ValueDisplay.DECIMAL);
+	
+	private final SliderSetting rejectExpiry = new SliderSetting(
+		"Pickup/Drop timeout (s)", 15, 5, 120, 1, ValueDisplay.INTEGER);
+	private final CheckboxSetting hudEnabled =
+		new CheckboxSetting("Show item popup HUD", true);
+	
+	private final CheckboxSetting showRegistryName =
+		new CheckboxSetting("Show registry names", true);
+	
+	private final CheckboxSetting showEnchantmentsInNames =
+		new CheckboxSetting("Show enchantments in names",
+			"Shows enchantments on the second line in ItemHandler HUD and GUI.",
+			true);
+	
+	// How many items to show in the popup HUD
+	private final SliderSetting popupMaxItems = new SliderSetting(
+		"Popup HUD max items", 8, 1, 10, 1, ValueDisplay.INTEGER);
+	
+	private final CheckboxSetting pinSpecialItemsTop = new CheckboxSetting(
+		"Pin ItemESP special to top",
+		"In popup HUD sorting, show items marked as special by ItemESP first.",
+		true);
+	
+	private final CheckboxSetting showSignsInHud =
+		new CheckboxSetting("Show nearby signs",
+			"Adds nearby sign text to the ItemHandler popup HUD.", true);
+	private final CheckboxSetting detectWallHeads = new CheckboxSetting(
+		"Detect wall heads",
+		"Detects standing and wall-mounted player heads in the ItemHandler HUD.",
+		true);
+	
+	private final CheckboxSetting detectNamedEntities =
+		new CheckboxSetting("Detect named entities",
+			"Detects custom-named entities (e.g. pets and mobs).", true);
+	
+	private final CheckboxSetting detectCraftedEntities = new CheckboxSetting(
+		"Detect crafted entities",
+		"Detects nearby crafted entities like boats/rafts, paintings, glow item frames, and selected minecarts.",
+		true);
+	private final CheckboxSetting detectOwnedEntities = new CheckboxSetting(
+		"Detect owned entities",
+		"Detects nearby owner-capable entities like pearls, projectiles, primed TNT, and tamed mobs.",
+		true);
+	
+	private final SliderSetting signRange = new SliderSetting("Sign range",
+		"How far to scan for signs when 'Show nearby signs' is enabled.\n"
+			+ "∞ = all loaded chunks around you (limited by render distance).",
+		INFINITE_SCAN_RADIUS, 2.0, INFINITE_SCAN_RADIUS, 1.0,
+		ValueDisplay.DECIMAL.withLabel(INFINITE_SCAN_RADIUS, "∞")
+			.withSuffix(" blocks"));
+	
+	private final SliderSetting signMax = new SliderSetting("Max signs",
+		"Maximum number of signs to show in the popup HUD.", 4, 1, 10, 1,
+		ValueDisplay.INTEGER);
+	
+	private final SliderSetting popupRange = new SliderSetting(
+		"Item detection range", 6.0, 1.0, INFINITE_SCAN_RADIUS, 0.5,
+		ValueDisplay.DECIMAL.withLabel(INFINITE_SCAN_RADIUS, "∞"));
+	
+	// Adjust popup/UI scale (affects text size and icon size heuristically)
+	private final SliderSetting popupScale = new SliderSetting(
+		"Popup HUD font scale", 0.75, 0.5, 1.5, 0.05, ValueDisplay.DECIMAL);
+	
+	private final SliderSetting tracerThickness = new SliderSetting(
+		"Tracer thickness", 2, 0.5, 8, 0.1, ValueDisplay.DECIMAL);
+	
+	// Respect ItemESP's ignored items list
+	private final CheckboxSetting respectItemEspIgnores =
+		new CheckboxSetting("Respect ignored items",
+			"Leaves out the items in the Ignored items list below.", true);
+	
+	// Include items held or worn by mobs
+	private final CheckboxSetting includeMobEquipment =
+		new CheckboxSetting("Detect held/worn mob items",
+			"Also detect items held or worn by mobs.", true);
+	
+	private final CheckboxSetting detectArmorStandEquipment =
+		new CheckboxSetting("Detect armor stand equipment",
+			"Includes armor worn by armor stands when mob equipment detection is enabled.",
+			true);
+	
+	private final CheckboxSetting filterDefaultMobEquipment =
+		new CheckboxSetting("Filter default mob items",
+			"Hide common mob gear (gold/iron/stone/chain/etc).", false);
+	
+	// Reduce extremes so offsets cannot go off-screen entirely.
+	private final SliderSetting hudOffsetX = new SliderSetting(
+		"Popup HUD offset X", -105, -300, 300, 1, ValueDisplay.INTEGER);
+	private final SliderSetting hudOffsetY = new SliderSetting(
+		"Popup HUD offset Y", -15, -200, 200, 1, ValueDisplay.INTEGER);
+	
+	public ItemHandlerHack()
+	{
+		super("ItemHandler");
+		addSetting(listSort);
+		setCategory(Category.ITEMS);
+		addPossibleKeybind("itemhandler gui",
+			"ItemHandler GUI (open manual pickup screen)");
+		// Top-level button to open the ItemHandler GUI from settings
+		addSetting(new ButtonSetting("Open ItemHandler GUI", this::openScreen));
+		addSetting(hudEnabled);
+		addSetting(showRegistryName);
+		addSetting(showEnchantmentsInNames);
+		addSetting(includeMobEquipment);
+		addSetting(detectArmorStandEquipment);
+		addSetting(filterDefaultMobEquipment);
+		addSetting(pinSpecialItemsTop);
+		addSetting(showSignsInHud);
+		addSetting(detectWallHeads);
+		addSetting(detectNamedEntities);
+		addSetting(detectCraftedEntities);
+		addSetting(detectOwnedEntities);
+		addSetting(respectItemEspIgnores);
+		addSetting(itemEspIgnoredListSetting);
+		addSetting(itemEspSpecialListSetting);
+		addSetting(rejectRadius);
+		addSetting(rejectExpiry);
+		addSetting(popupRange);
+		addSetting(popupScale);
+		addSetting(tracerThickness);
+		addSetting(popupMaxItems);
+		addSetting(signRange);
+		addSetting(signMax);
+		addSetting(hudOffsetX);
+		addSetting(hudOffsetY);
+	}
+	
+	@Override
+	protected void onEnable()
+	{
+		EVENTS.add(UpdateListener.class, this);
+		EVENTS.add(RenderListener.class, this);
+		endPickFilterSession();
+		prevInventoryCounts.clear();
+		trackedItems.clear();
+		trackedLabels.clear();
+		pickupWhitelist.clear();
+		pickupQueue.clear();
+	}
+	
+	@Override
+	protected void onDisable()
+	{
+		EVENTS.remove(UpdateListener.class, this);
+		EVENTS.remove(RenderListener.class, this);
+		prevInventoryCounts.clear();
+		trackedItems.clear();
+		trackedLabels.clear();
+		pickupWhitelist.clear();
+		pickupQueue.clear();
+		stopAutoWalk();
+		rejectedRules.clear();
+		endPickFilterSession();
+		
+		if(MC.screen instanceof ItemHandlerScreen)
+			MC.setScreen(null);
+	}
+	
+	@Override
+	public void onUpdate()
+	{
+		if(MC.level == null || MC.player == null)
+		{
+			trackedItems.clear();
+			endPickFilterSession();
+			prevInventoryCounts.clear();
+			trackedLabels.clear();
+			pickupWhitelist.clear();
+			pickupQueue.clear();
+			stopAutoWalk();
+			return;
+		}
+		
+		updateWhitelist();
+		scanNearbyItems();
+		scanNearbySigns();
+		updateRejectedRules();
+		processSelectionInventory();
+		updatePickFilterTimeout();
+		processRejectedPickup();
+		processPickupQueue();
+	}
+	
+	private void updatePickFilterTimeout()
+	{
+		if(!pickFilterActive)
+			return;
+		if(pickFilterTimeoutMs <= 0)
+			return;
+		long now = System.currentTimeMillis();
+		if(now - pickFilterStartMs > pickFilterTimeoutMs)
+		{
+			endPickFilterSession();
+			ChatUtils.message(
+				"ItemHandler: collection timed out; check inventory space or unreachable targets. Normal visibility restored.");
+		}
+	}
+	
+	private void updateRejectedRules()
+	{
+		if(rejectedRules.isEmpty())
+			return;
+		
+		long now = System.currentTimeMillis();
+		rejectedRules.removeIf(
+			r -> r.expiryMillis > 0 && now > r.createdAt + r.expiryMillis);
+	}
+	
+	private void processRejectedPickup()
+	{
+		if(MC.player == null)
+			return;
+		
+		// Build current counts by item id
+		java.util.Map<String, Integer> cur = new java.util.HashMap<>();
+		net.minecraft.world.entity.player.Inventory inventory =
+			MC.player.getInventory();
+		int maxSlots = 36;
+		if(pickFilterActive
+			|| MC.player.containerMenu != MC.player.inventoryMenu)
+			return;
+		for(int slot = 0; slot < maxSlots; slot++)
+		{
+			var stack = inventory.getItem(slot);
+			if(stack == null || stack.isEmpty())
+				continue;
+			String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+				.getKey(stack.getItem()).toString();
+			cur.merge(id, stack.getCount(), Integer::sum);
+		}
+		
+		// Compare to previous counts to detect pickups
+		if(prevInventoryCounts.isEmpty())
+		{
+			prevInventoryCounts.putAll(cur);
+			return;
+		}
+		
+		for(java.util.Map.Entry<String, Integer> e : cur.entrySet())
+		{
+			String id = e.getKey();
+			int count = e.getValue();
+			int prev = prevInventoryCounts.getOrDefault(id, 0);
+			if(count <= prev)
+				continue;
+			
+			int gained = count - prev;
+			// if player gained items of this id, unmark tracing for that id
+			if(gained > 0 && tracedItems.contains(id))
+			{
+				tracedItems.remove(id);
+				ChatUtils.message("Untraced " + id + " after pickup.");
+			}
+			
+			// Total rejected amount for this id (sum across rules that match
+			// player's position)
+			int totalRejected = 0;
+			for(RejectedRule r : rejectedRules)
+			{
+				if(r.itemId.equals(id)
+					&& r.matchesPosition(MC.player.position()))
+					totalRejected += r.amountRemaining;
+			}
+			
+			int toDrop = Math.min(gained, totalRejected);
+			if(toDrop <= 0)
+				continue;
+				
+			// Drop 'toDrop' items by repeatedly throwing single items from
+			// matching slots
+			int remainingToDrop = toDrop;
+			while(remainingToDrop > 0)
+			{
+				int foundSlot = -1;
+				for(int s = 0; s < maxSlots; s++)
+				{
+					var st = inventory.getItem(s);
+					if(st == null || st.isEmpty())
+						continue;
+					String sid =
+						net.minecraft.core.registries.BuiltInRegistries.ITEM
+							.getKey(st.getItem()).toString();
+					if(sid.equals(id))
+					{
+						foundSlot = s;
+						break;
+					}
+				}
+				if(foundSlot < 0)
+					break;
+				
+				int networkSlot = InventoryUtils.toNetworkSlot(foundSlot);
+				IMC.getInteractionManager().windowClick_raw(0, networkSlot, 0,
+					net.minecraft.world.inventory.ContainerInput.THROW);
+				remainingToDrop--;
+				
+				// update rejected rules amounts (consume rules in insertion
+				// order)
+				int dropLeft = 1; // we dropped one item
+				for(java.util.Iterator<RejectedRule> it =
+					rejectedRules.iterator(); it.hasNext() && dropLeft > 0;)
+				{
+					RejectedRule r = it.next();
+					if(!r.itemId.equals(id)
+						|| !r.matchesPosition(MC.player.position()))
+						continue;
+					int dec = Math.min(r.amountRemaining, dropLeft);
+					r.amountRemaining -= dec;
+					dropLeft -= dec;
+					if(r.amountRemaining <= 0)
+						it.remove();
+				}
+			}
+		}
+		
+		// store current counts for next tick
+		prevInventoryCounts.clear();
+		prevInventoryCounts.putAll(cur);
+	}
+	
+	// Targets use UUIDs, never registry IDs: another stack of the same item
+	// and freshly dropped items must not silently become collection targets.
+	private boolean pickFilterActive;
+	private final java.util.Map<UUID, ItemStack> selectedTargets =
+		new java.util.LinkedHashMap<>();
+	private final java.util.Set<UUID> collectedTargets =
+		new java.util.HashSet<>();
+	private final net.wurstclient.util.SelectedPickupBudget selectionBudget =
+		new net.wurstclient.util.SelectedPickupBudget();
+	private long pickFilterStartMs;
+	private long pickFilterTimeoutMs;
+	private long selectionActionAt;
+	private long selectionWarningAt;
+	private long selectionCompletedAt;
+	
+	private record PickupReceipt(UUID target, int amount, long time)
+	{}
+	
+	private final java.util.Map<UUID, PickupReceipt> selectionReceipts =
+		new java.util.LinkedHashMap<>();
+	private List<ItemStack> lastSelectionInventory = List.of();
+	private ItemStack pendingDiscard;
+	private int pendingDiscardCount;
+	private long discardCheckAt;
+	
+	public boolean isPickFilterActive()
+	{
+		return isEnabled() && pickFilterActive;
+	}
+	
+	public void beginSelectedPickup(Collection<GroundItem> items)
+	{
+		endPickFilterSession();
+		if(MC.player == null || MC.level == null)
+			return;
+		for(GroundItem item : items)
+		{
+			if(item.sourceType() != SourceType.GROUND)
+				continue;
+			ItemEntity entity = getItemEntity(item.entityId());
+			if(entity == null || !entity.getUUID().equals(item.uuid()))
+				continue;
+			if(selectedTargets.putIfAbsent(item.uuid(),
+				item.stack().copy()) == null)
+				pickupQueue.add(item.entityId());
+		}
+		if(selectedTargets.isEmpty())
+		{
+			ChatUtils.message(
+				"ItemHandler: select dropped items to collect; displayed equipment and labels cannot be picked up.");
+			return;
+		}
+		pickFilterActive = true;
+		pickFilterStartMs = System.currentTimeMillis();
+		pickFilterTimeoutMs = rejectExpiry.getValueI() * 1000L;
+		lastSelectionInventory = selectionSnapshot();
+		selectionBudget.start(lastSelectionInventory);
+		ChatUtils.message(
+			"ItemHandler: collecting only selected floor stacks; other drops are temporarily hidden.");
+	}
+	
+	public void endPickFilterSession()
+	{
+		pickFilterActive = false;
+		selectedTargets.clear();
+		collectedTargets.clear();
+		selectionBudget.clear();
+		prevInventoryCounts.clear();
+		selectionReceipts.clear();
+		lastSelectionInventory = List.of();
+		pickupQueue.clear();
+		pickupWhitelist.clear();
+		stopAutoWalk();
+		pickFilterStartMs = 0;
+		pickFilterTimeoutMs = 0;
+		selectionCompletedAt = 0;
+		selectionActionAt = 0;
+		selectionWarningAt = 0;
+		pendingDiscard = null;
+	}
+	
+	public boolean shouldHideItem(Entity entity)
+	{
+		return isPickFilterActive() && entity instanceof ItemEntity
+			&& !selectedTargets.containsKey(entity.getUUID());
+	}
+	
+	/** Called on the client thread before vanilla removes the picked entity. */
+	public void onItemPickup(
+		net.minecraft.network.protocol.game.ClientboundTakeItemEntityPacket packet)
+	{
+		if(!isPickFilterActive() || MC.player == null || MC.level == null
+			|| packet.getPlayerId() != MC.player.getId())
+			return;
+		ItemEntity entity = getItemEntity(packet.getItemId());
+		if(entity == null)
+			return;
+		ItemStack wanted = selectedTargets.get(entity.getUUID());
+		if(wanted == null
+			|| !ItemStack.isSameItemSameComponents(wanted, entity.getItem()))
+			return;
+		int received = Math.min(wanted.getCount(), packet.getAmount());
+		selectionReceipts.merge(entity.getUUID(),
+			new PickupReceipt(entity.getUUID(), received,
+				System.currentTimeMillis()),
+			(oldReceipt, newReceipt) -> new PickupReceipt(entity.getUUID(),
+				Math.min(wanted.getCount(),
+					oldReceipt.amount() + newReceipt.amount()),
+				newReceipt.time()));
+	}
+	
+	private List<ItemStack> selectionSnapshot()
+	{
+		List<ItemStack> result = new ArrayList<>();
+		for(int i = 0; i < 41; i++)
+			result.add(MC.player.getInventory().getItem(i).copy());
+		return result;
+	}
+	
+	private void confirmSelectionReceipts(List<ItemStack> current)
+	{
+		// Some servers announce the original entity stack size even when only
+		// part fits. Confirm the actual inventory gain before allowing it or
+		// reporting the selected stack as complete.
+		List<ItemStack> credited = new ArrayList<>();
+		long now = System.currentTimeMillis();
+		for(var it = selectionReceipts.entrySet().iterator(); it.hasNext();)
+		{
+			var entry = it.next();
+			PickupReceipt receipt = entry.getValue();
+			ItemStack wanted = selectedTargets.get(receipt.target());
+			int gained = selectionCount(current, wanted)
+				- selectionCount(lastSelectionInventory, wanted)
+				- selectionCount(credited, wanted);
+			int received = Math.min(Math.max(0, gained),
+				Math.min(receipt.amount(), wanted.getCount()));
+			if(received > 0)
+			{
+				credited.add(wanted.copyWithCount(received));
+				selectionBudget.allow(wanted, received);
+				wanted.shrink(received);
+				if(wanted.isEmpty())
+					collectedTargets.add(receipt.target());
+				it.remove();
+			}else if(now - receipt.time() > 1000)
+				it.remove();
+		}
+	}
+	
+	private int selectionCount(List<ItemStack> inventory, ItemStack wanted)
+	{
+		return inventory.stream()
+			.filter(stack -> ItemStack.isSameItemSameComponents(stack, wanted))
+			.mapToInt(ItemStack::getCount).sum();
+	}
+	
+	private void processSelectionInventory()
+	{
+		if(!pickFilterActive)
+			return;
+		List<ItemStack> current = selectionSnapshot();
+		confirmSelectionReceipts(current);
+		lastSelectionInventory = current;
+		selectionBudget.observeInventory(current);
+		long now = System.currentTimeMillis();
+		if(pendingDiscard != null)
+		{
+			if(now < discardCheckAt)
+				return;
+			int remaining = current
+				.stream().filter(stack -> ItemStack
+					.isSameItemSameComponents(stack, pendingDiscard))
+				.mapToInt(ItemStack::getCount).sum();
+			if(remaining >= pendingDiscardCount)
+				selectionWarn(
+					"discard was not confirmed; the server or another inventory feature may be blocking it.");
+			pendingDiscard = null;
+		}
+		if(now < selectionActionAt)
+			return;
+		for(int i = 0; i < 36; i++)
+		{
+			ItemStack stack = current.get(i);
+			if(stack.isEmpty())
+				continue;
+			int excess = selectionBudget.excess(current, stack);
+			if(excess <= 0)
+				continue;
+			if(MC.player.containerMenu != MC.player.inventoryMenu
+				|| !MC.player.inventoryMenu.getCarried().isEmpty())
+			{
+				selectionWarn(
+					"close the container and clear the cursor to discard unwanted pickups.");
+				return;
+			}
+			// Throw one item when it is merged into an existing stack so
+			// inventory present before selection is never discarded.
+			pendingDiscard = stack.copy();
+			pendingDiscardCount = current.stream()
+				.filter(st -> ItemStack.isSameItemSameComponents(st, stack))
+				.mapToInt(ItemStack::getCount).sum();
+			discardCheckAt = now + 300;
+			IMC.getInteractionManager().windowClick_raw(0,
+				InventoryUtils.toNetworkSlot(i),
+				excess >= stack.getCount() ? 1 : 0,
+				net.minecraft.world.inventory.ContainerInput.THROW);
+			lastSelectionInventory = selectionSnapshot();
+			selectionBudget.rememberInventory(lastSelectionInventory);
+			selectionActionAt = now + 150;
+			return;
+		}
+		if(collectedTargets.size() == selectedTargets.size())
+		{
+			if(selectionCompletedAt == 0)
+				selectionCompletedAt = now;
+			if(now - selectionCompletedAt >= 1000)
+			{
+				endPickFilterSession();
+				ChatUtils.message(
+					"ItemHandler: selected stacks collected; normal visibility restored.");
+			}
+		}
+	}
+	
+	private void selectionWarn(String text)
+	{
+		long now = System.currentTimeMillis();
+		if(now < selectionWarningAt)
+			return;
+		selectionWarningAt = now + 5000;
+		ChatUtils.message("ItemHandler: " + text);
+	}
+	
+	private static final class RejectedRule
+	{
+		final String itemId;
+		final Vec3 center;
+		final double radius;
+		final long createdAt;
+		final long expiryMillis;
+		int amountRemaining;
+		
+		RejectedRule(String itemId, Vec3 center, double radius,
+			long expiryMillis, int amount)
+		{
+			this.itemId = itemId;
+			this.center = center;
+			this.radius = radius;
+			this.createdAt = System.currentTimeMillis();
+			this.expiryMillis = expiryMillis;
+			this.amountRemaining = amount;
+		}
+		
+		boolean matchesPosition(Vec3 playerPos)
+		{
+			double dist = playerPos.distanceTo(center);
+			return dist <= radius;
+		}
+	}
+	
+	private void updateWhitelist()
+	{
+		if(pickupWhitelist.isEmpty())
+			return;
+		
+		List<Integer> toRemove = new ArrayList<>();
+		for(Int2IntMap.Entry entry : pickupWhitelist.int2IntEntrySet())
+		{
+			int ticks = entry.getIntValue() - 1;
+			if(ticks <= 0)
+				toRemove.add(entry.getIntKey());
+			else
+				entry.setValue(ticks);
+		}
+		
+		// Use primitive remove(int) to avoid deprecated remove(Object)
+		for(int k : toRemove)
+			pickupWhitelist.remove(k);
+	}
+	
+	private void scanNearbyItems()
+	{
+		LocalPlayer player = MC.player;
+		double sliderRange = getPopupRange();
+		double scanRadius =
+			Math.max(SCAN_RADIUS, sliderRange >= INFINITE_SCAN_RADIUS
+				? INFINITE_SCAN_RADIUS : sliderRange);
+		
+		List<ItemEntity> found = MC.level.getEntitiesOfClass(ItemEntity.class,
+			player.getBoundingBox().inflate((float)scanRadius),
+			this::shouldTrack);
+		
+		// Also include XP orbs in the scan
+		List<ExperienceOrb> foundOrbs =
+			MC.level.getEntitiesOfClass(ExperienceOrb.class,
+				player.getBoundingBox().inflate((float)scanRadius),
+				o -> o != null && o.isAlive() && !o.isRemoved());
+		
+		List<ItemFrame> foundFrames = MC.level.getEntitiesOfClass(
+			ItemFrame.class, player.getBoundingBox().inflate((float)scanRadius),
+			this::shouldTrackItemFrame);
+		
+		trackedItems.clear();
+		for(ItemEntity entity : found)
+		{
+			ItemStack stack = entity.getItem().copy();
+			double distance = entity.distanceTo(player);
+			// optional filter: respect ItemESP ignored items
+			if(isIgnoredByItemEsp(stack))
+				continue;
+			trackedItems.add(new GroundItem(entity.getId(), entity.getUUID(),
+				stack, distance, entity.position(), SourceType.GROUND, null));
+		}
+		
+		for(ExperienceOrb orb : foundOrbs)
+		{
+			double distance = orb.distanceTo(player);
+			// proxy stack for UI only (contains synthetic id + xp metadata)
+			ItemStack stack =
+				net.wurstclient.util.ItemUtils.createSyntheticXpStack(orb);
+			trackedItems.add(new GroundItem(orb.getId(), orb.getUUID(), stack,
+				distance, orb.position(), SourceType.XP_ORB, null));
+		}
+		
+		for(ItemFrame frame : foundFrames)
+		{
+			ItemStack stack = frame.getItem().copy();
+			double distance = frame.distanceTo(player);
+			trackedItems
+				.add(new GroundItem(frame.getId(), frame.getUUID(), stack,
+					distance, frame.position(), SourceType.ITEM_FRAME, null));
+		}
+		
+		addTrackedShelfItems(player, scanRadius);
+		
+		if(includeMobEquipment.isChecked())
+			addMobEquipmentItems(player, scanRadius);
+			
+		// Traced items intentionally persist even if they are temporarily out
+		// of
+		// range or not currently tracked. (Only explicit pickup detection or
+		// manual toggling should untrace.)
+	}
+	
+	private void addTrackedShelfItems(LocalPlayer player, double scanRadius)
+	{
+		Vec3 playerPos = player.position();
+		double scanRadiusSq =
+			scanRadius >= INFINITE_SCAN_RADIUS ? -1 : scanRadius * scanRadius;
+		
+		ChunkUtils.getLoadedBlockEntities().forEach(be -> {
+			if(!(be instanceof ShelfBlockEntity shelf))
+				return;
+			
+			Vec3 shelfCenter = shelf.position();
+			if(scanRadiusSq >= 0
+				&& shelfCenter.distanceToSqr(playerPos) > scanRadiusSq)
+				return;
+			
+			BlockPos shelfPos = shelf.getBlockPos();
+			List<ItemStack> shelfItems = shelf.getItems();
+			for(int slot = 0; slot < shelfItems.size(); slot++)
+			{
+				ItemStack stack = shelfItems.get(slot);
+				if(stack == null || stack.isEmpty())
+					continue;
+				if(isIgnoredByItemEsp(stack))
+					continue;
+				
+				Vec3 itemPos = ShelfUtils.getItemPosition(shelf, slot);
+				if(itemPos == null)
+					itemPos = shelfCenter;
+				double distance = itemPos.distanceTo(playerPos);
+				trackedItems
+					.add(new GroundItem(getShelfSlotEntityId(shelfPos, slot),
+						getShelfSlotUuid(shelfPos, slot), stack.copy(),
+						distance, itemPos, SourceType.SHELF, null));
+			}
+		});
+	}
+	
+	private void scanNearbySigns()
+	{
+		boolean guiOpen = MC.screen instanceof ItemHandlerScreen;
+		boolean detectSigns = showSignsInHud.isChecked() || guiOpen;
+		boolean detectNamed = detectNamedEntities.isChecked() || guiOpen;
+		boolean detectCrafted = detectCraftedEntities.isChecked() || guiOpen;
+		boolean detectOwned = detectOwnedEntities.isChecked() || guiOpen;
+		if(!detectSigns && !detectNamed && !detectCrafted && !detectOwned)
+		{
+			trackedLabels.clear();
+			return;
+		}
+		
+		if(MC.level == null || MC.player == null)
+		{
+			trackedLabels.clear();
+			return;
+		}
+		
+		// Don't scan every tick; this can get expensive in sign-heavy areas.
+		if(signScanCooldown-- > 0)
+			return;
+		signScanCooldown = 10;
+		
+		trackedLabels.clear();
+		
+		double range = signRange.getValue();
+		boolean infinite = range >= INFINITE_SCAN_RADIUS;
+		double rangeSq = range * range;
+		Vec3 centerVec = MC.player.position();
+		
+		if(detectSigns)
+			ChunkUtils.getLoadedBlockEntities().forEach(be -> {
+				if(!(be instanceof SignBlockEntity sign))
+					return;
+				BlockPos pos = sign.getBlockPos();
+				if(pos == null)
+					return;
+				Vec3 p = Vec3.atCenterOf(pos);
+				double distSq = p.distanceToSqr(centerVec);
+				if(!infinite && distSq > rangeSq)
+					return;
+				
+				String text = readSignText(sign);
+				if(text.isEmpty())
+					return;
+				ItemStack icon =
+					iconForBlockEntity(be, new ItemStack(Items.OAK_SIGN));
+				trackedLabels.add(new NearbyLabel(p, new AABB(pos), icon,
+					"Sign: " + text, Math.sqrt(distSq), getSignTraceId(pos)));
+			});
+		
+		if(detectWallHeads.isChecked())
+			addPlayerHeadLabels(centerVec, range, infinite, rangeSq);
+		
+		if(detectNamed)
+		{
+			AABB scanBox = MC.player.getBoundingBox().inflate(range);
+			List<Entity> namedEntities =
+				MC.level.getEntities(MC.player, scanBox, e -> e != null
+					&& e.isAlive() && !e.isRemoved() && e.hasCustomName());
+			
+			for(Entity entity : namedEntities)
+			{
+				String customName = readCustomName(entity);
+				if(customName.isEmpty())
+					continue;
+				if(isIgnoredNamedEntityByItemEsp(customName))
+					continue;
+				Vec3 p = entity.position();
+				double distSq = p.distanceToSqr(centerVec);
+				if(!infinite && distSq > rangeSq)
+					continue;
+				
+				trackedLabels.add(new NearbyLabel(p, entity.getBoundingBox(),
+					new ItemStack(Items.NAME_TAG),
+					"Named entity: " + customName, Math.sqrt(distSq),
+					getNamedEntityTraceId(entity.getUUID())));
+			}
+		}
+		
+		if(detectCrafted)
+		{
+			AABB scanBox = MC.player.getBoundingBox().inflate(range);
+			List<Entity> craftedEntities = MC.level.getEntities(MC.player,
+				scanBox, e -> e != null && e.isAlive() && !e.isRemoved()
+					&& isTrackedCraftedEntityType(e));
+			
+			for(Entity entity : craftedEntities)
+			{
+				Vec3 p = entity.position();
+				double distSq = p.distanceToSqr(centerVec);
+				if(!infinite && distSq > rangeSq)
+					continue;
+				
+				ItemStack icon = iconForCraftedEntity(entity);
+				String label = "Crafted entity: " + craftedEntityLabel(entity);
+				trackedLabels.add(new NearbyLabel(p, entity.getBoundingBox(),
+					icon, label, Math.sqrt(distSq),
+					getCraftedEntityTraceId(entity.getUUID())));
+			}
+		}
+		
+		if(detectOwned)
+		{
+			AABB scanBox = MC.player.getBoundingBox().inflate(range);
+			List<Entity> ownedEntities = MC.level.getEntities(MC.player,
+				scanBox, e -> e != null && e.isAlive() && !e.isRemoved()
+					&& isOwnerCapableEntity(e));
+			
+			for(Entity entity : ownedEntities)
+			{
+				Vec3 p = entity.position();
+				double distSq = p.distanceToSqr(centerVec);
+				if(!infinite && distSq > rangeSq)
+					continue;
+				
+				Entity owner = getEntityOwner(entity);
+				UUID ownerUuid = getEntityOwnerUuid(entity);
+				
+				// Skip entities with no identifiable owner
+				if(owner == null && ownerUuid == null)
+					continue;
+				
+				// If we have a UUID but no entity, require a known name
+				String ownerName = ownerUuid == null ? null
+					: OwnerResolver.lookupPlayerName(ownerUuid);
+				if(owner == null && !hasResolvableOwnerName(ownerName))
+					continue;
+				
+				boolean ownedByMe = MC.player != null && ownerUuid != null
+					&& ownerUuid.equals(MC.player.getUUID())
+					|| owner == MC.player;
+				
+				ItemStack icon = iconForOwnedEntity(entity);
+				String label = "Owned entity: " + ownedEntityLabel(entity)
+					+ " (" + getOwnerLabel(entity, owner) + ")";
+				trackedLabels.add(new NearbyLabel(p, entity.getBoundingBox(),
+					icon, label, Math.sqrt(distSq),
+					getOwnedEntityTraceId(entity.getUUID()), ownedByMe));
+			}
+		}
+		
+		trackedLabels.sort(java.util.Comparator
+			.comparingInt((NearbyLabel l) -> l.isOwnedByMe() ? 0 : 1)
+			.thenComparingDouble(NearbyLabel::distance));
+		
+		int max = signMax.getValueI();
+		if(trackedLabels.size() > max)
+			trackedLabels.subList(max, trackedLabels.size()).clear();
+	}
+	
+	private void addPlayerHeadLabels(Vec3 centerVec, double range,
+		boolean infinite, double rangeSq)
+	{
+		ChunkUtils.getLoadedBlockEntities().forEach(be -> {
+			if(!(be instanceof SkullBlockEntity skull))
+				return;
+			
+			ResolvableProfile profile = skull.getOwnerProfile();
+			if(profile == null)
+				return;
+			String owner = profile.name().orElse("").trim();
+			if(owner.isEmpty())
+				return;
+			
+			BlockPos pos = skull.getBlockPos();
+			Vec3 point = Vec3.atCenterOf(pos);
+			double distSq = point.distanceToSqr(centerVec);
+			if(!infinite && distSq > rangeSq)
+				return;
+			
+			ItemStack icon = new ItemStack(Items.PLAYER_HEAD);
+			icon.set(net.minecraft.core.component.DataComponents.PROFILE,
+				profile);
+			String label = owner + "'s Head";
+			trackedLabels.add(new NearbyLabel(point, new AABB(pos), icon, label,
+				Math.sqrt(distSq), getSkullTraceId(pos)));
+		});
+	}
+	
+	private ItemStack iconForBlockEntity(BlockEntity be, ItemStack fallback)
+	{
+		try
+		{
+			BlockPos pos = be.getBlockPos();
+			if(pos != null)
+			{
+				ItemStack icon = new ItemStack(
+					MC.level.getBlockState(pos).getBlock().asItem());
+				if(!icon.isEmpty())
+					return icon;
+			}
+		}catch(Throwable ignored)
+		{}
+		
+		return fallback.copy();
+	}
+	
+	private static String readCustomName(Object object)
+	{
+		if(!(object instanceof Nameable nameable))
+			return "";
+		
+		try
+		{
+			if(!nameable.hasCustomName())
+				return "";
+			net.minecraft.network.chat.Component customName =
+				nameable.getCustomName();
+			if(customName == null)
+				return "";
+			return readNameText(customName);
+		}catch(Throwable ignored)
+		{
+			return "";
+		}
+	}
+	
+	private static String readNameText(
+		net.minecraft.network.chat.Component customName)
+	{
+		if(customName == null)
+			return "";
+		String text = customName.getString();
+		if(text == null)
+			return "";
+		String trimmed = text.trim();
+		if(trimmed.isEmpty())
+			return "";
+		if(trimmed.length() > 80)
+			return trimmed.substring(0, 77) + "...";
+		return trimmed;
+	}
+	
+	private static String readSignText(SignBlockEntity sign)
+	{
+		if(sign == null)
+			return "";
+		
+		try
+		{
+			SignText signText = sign.getText(true);
+			if(signText == null)
+				return "";
+			
+			java.util.StringJoiner joiner = new java.util.StringJoiner(" | ");
+			for(int i = 0; i < 4; i++)
+			{
+				net.minecraft.network.chat.Component c =
+					signText.getMessages(false)[i];
+				if(c == null)
+					continue;
+				String s = c.getString();
+				if(s == null)
+					continue;
+				String trimmed = s.trim();
+				if(trimmed.isEmpty())
+					continue;
+				joiner.add(trimmed);
+			}
+			
+			String out = joiner.toString();
+			if(out.length() > 80)
+				out = out.substring(0, 77) + "...";
+			return out;
+			
+		}catch(Throwable t)
+		{
+			return "";
+		}
+	}
+	
+	private boolean shouldTrack(ItemEntity entity)
+	{
+		return entity != null && entity.isAlive() && !entity.isRemoved()
+			&& !entity.getItem().isEmpty();
+	}
+	
+	private boolean shouldTrackItemFrame(ItemFrame frame)
+	{
+		if(frame == null || !frame.isAlive() || frame.isRemoved())
+			return false;
+		ItemStack stack = frame.getItem();
+		if(stack == null || stack.isEmpty())
+			return false;
+		return !isIgnoredByItemEsp(stack);
+	}
+	
+	private boolean shouldTrackMobEquipment(ItemStack stack)
+	{
+		if(stack == null || stack.isEmpty())
+			return false;
+		if(isIgnoredByItemEsp(stack))
+			return false;
+		return !filterDefaultMobEquipment.isChecked()
+			|| !isDefaultMobEquipment(stack);
+	}
+	
+	private boolean isDefaultMobEquipment(ItemStack stack)
+	{
+		if(stack == null || stack.isEmpty())
+			return false;
+		String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+			.getKey(stack.getItem()).toString();
+		if(DEFAULT_MOB_EQUIPMENT_IDS.contains(id))
+			return true;
+		String path = net.minecraft.core.registries.BuiltInRegistries.ITEM
+			.getKey(stack.getItem()).getPath();
+		for(String material : DEFAULT_MOB_EQUIPMENT_MATERIALS)
+		{
+			if(!path.contains(material))
+				continue;
+			for(String suffix : DEFAULT_MOB_EQUIPMENT_SUFFIXES)
+			{
+				if(path.endsWith(suffix))
+					return true;
+			}
+		}
+		return false;
+	}
+	
+	private void addMobEquipmentItems(LocalPlayer player, double scanRadius)
+	{
+		if(player == null || MC.level == null)
+			return;
+		
+		List<LivingEntity> living =
+			MC.level.getEntitiesOfClass(LivingEntity.class,
+				player.getBoundingBox().inflate((float)scanRadius),
+				e -> e != null && e.isAlive() && !e.isRemoved() && e != player);
+		
+		for(LivingEntity le : living)
+		{
+			if(le instanceof Player)
+				continue;
+			if(le instanceof ArmorStand stand)
+			{
+				if(detectArmorStandEquipment.isChecked())
+					addArmorStandEquipmentItems(stand);
+				continue;
+			}
+			
+			String mobName = le.getName().getString();
+			
+			ItemStack main = le.getMainHandItem();
+			if(shouldTrackMobEquipment(main))
+			{
+				Vec3 pos = getHeldItemPos(le, InteractionHand.MAIN_HAND);
+				addMobTrackedItem(le, main, pos, SourceType.MOB_HELD, mobName);
+			}
+			
+			ItemStack off = le.getOffhandItem();
+			if(shouldTrackMobEquipment(off))
+			{
+				Vec3 pos = getHeldItemPos(le, InteractionHand.OFF_HAND);
+				addMobTrackedItem(le, off, pos, SourceType.MOB_HELD, mobName);
+			}
+			
+			for(EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD,
+				EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET})
+			{
+				ItemStack armor = le.getItemBySlot(slot);
+				if(!shouldTrackMobEquipment(armor))
+					continue;
+				Vec3 pos = getArmorPos(le, slot);
+				addMobTrackedItem(le, armor, pos, SourceType.MOB_WORN, mobName);
+			}
+		}
+	}
+	
+	private void addArmorStandEquipmentItems(ArmorStand stand)
+	{
+		if(stand == null)
+			return;
+		
+		String standName = getArmorStandDisplayName(stand);
+		for(EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD,
+			EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET})
+		{
+			ItemStack armor = stand.getItemBySlot(slot);
+			if(!shouldTrackMobEquipment(armor))
+				continue;
+			
+			Vec3 pos = getArmorPos(stand, slot);
+			String sourceName = standName + " " + armorSlotLabel(slot);
+			String enchants = getEnchantmentSummary(armor);
+			if(!enchants.isEmpty())
+				sourceName += " - " + enchants;
+			
+			addMobTrackedItem(stand, armor, pos, SourceType.MOB_WORN,
+				sourceName);
+		}
+	}
+	
+	private String getArmorStandDisplayName(ArmorStand stand)
+	{
+		if(stand == null)
+			return "armor stand";
+		
+		String custom =
+			stand.getName() != null ? stand.getName().getString() : "";
+		if(custom != null && !custom.isBlank())
+			return custom.trim();
+		
+		return "armor stand";
+	}
+	
+	private String armorSlotLabel(EquipmentSlot slot)
+	{
+		return switch(slot)
+		{
+			case HEAD -> "(head)";
+			case CHEST -> "(chest)";
+			case LEGS -> "(legs)";
+			case FEET -> "(feet)";
+			default -> "";
+		};
+	}
+	
+	private void addMobTrackedItem(LivingEntity le, ItemStack stack, Vec3 pos,
+		SourceType sourceType, String mobName)
+	{
+		if(le == null || stack == null || stack.isEmpty())
+			return;
+		Vec3 position = pos != null ? pos : le.position();
+		double distance =
+			MC.player != null ? MC.player.position().distanceTo(position) : 0.0;
+		trackedItems.add(new GroundItem(le.getId(), le.getUUID(), stack.copy(),
+			distance, position, sourceType, mobName));
+	}
+	
+	private Vec3 getHeldItemPos(LivingEntity e, InteractionHand hand)
+	{
+		if(e == null || hand == null)
+			return null;
+		Vec3 base = e.position();
+		double yawRad = Math.toRadians(e.getYRot());
+		HumanoidArm mainArm = HumanoidArm.RIGHT;
+		if(e instanceof Player pe)
+			mainArm = pe.getMainArm();
+		boolean rightSide =
+			(mainArm == HumanoidArm.RIGHT && hand == InteractionHand.MAIN_HAND)
+				|| (mainArm == HumanoidArm.LEFT
+					&& hand == InteractionHand.OFF_HAND);
+		double side = rightSide ? -1 : 1;
+		double eyeH = e.getEyeHeight(e.getPose());
+		double offX = Math.cos(yawRad) * 0.16 * side;
+		double offY = eyeH - 0.1;
+		double offZ = Math.sin(yawRad) * 0.16 * side;
+		return base.add(offX, offY, offZ);
+	}
+	
+	private Vec3 getArmorPos(LivingEntity e, EquipmentSlot slot)
+	{
+		if(e == null)
+			return null;
+		Vec3 base = e.position();
+		double height = e.getBbHeight();
+		double y;
+		switch(slot)
+		{
+			case HEAD -> y = e.getEyeHeight(e.getPose()) + 0.05;
+			case CHEST -> y = height * 0.75;
+			case LEGS -> y = height * 0.5;
+			case FEET -> y = height * 0.25;
+			default -> y = height * 0.5;
+		}
+		return base.add(0, y, 0);
+	}
+	
+	private void processPickupQueue()
+	{
+		if(pickFilterActive)
+			for(GroundItem item : trackedItems)
+				if(item.sourceType() == SourceType.GROUND
+					&& selectedTargets.containsKey(item.uuid())
+					&& !collectedTargets.contains(item.uuid())
+					&& !pickupQueue.contains(item.entityId()))
+					pickupQueue.add(item.entityId());
+		while(!pickupQueue.isEmpty())
+		{
+			if(MC.player == null || MC.level == null)
+			{
+				pickupQueue.clear();
+				break;
+			}
+			
+			int targetId = pickupQueue.peek();
+			ItemEntity target = getItemEntity(targetId);
+			if(target == null || target.isRemoved())
+			{
+				pickupQueue.poll();
+				continue;
+			}
+			
+			double distance = target.distanceTo(MC.player);
+			if(distance <= SCAN_RADIUS + 0.2)
+			{
+				whitelist(targetId);
+				if(distance > 1.0)
+					driveToward(target);
+				else
+					stopAutoWalk();
+				if(!hasPickupSpace(target.getItem()))
+					selectionWarn(
+						"inventory is full; make room for selected items.");
+				return;
+			}
+			
+			driveToward(target);
+			return;
+		}
+		
+		stopAutoWalk();
+	}
+	
+	private boolean hasPickupSpace(ItemStack wanted)
+	{
+		if(MC.player.getInventory().getFreeSlot() >= 0)
+			return true;
+		for(int i = 0; i < 36; i++)
+		{
+			ItemStack stack = MC.player.getInventory().getItem(i);
+			if(ItemStack.isSameItemSameComponents(stack, wanted)
+				&& stack.getCount() < stack.getMaxStackSize())
+				return true;
+		}
+		return false;
+	}
+	
+	private ItemEntity getItemEntity(int id)
+	{
+		Entity entity = MC.level.getEntity(id);
+		return entity instanceof ItemEntity item ? item : null;
+	}
+	
+	private void driveToward(ItemEntity target)
+	{
+		if(!(MC.player instanceof LocalPlayer))
+			return;
+		
+		Vec3 targetPos = target.position();
+		WURST.getRotationFaker().faceVectorClientIgnorePitch(targetPos);
+		IKeyBinding.get(MC.options.keyUp).simulatePress(true);
+		autoWalking = true;
+	}
+	
+	private void stopAutoWalk()
+	{
+		if(!autoWalking)
+			return;
+		
+		IKeyBinding.get(MC.options.keyUp).resetDownState();
+		autoWalking = false;
+	}
+	
+	private void whitelist(int entityId)
+	{
+		pickupWhitelist.put(entityId, WHITELIST_TICKS);
+	}
+	
+	public boolean shouldAllowPickup(ItemEntity entity)
+	{
+		return entity != null && (pickFilterActive
+			? selectedTargets.containsKey(entity.getUUID())
+				&& !collectedTargets.contains(entity.getUUID())
+			: pickupWhitelist.containsKey(entity.getId()));
+	}
+	
+	public List<GroundItem> getTrackedItems()
+	{
+		return trackedItems.stream()
+			.filter(g -> !isPickFilterActive()
+				|| g.sourceType() != SourceType.GROUND
+				|| selectedTargets.containsKey(g.uuid()))
+			.toList();
+	}
+	
+	public void openScreen()
+	{
+		if(MC.player == null || MC.level == null)
+			return;
+		
+		Screen prev = MC.screen;
+		MC.setScreen(new ItemHandlerScreen(prev, this));
+	}
+	
+	public void requestPickup(Collection<Integer> entityIds)
+	{
+		if(entityIds == null || entityIds.isEmpty())
+			return;
+		
+		for(int entityId : entityIds)
+		{
+			if(pickFilterActive)
+			{
+				ItemEntity entity = getItemEntity(entityId);
+				if(entity == null
+					|| !selectedTargets.containsKey(entity.getUUID()))
+					continue;
+			}
+			if(entityId == 0 || pickupQueue.contains(entityId))
+			{
+				whitelist(entityId);
+				continue;
+			}
+			pickupQueue.add(entityId);
+		}
+	}
+	
+	public void addRejectedRulesFromItems(Collection<GroundItem> items)
+	{
+		if(items == null || items.isEmpty())
+			return;
+		
+		double radius = rejectRadius.getValueF();
+		long expiryMillis = (long)(rejectExpiry.getValueI() * 1000L);
+		
+		for(GroundItem gi : items)
+		{
+			if(gi.sourceType() != SourceType.GROUND
+				&& gi.sourceType() != SourceType.XP_ORB)
+				continue;
+			String itemId = net.minecraft.core.registries.BuiltInRegistries.ITEM
+				.getKey(gi.stack().getItem()).toString();
+			int amt = gi.stack().getCount();
+			rejectedRules.add(new RejectedRule(itemId, gi.position(), radius,
+				expiryMillis, amt));
+		}
+	}
+	
+	public void addIgnoredItemsFromItems(Collection<GroundItem> items)
+	{
+		if(items == null || items.isEmpty())
+			return;
+		
+		net.wurstclient.hacks.ItemEspHack esp =
+			net.wurstclient.WurstClient.INSTANCE.getHax().itemEspHack;
+		if(esp == null)
+			return;
+		
+		net.wurstclient.settings.ItemListSetting list =
+			itemEspIgnoredListSetting;
+		java.util.Set<String> added = new java.util.HashSet<>();
+		for(GroundItem gi : items)
+		{
+			if(gi.sourceType() != SourceType.GROUND
+				&& gi.sourceType() != SourceType.XP_ORB)
+				continue;
+			String id = gi.traceId();
+			if(id == null)
+				continue;
+			if(added.contains(id))
+				continue;
+			added.add(id);
+			net.minecraft.world.item.Item item =
+				net.wurstclient.util.ItemUtils.getItemFromNameOrID(id);
+			if(item != null)
+				list.add(item);
+		}
+	}
+	
+	public void toggleTracedItem(String itemId)
+	{
+		if(itemId == null)
+			return;
+		if(tracedItems.contains(itemId))
+			tracedItems.remove(itemId);
+		else
+			tracedItems.add(itemId);
+	}
+	
+	public void setTraced(String itemId, boolean traced)
+	{
+		if(itemId == null)
+			return;
+		if(traced)
+			tracedItems.add(itemId);
+		else
+			tracedItems.remove(itemId);
+	}
+	
+	public boolean isTraced(String itemId)
+	{
+		return itemId != null && tracedItems.contains(itemId);
+	}
+	
+	public java.util.Set<String> getTracedItems()
+	{
+		return java.util.Set.copyOf(tracedItems);
+	}
+	
+	public List<NearbyLabel> getTrackedLabels()
+	{
+		return List.copyOf(trackedLabels);
+	}
+	
+	public static String getSignTraceId(BlockPos pos)
+	{
+		if(pos == null)
+			return null;
+		return "sign:" + pos.asLong();
+	}
+	
+	public static String getNamedEntityTraceId(UUID uuid)
+	{
+		if(uuid == null)
+			return null;
+		return "named_entity:" + uuid;
+	}
+	
+	public static String getSkullTraceId(BlockPos pos)
+	{
+		return pos == null ? null : "skull:" + pos.asLong();
+	}
+	
+	public boolean isShowSignsInHud()
+	{
+		return showSignsInHud.isChecked();
+	}
+	
+	public record NearbyLabel(Vec3 position, AABB box, ItemStack icon,
+		String text, double distance, String traceId, boolean isOwnedByMe)
+	{
+		public NearbyLabel(Vec3 position, AABB box, ItemStack icon, String text,
+			double distance, String traceId)
+		{
+			this(position, box, icon, text, distance, traceId, false);
+		}
+	}
+	
+	public boolean isHudEnabled()
+	{
+		return hudEnabled.isChecked();
+	}
+	
+	public double getPopupRange()
+	{
+		// Always return the numeric slider value here. The special "infinite"
+		// behavior is handled in scanning logic to avoid passing Infinity into
+		// math that doesn't support it.
+		return popupRange.getValueF();
+	}
+	
+	public double getPopupScale()
+	{
+		return popupScale.getValueF();
+	}
+	
+	public int getPopupMaxItems()
+	{
+		return popupMaxItems.getValueI();
+	}
+	
+	public boolean isPinSpecialItemsTop()
+	{
+		return pinSpecialItemsTop.isChecked();
+	}
+	
+	public int getHudOffsetX()
+	{
+		return hudOffsetX.getValueI();
+	}
+	
+	public int getHudOffsetY()
+	{
+		return hudOffsetY.getValueI();
+	}
+	
+	public int getHudOffsetMinX()
+	{
+		return (int)hudOffsetX.getMinimum();
+	}
+	
+	public int getHudOffsetMaxX()
+	{
+		return (int)hudOffsetX.getMaximum();
+	}
+	
+	public int getHudOffsetMinY()
+	{
+		return (int)hudOffsetY.getMinimum();
+	}
+	
+	public int getHudOffsetMaxY()
+	{
+		return (int)hudOffsetY.getMaximum();
+	}
+	
+	public void setHudOffsets(int x, int y)
+	{
+		hudOffsetX.setValue(x);
+		hudOffsetY.setValue(y);
+	}
+	
+	public boolean isShowRegistryName()
+	{
+		return showRegistryName.isChecked();
+	}
+	
+	/**
+	 * Returns the useful extra tooltip line for a player head, such as
+	 * "Killed by Flirmaput". ItemHandler normally only uses getHoverName(),
+	 * which intentionally omits these additional tooltip lines.
+	 */
+	public String getItemSubtitle(ItemStack stack)
+	{
+		if(stack == null || stack.isEmpty()
+			|| stack.getItem() != Items.PLAYER_HEAD)
+			return "";
+		
+		try
+		{
+			List<net.minecraft.network.chat.Component> lines =
+				stack.getTooltipLines(Item.TooltipContext.of(MC.level),
+					MC.player, TooltipFlag.NORMAL);
+			for(net.minecraft.network.chat.Component line : lines)
+			{
+				String text = line.getString();
+				if(text != null
+					&& text.toLowerCase(Locale.ROOT).contains("killed by"))
+					return text.trim();
+			}
+		}catch(Throwable ignored)
+		{}
+		return "";
+	}
+	
+	public boolean isShowEnchantmentsInNames()
+	{
+		return showEnchantmentsInNames.isChecked();
+	}
+	
+	public record GroundItem(int entityId, UUID uuid, ItemStack stack,
+		double distance, Vec3 position, SourceType sourceType,
+		String sourceName)
+	{
+		public String baseId()
+		{
+			String id = net.wurstclient.util.ItemUtils.getStackId(stack);
+			if(id != null)
+				return id;
+			return net.minecraft.core.registries.BuiltInRegistries.ITEM
+				.getKey(stack.getItem()).toString();
+		}
+		
+		public String traceId()
+		{
+			String baseId = baseId();
+			if(net.wurstclient.util.ItemUtils.isSyntheticXp(stack))
+			{
+				int xp = net.wurstclient.util.ItemUtils.getXpAmount(stack);
+				return baseId + ":xp:" + xp;
+			}
+			if(sourceType == SourceType.ITEM_FRAME)
+				return baseId + ":item_frame";
+			if(sourceType == SourceType.SHELF)
+				return baseId + ":shelf";
+			return baseId;
+		}
+		
+		public String sourceLabel()
+		{
+			if(sourceType == SourceType.MOB_HELD)
+				return "held by " + (sourceName != null ? sourceName : "mob");
+			if(sourceType == SourceType.MOB_WORN)
+				return "worn by " + (sourceName != null ? sourceName : "mob");
+			if(sourceType == SourceType.ITEM_FRAME)
+				return "in item frame";
+			if(sourceType == SourceType.SHELF)
+				return "in shelf";
+			return "";
+		}
+		
+		public String displayName()
+		{
+			String name = stack.getHoverName().getString();
+			if(name == null || name.isBlank())
+				name = net.minecraft.core.registries.BuiltInRegistries.ITEM
+					.getKey(stack.getItem()).getPath();
+			
+			String label = sourceLabel();
+			if(label == null || label.isBlank())
+				return name;
+			return name + " (" + label + ")";
+		}
+		
+		public String key()
+		{
+			return uuid.toString();
+		}
+		
+		public ComponentSummary summary()
+		{
+			return new ComponentSummary(displayName(), stack.getCount(),
+				distance);
+		}
+	}
+	
+	public record ComponentSummary(String displayName, int count,
+		double distance)
+	{
+		public String distanceText()
+		{
+			return String.format(Locale.ROOT, "%.2f m", distance);
+		}
+	}
+	
+	@Override
+	public void onRender(PoseStack matrixStack, float partialTicks)
+	{
+		if(tracedItems.isEmpty() && !pickFilterActive)
+			return;
+		
+		net.wurstclient.hacks.ItemEspHack esp =
+			net.wurstclient.WurstClient.INSTANCE.getHax().itemEspHack;
+		boolean espEnabled = esp != null && esp.isEnabled();
+		// Beast's ItemESP doesn't say whether it draws tracers
+		boolean espHasTracerLines = false;
+		boolean shouldDrawBoxes = pickFilterActive || !espEnabled;
+		boolean shouldDrawTracers = pickFilterActive || !espHasTracerLines;
+		if(!shouldDrawBoxes && !shouldDrawTracers)
+			return;
+		
+		java.util.ArrayList<AABB> boxes =
+			shouldDrawBoxes ? new java.util.ArrayList<>() : null;
+		java.util.ArrayList<RenderUtils.ColoredPoint> ends =
+			shouldDrawTracers ? new java.util.ArrayList<>() : null;
+		for(GroundItem gi : trackedItems)
+		{
+			String traceId = gi.traceId();
+			boolean traced = traceId != null && isTraced(traceId);
+			if(pickFilterActive && gi.sourceType() == SourceType.GROUND)
+				traced = selectedTargets.containsKey(gi.uuid());
+			if(!traced)
+				continue;
+			Vec3 p = gi.position();
+			if(shouldDrawBoxes)
+				boxes.add(new AABB(p.x - 0.18, p.y - 0.18, p.z - 0.18,
+					p.x + 0.18, p.y + 0.18, p.z + 0.18));
+			if(shouldDrawTracers)
+				ends.add(new RenderUtils.ColoredPoint(p, 0));
+		}
+		
+		for(NearbyLabel label : trackedLabels)
+		{
+			if(label == null || label.box() == null)
+				continue;
+			String traceId = label.traceId();
+			boolean traced = traceId != null && isTraced(traceId);
+			if(!traced)
+				continue;
+			Vec3 p = label.position();
+			if(shouldDrawBoxes)
+				boxes.add(label.box());
+			if(shouldDrawTracers)
+				ends.add(new RenderUtils.ColoredPoint(p, 0));
+		}
+		boolean hasBoxes = shouldDrawBoxes && boxes != null && !boxes.isEmpty();
+		boolean hasTracers =
+			shouldDrawTracers && ends != null && !ends.isEmpty();
+		if(!hasBoxes && !hasTracers)
+			return;
+		float[] rf = RenderUtils.getRainbowColor();
+		int traceLines = RenderUtils.toIntColor(rf, 0.5f);
+		int traceQuads = RenderUtils.toIntColor(rf, 0.35f);
+		if(hasTracers)
+			for(int i = 0; i < ends.size(); i++)
+			{
+				Vec3 p = ends.get(i).point();
+				ends.set(i, new RenderUtils.ColoredPoint(p, traceLines));
+			}
+		if(hasBoxes)
+		{
+			RenderUtils.drawSolidBoxes(matrixStack, boxes, traceQuads, false);
+			RenderUtils.drawOutlinedBoxes(matrixStack, boxes, traceLines,
+				false);
+		}
+		if(hasTracers)
+			RenderUtils.drawTracers("itemhandler", matrixStack, partialTicks,
+				ends, false, tracerThickness.getValue());
+	}
+	
+	private boolean isIgnoredByItemEsp(ItemStack stack)
+	{
+		if(!respectItemEspIgnores.isChecked())
+			return false;
+		net.wurstclient.hacks.ItemEspHack esp =
+			net.wurstclient.WurstClient.INSTANCE.getHax().itemEspHack;
+		if(esp == null)
+			return false;
+		String id = net.wurstclient.util.ItemUtils.getStackId(stack);
+		return itemEspIgnoredListSetting.contains(id);
+	}
+	
+	private boolean isIgnoredNamedEntityByItemEsp(String customName)
+	{
+		if(!respectItemEspIgnores.isChecked())
+			return false;
+		if(customName == null || customName.isBlank())
+			return false;
+		
+		net.wurstclient.hacks.ItemEspHack esp =
+			net.wurstclient.WurstClient.INSTANCE.getHax().itemEspHack;
+		if(esp == null)
+			return false;
+		
+		net.wurstclient.settings.ItemListSetting list =
+			itemEspIgnoredListSetting;
+		
+		String normalizedName = normalizeForContains(customName);
+		if(normalizedName.isEmpty())
+			return false;
+		
+		for(String entry : list.getItemNames())
+		{
+			if(entry == null)
+				continue;
+			String trimmed = entry.trim();
+			if(trimmed.isEmpty())
+				continue;
+			String normalizedEntry = normalizeForContains(trimmed);
+			if(normalizedEntry.isEmpty())
+				continue;
+			if(normalizedName.equals(normalizedEntry)
+				|| normalizedName.contains(normalizedEntry))
+				return true;
+		}
+		
+		return false;
+	}
+	
+	private static String normalizeForContains(String value)
+	{
+		if(value == null)
+			return "";
+		return value.toLowerCase(Locale.ROOT).replace('_', ' ')
+			.replaceAll("\\s+", " ").trim();
+	}
+	
+	public boolean isSpecialByItemEsp(ItemStack stack)
+	{
+		net.wurstclient.hacks.ItemEspHack esp =
+			net.wurstclient.WurstClient.INSTANCE.getHax().itemEspHack;
+		if(esp == null)
+			return false;
+		return stack != null
+			&& itemEspSpecialListSetting.contains(stack.getItem());
+	}
+	
+	public enum SourceType
+	{
+		GROUND,
+		XP_ORB,
+		ITEM_FRAME,
+		SHELF,
+		MOB_HELD,
+		MOB_WORN
+	}
+	
+	private static int getShelfSlotEntityId(BlockPos pos, int slot)
+	{
+		int hash = Long
+			.hashCode(pos.asLong() ^ ((long)slot + 1L) * 0x9E3779B97F4A7C15L);
+		if(hash == 0)
+			return Integer.MIN_VALUE;
+		return hash > 0 ? -hash : hash;
+	}
+	
+	private static UUID getShelfSlotUuid(BlockPos pos, int slot)
+	{
+		String key = "shelf:" + pos.asLong() + ":" + slot;
+		return UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8));
+	}
+	
+	private static String getCraftedEntityTraceId(UUID uuid)
+	{
+		if(uuid == null)
+			return null;
+		return "crafted_entity:" + uuid;
+	}
+	
+	private static String getOwnedEntityTraceId(UUID uuid)
+	{
+		if(uuid == null)
+			return null;
+		return "owned_entity:" + uuid;
+	}
+	
+	private boolean isOwnerCapableEntity(Entity entity)
+	{
+		if(entity == null || entity == MC.player)
+			return false;
+		if(entity instanceof Projectile projectile)
+			return isPlayerOwnedProjectile(projectile);
+		if(entity instanceof OwnableEntity)
+			return true;
+		
+		try
+		{
+			Method method = entity.getClass().getMethod("getOwner");
+			return Entity.class.isAssignableFrom(method.getReturnType());
+		}catch(NoSuchMethodException e)
+		{
+			return false;
+		}catch(SecurityException e)
+		{
+			return false;
+		}
+	}
+	
+	private static boolean isPlayerOwnedProjectile(Projectile projectile)
+	{
+		Entity owner = projectile.getOwner();
+		return owner instanceof Player;
+	}
+	
+	private Entity getEntityOwner(Entity entity)
+	{
+		if(entity instanceof Projectile projectile)
+			return projectile.getOwner();
+		if(entity instanceof OwnableEntity ownable)
+			return ownable.getOwner();
+		
+		try
+		{
+			Method method = entity.getClass().getMethod("getOwner");
+			Object owner = method.invoke(entity);
+			if(owner instanceof Entity ownerEntity)
+				return ownerEntity;
+		}catch(Exception ignored)
+		{}
+		
+		return null;
+	}
+	
+	private String getOwnerLabel(Entity entity, Entity owner)
+	{
+		UUID ownerUuid = getEntityOwnerUuid(entity);
+		if(ownerUuid != null)
+		{
+			if(MC.player != null && ownerUuid.equals(MC.player.getUUID()))
+				return "Owner: You";
+			
+			String name = OwnerResolver.lookupPlayerName(ownerUuid);
+			if(hasResolvableOwnerName(name))
+				return "Owner: " + name;
+		}
+		
+		if(owner == MC.player)
+			return "Owner: You";
+		if(owner instanceof Player player)
+			return "Owner: " + player.getName().getString();
+		if(owner != null)
+			return "Owner: " + entityDisplayName(owner);
+		return "Owner: Unknown";
+	}
+	
+	private boolean hasResolvableOwnerName(String name)
+	{
+		return name != null && !name.isBlank()
+			&& !OwnerResolver.DUMMY_NAME.equals(name);
+	}
+	
+	private UUID getEntityOwnerUuid(Entity entity)
+	{
+		if(entity == null)
+			return null;
+		return OwnerResolver.getOwnerUuid(entity);
+	}
+	
+	private ItemStack iconForOwnedEntity(Entity entity)
+	{
+		String path =
+			net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+				.getKey(entity.getType()).getPath();
+		return switch(path)
+		{
+			case "ender_pearl" -> new ItemStack(Items.ENDER_PEARL);
+			case "arrow" -> new ItemStack(Items.ARROW);
+			case "spectral_arrow" -> new ItemStack(Items.SPECTRAL_ARROW);
+			case "trident" -> new ItemStack(Items.TRIDENT);
+			case "snowball" -> new ItemStack(Items.SNOWBALL);
+			case "egg" -> new ItemStack(Items.EGG);
+			case "potion", "area_effect_cloud" -> new ItemStack(Items.POTION);
+			case "experience_bottle" -> new ItemStack(Items.EXPERIENCE_BOTTLE);
+			case "firework_rocket" -> new ItemStack(Items.FIREWORK_ROCKET);
+			case "wind_charge", "breeze_wind_charge" -> new ItemStack(
+				Items.WIND_CHARGE);
+			case "fireball", "small_fireball", "dragon_fireball" -> new ItemStack(
+				Items.FIRE_CHARGE);
+			case "fishing_bobber" -> new ItemStack(Items.FISHING_ROD);
+			case "tnt" -> new ItemStack(Items.TNT);
+			default -> new ItemStack(Items.NAME_TAG);
+		};
+	}
+	
+	private String ownedEntityLabel(Entity entity)
+	{
+		return entityDisplayName(entity);
+	}
+	
+	private String entityDisplayName(Entity entity)
+	{
+		if(entity == null)
+			return "entity";
+		
+		String name = entity.getName().getString();
+		if(name != null && !name.isBlank())
+			return name;
+		
+		String path =
+			net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+				.getKey(entity.getType()).getPath();
+		return path.replace('_', ' ');
+	}
+	
+	private boolean isTrackedCraftedEntityType(Entity entity)
+	{
+		if(entity == null)
+			return false;
+		
+		String path =
+			net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+				.getKey(entity.getType()).getPath();
+		return path.endsWith("_boat") || path.endsWith("_chest_boat")
+			|| path.equals("bamboo_raft") || path.equals("bamboo_chest_raft")
+			|| path.equals("painting") || path.equals("glow_item_frame")
+			|| path.equals("furnace_minecart") || path.equals("hopper_minecart")
+			|| path.equals("tnt_minecart");
+	}
+	
+	private ItemStack iconForCraftedEntity(Entity entity)
+	{
+		if(entity == null)
+			return new ItemStack(Items.NAME_TAG);
+		
+		String path =
+			net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+				.getKey(entity.getType()).getPath();
+		if(path.endsWith("_boat") || path.equals("bamboo_raft")
+			|| path.equals("bamboo_chest_raft"))
+			return new ItemStack(Items.OAK_BOAT);
+		if(path.endsWith("_chest_boat"))
+			return new ItemStack(Items.OAK_CHEST_BOAT);
+		if(path.equals("painting"))
+			return new ItemStack(Items.PAINTING);
+		if(path.equals("glow_item_frame"))
+			return new ItemStack(Items.GLOW_ITEM_FRAME);
+		if(path.equals("furnace_minecart"))
+			return new ItemStack(Items.FURNACE_MINECART);
+		if(path.equals("hopper_minecart"))
+			return new ItemStack(Items.HOPPER_MINECART);
+		if(path.equals("tnt_minecart"))
+			return new ItemStack(Items.TNT_MINECART);
+		
+		return new ItemStack(Items.NAME_TAG);
+	}
+	
+	private String craftedEntityLabel(Entity entity)
+	{
+		if(entity == null)
+			return "entity";
+		
+		String path =
+			net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+				.getKey(entity.getType()).getPath();
+		return switch(path)
+		{
+			case "bamboo_raft" -> "Bamboo raft";
+			case "bamboo_chest_raft" -> "Bamboo chest raft";
+			case "painting" -> "Painting";
+			case "glow_item_frame" -> "Glow item frame";
+			case "furnace_minecart" -> "Minecart with furnace";
+			case "hopper_minecart" -> "Minecart with hopper";
+			case "tnt_minecart" -> "Minecart with TNT";
+			default ->
+			{
+				if(path.endsWith("_chest_boat"))
+					yield "Chest boat";
+				if(path.endsWith("_boat"))
+					yield "Boat";
+				yield path.replace('_', ' ');
+			}
+		};
+	}
+	
+	// Inline ItemESP ignored-items editor in ItemHandler settings
+	// The CevAPI original edited lists that its ItemESP owned; Beast's ItemESP
+	// has no such lists, so ItemHandler keeps its own.
+	private final ItemListSetting itemEspIgnoredListSetting =
+		new ItemListSetting("Ignored items",
+			WText.literal("Items ItemHandler leaves out."));
+	
+	private final ItemListSetting itemEspSpecialListSetting =
+		new ItemListSetting("Special items",
+			WText.literal("Items ItemHandler marks as special."));
+	
+	public String getEnchantmentSummary(ItemStack stack)
+	{
+		if(stack == null || stack.isEmpty())
+			return "";
+		
+		ArrayList<String> parts = new ArrayList<>();
+		LinkedHashSet<String> seen = new LinkedHashSet<>();
+		appendEnchantmentParts(parts, seen, stack
+			.getOrDefault(DataComponents.ENCHANTMENTS, ItemEnchantments.EMPTY));
+		appendEnchantmentParts(parts, seen, stack.getOrDefault(
+			DataComponents.STORED_ENCHANTMENTS, ItemEnchantments.EMPTY));
+		if(parts.isEmpty())
+			return "";
+		parts.sort(String.CASE_INSENSITIVE_ORDER);
+		return String.join(", ", parts);
+	}
+	
+	private static void appendEnchantmentParts(List<String> out,
+		Set<String> seen, ItemEnchantments enchantments)
+	{
+		for(Object2IntMap.Entry<Holder<Enchantment>> entry : enchantments
+			.entrySet())
+		{
+			Holder<Enchantment> holder = entry.getKey();
+			int level = entry.getIntValue();
+			String key = holder.getRegisteredName() + "#" + level;
+			if(!seen.add(key))
+				continue;
+			out.add(Enchantment.getFullname(holder, level).getString());
+		}
+	}
+}

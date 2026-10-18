@@ -66,6 +66,13 @@ public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState>
 		if(hax == null)
 			return;
 		
+		// BedBreakAura (ported from the CevAPI fork) clicks through blocks
+		if(hax.bedBreakAuraHack.shouldClearBlock(pos))
+		{
+			cir.setReturnValue(Shapes.empty());
+			return;
+		}
+		
 		HandNoClipHack handNoClipHack = hax.handNoClipHack;
 		if(!handNoClipHack.isEnabled() || handNoClipHack.isBlockInList(pos))
 			return;
@@ -80,6 +87,17 @@ public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState>
 	private void onGetCollisionShape(BlockGetter world, BlockPos pos,
 		CollisionContext context, CallbackInfoReturnable<VoxelShape> cir)
 	{
+		// AntiVoid's client-side floor (ported from the CevAPI fork)
+		HackList antiVoidHax = WurstClient.INSTANCE.getHax();
+		BlockState state = (BlockState)(Object)this;
+		if(antiVoidHax != null && (antiVoidHax.antiVoidHack
+			.shouldMakeFalseFloor(pos, state)
+			|| antiVoidHax.antiVoidHack.shouldMakeLavaFloor(world, pos, state)))
+		{
+			cir.setReturnValue(Shapes.block());
+			return;
+		}
+		
 		if(getFluidState().isEmpty())
 			return;
 		

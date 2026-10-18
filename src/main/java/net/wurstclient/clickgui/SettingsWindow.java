@@ -21,7 +21,8 @@ public final class SettingsWindow extends Window
 		super(feature.getName() + " Settings");
 		
 		Stream<Setting> settings = feature.getSettings().values().stream();
-		settings.map(Setting::getComponent).forEach(this::add);
+		settings.filter(Setting::isVisibleInGui).map(Setting::getComponent)
+			.filter(java.util.Objects::nonNull).forEach(this::add);
 		
 		setClosable(true);
 		setMinimizable(false);

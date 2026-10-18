@@ -22,6 +22,7 @@ public abstract class Setting
 {
 	private final String name;
 	private final WText description;
+	private boolean visibleInGui = true;
 	
 	public Setting(String name, WText description)
 	{
@@ -45,6 +46,29 @@ public abstract class Setting
 	}
 	
 	public abstract Component getComponent();
+	
+	/**
+	 * Puts this setting back to its default value. Settings that support it
+	 * override this.
+	 */
+	public void resetToDefault()
+	{
+		
+	}
+	
+	/**
+	 * False for settings that are only kept for saving and other settings'
+	 * use, and aren't shown in the ClickGUI or Navigator.
+	 */
+	public final boolean isVisibleInGui()
+	{
+		return visibleInGui;
+	}
+	
+	public final void setVisibleInGui(boolean visibleInGui)
+	{
+		this.visibleInGui = visibleInGui;
+	}
 	
 	public abstract void fromJson(JsonElement json);
 	

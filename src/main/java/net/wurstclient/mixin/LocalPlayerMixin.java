@@ -13,6 +13,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
@@ -57,6 +58,9 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 	@Shadow
 	@Final
 	protected Minecraft minecraft;
+	
+	@Shadow
+	private int positionReminder;
 	
 	private Screen tempCurrentScreen;
 	
@@ -189,6 +193,23 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 		EventManager.fire(PostMotionEvent.INSTANCE);
 	}
 	
+	/**
+	 * ElytraWalk (ported from the CevAPI fork) replaces the movement while it
+	 * skates on the ground.
+	 */
+	@ModifyVariable(
+		method = "move(Lnet/minecraft/world/entity/MoverType;Lnet/minecraft/world/phys/Vec3;)V",
+		at = @At("HEAD"),
+		argsOnly = true,
+		ordinal = 0)
+	private Vec3 elytraWalk$groundSkating(Vec3 movement, MoverType type,
+		Vec3 originalMovement)
+	{
+		HackList hax = WurstClient.INSTANCE.getHax();
+		return hax == null ? movement
+			: hax.elytraWalkHack.getGroundMovement(type, movement);
+	}
+	
 	@Inject(
 		method = "move(Lnet/minecraft/world/entity/MoverType;Lnet/minecraft/world/phys/Vec3;)V",
 		at = @At("HEAD"))
@@ -294,6 +315,12 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 	}
 	
 	@Override
+	public void elytraWalk$setPositionReminder(int value)
+	{
+		positionReminder = value;
+	}
+	
+	@Override
 	protected float getJumpPower()
 	{
 		return super.getJumpPower() + WurstClient.INSTANCE.getHax().highJumpHack
@@ -369,6 +396,8 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 	public double blockInteractionRange()
 	{
 		HackList hax = WurstClient.INSTANCE.getHax();
+		if(hax != null && hax.bedBreakAuraHack.isEnabled())
+			return hax.bedBreakAuraHack.getInteractionRange();
 		if(hax == null || !hax.reachHack.isEnabled())
 			return super.blockInteractionRange();
 		

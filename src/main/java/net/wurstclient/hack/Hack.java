@@ -20,6 +20,7 @@ public abstract class Hack extends Feature
 {
 	private final String name;
 	private final String description;
+	private final boolean descriptionIsTranslationKey;
 	private Category category;
 	
 	private boolean enabled;
@@ -65,8 +66,19 @@ public abstract class Hack extends Feature
 	
 	public Hack(String name)
 	{
+		this(name, "description.wurst.hack." + name.toLowerCase(), true);
+	}
+	
+	/**
+	 * For hacks whose description is plain English text rather than a
+	 * translation key (most of the features ported from the CevAPI fork).
+	 */
+	protected Hack(String name, String description,
+		boolean descriptionIsTranslationKey)
+	{
 		this.name = Objects.requireNonNull(name);
-		description = "description.wurst.hack." + name.toLowerCase();
+		this.description = Objects.requireNonNull(description);
+		this.descriptionIsTranslationKey = descriptionIsTranslationKey;
 		addPossibleKeybind(name, "Toggle " + name);
 		
 		if(name.contains(" "))
@@ -91,9 +103,26 @@ public abstract class Hack extends Feature
 		return name;
 	}
 	
+	/**
+	 * Text shown after this hack's name in the HackList, in
+	 * {@link #getStatusTextColor()} (green by default); null for none.
+	 */
+	public String getStatusText()
+	{
+		return null;
+	}
+	
+	public int getStatusTextColor()
+	{
+		return 0xFF55FF55;
+	}
+	
 	@Override
 	public final String getDescription()
 	{
+		if(!descriptionIsTranslationKey)
+			return description;
+		
 		return WURST.translate(description);
 	}
 	

@@ -13,10 +13,18 @@ import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.inventory.ContainerInput;
 
 public interface IMultiPlayerGameMode
 {
 	public void windowClick_PICKUP(int slot);
+	
+	/**
+	 * Any click in the player's own inventory (container 0), opening it
+	 * first like the other windowClick methods.
+	 */
+	public void windowClick_raw(int syncId, int slot, int button,
+		ContainerInput input);
 	
 	public void windowClick_QUICK_MOVE(int slot);
 	

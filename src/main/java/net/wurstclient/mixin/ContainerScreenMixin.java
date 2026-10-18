@@ -20,6 +20,8 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.ChestMenu;
 import net.wurstclient.WurstClient;
+import net.wurstclient.chestsearch.ChestScreenRecording;
+import net.wurstclient.chestsearch.SlotHighlighter;
 import net.wurstclient.hacks.AutoStealHack;
 
 @Mixin(ContainerScreen.class)
@@ -33,6 +35,9 @@ public abstract class ContainerScreenMixin
 	@Unique
 	private final AutoStealHack autoSteal =
 		WurstClient.INSTANCE.getHax().autoStealHack;
+	
+	@Unique
+	private ChestScreenRecording chestRecording;
 	
 	public ContainerScreenMixin(WurstClient wurst, ChestMenu container,
 		Inventory playerInventory, Component name)
@@ -58,6 +63,27 @@ public abstract class ContainerScreenMixin
 		
 		if(autoSteal.isEnabled())
 			autoSteal.steal(this, containerRows);
+		
+		// ChestSearch (ported from the CevAPI fork)
+		if(chestRecording == null)
+			chestRecording =
+				ChestScreenRecording.start(menu, containerRows * 9);
+		if(chestRecording != null
+			&& WurstClient.INSTANCE.getHax().chestSearchHack.isManualMode())
+			addRenderableWidget(Button
+				.builder(Component.literal("Scan"),
+					b -> chestRecording.scanNow())
+				.bounds(leftPos + 6, topPos + 4, 50, 12).build());
+	}
+	
+	@Override
+	public void removed()
+	{
+		SlotHighlighter.INSTANCE.clearActive();
+		if(chestRecording != null)
+			chestRecording.finish();
+		
+		super.removed();
 	}
 	
 	@Override

@@ -20,6 +20,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.Block;
 import net.wurstclient.WurstClient;
@@ -110,6 +111,68 @@ public class BlockListSetting extends Setting
 		blockNames.clear();
 		blockNames.addAll(Arrays.asList(defaultNames));
 		WurstClient.INSTANCE.saveSettings();
+	}
+	
+	@Override
+	public void resetToDefault()
+	{
+		resetToDefaults();
+	}
+	
+	public void clear()
+	{
+		blockNames.clear();
+		WurstClient.INSTANCE.saveSettings();
+	}
+	
+	/**
+	 * Adds an entry the way the user typed it: a block ID, or a keyword that
+	 * {@link #matchesBlock(Block)} looks for in block names.
+	 */
+	public void addRawName(String raw)
+	{
+		if(raw == null || raw.isBlank())
+			return;
+		
+		String name = raw.trim();
+		Identifier id = Identifier.tryParse(name);
+		if(id != null && BuiltInRegistries.BLOCK.containsKey(id))
+			name = id.toString();
+		
+		if(Collections.binarySearch(blockNames, name) >= 0)
+			return;
+		
+		blockNames.add(name);
+		Collections.sort(blockNames);
+		WurstClient.INSTANCE.saveSettings();
+	}
+	
+	/**
+	 * True if the list has this block's ID, or an entry that isn't a block ID
+	 * and appears in the block's ID or name (case-insensitive).
+	 */
+	public boolean matchesBlock(Block block)
+	{
+		String idFull = BlockUtils.getName(block);
+		if(Collections.binarySearch(blockNames, idFull) >= 0)
+			return true;
+		
+		String localId = idFull.substring(idFull.indexOf(':') + 1);
+		String[] names = {idFull, localId, localId.replace('_', ' '),
+			block.getDescriptionId(), block.getName().getString()};
+		for(String entry : blockNames)
+		{
+			Identifier id = Identifier.tryParse(entry);
+			if(id != null && BuiltInRegistries.BLOCK.containsKey(id))
+				continue;
+			
+			String term = entry.toLowerCase(java.util.Locale.ROOT);
+			for(String name : names)
+				if(name.toLowerCase(java.util.Locale.ROOT).contains(term))
+					return true;
+		}
+		
+		return false;
 	}
 	
 	@Override

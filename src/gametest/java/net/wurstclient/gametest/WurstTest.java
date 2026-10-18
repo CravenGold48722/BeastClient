@@ -266,6 +266,7 @@ public class WurstTest implements FabricClientGameTest
 		run(new NoWeatherHackTest(context, spContext));
 		run(new RestockHackTest(context, spContext));
 		run(new XRayHackTest(context, spContext));
+		run(new PortedFeaturesTest(context, spContext));
 		
 		// Test Wurst commands
 		run(new CopyItemCmdTest(context, spContext));

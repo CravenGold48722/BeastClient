@@ -1,0 +1,1138 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.hud;
+
+import net.wurstclient.util.SdlUtils;
+
+import com.mojang.blaze3d.platform.InputConstants;
+
+import com.mojang.blaze3d.platform.Window;
+import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.List;
+import java.util.Locale;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.screens.ChatScreen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.stats.Stats;
+import net.minecraft.world.entity.EntityType;
+import net.wurstclient.WurstClient;
+import net.wurstclient.hacks.GameStatsHack;
+import net.wurstclient.other_features.HackListOtf;
+import net.wurstclient.other_features.HackListOtf.Position;
+import net.wurstclient.util.RenderUtils;
+import net.wurstclient.util.ServerObserver;
+
+public final class GameStatsHud
+{
+	private static final Minecraft MC = WurstClient.MC;
+	private static final float BASE_X = 8F;
+	private static final float BASE_Y = 8F;
+	private static final float PADDING = 4F;
+	private static final float LINE_GAP = 2F;
+	private static final long SAMPLE_INTERVAL_MS = 1000L;
+	private static final long SPEED_WINDOW_MS = 3000L;
+	private static final double SPEED_MAX_PLAUSIBLE_BPS = 5000.0;
+	private static final float GRAPH_GAP = 4F;
+	private static final float GRAPH_TO_TEXT_GAP = 2F;
+	private static final float GRAPH_HEIGHT = 34F;
+	private static final long GRAPH_SAMPLE_INTERVAL_MS = 200L;
+	private static final int GRAPH_MAX_SAMPLES = 240;
+	private static final double FPS_GRAPH_TARGET = 120.0;
+	private static final double TPS_GRAPH_TARGET = 20.0;
+	private static final float GRAPH_WINDOW_BASE_X = 8F;
+	private static final float GRAPH_WINDOW_BASE_Y = 8F;
+	private static final int GRAPH_RESIZE_MARGIN = 8;
+	private static final float HACKLIST_GAP = 2F;
+	private static final DateTimeFormatter TIME_FORMAT =
+		DateTimeFormatter.ofPattern("HH:mm:ss");
+	
+	private final GameStatsHack hack;
+	
+	private boolean wasEnabled;
+	private long sessionStartMs;
+	private long lastSampleMs;
+	
+	private long fpsSampleCount;
+	private long pingSampleCount;
+	private long tpsSampleCount;
+	
+	private double fpsSampleSum;
+	private double pingSampleSum;
+	private double tpsSampleSum;
+	private double distanceTravelledMeters;
+	private boolean hasLastPos;
+	private double lastX;
+	private double lastY;
+	private double lastZ;
+	private long lastMovementSampleMs;
+	private final ArrayDeque<MovementPoint> movementPoints = new ArrayDeque<>();
+	private double smoothedSpeedBps;
+	private int mobKillsBaseline = -1;
+	private int playerKillsBaseline = -1;
+	private int xpBaseline = -1;
+	
+	private boolean dragging;
+	private double dragStartMouseX;
+	private double dragStartMouseY;
+	private int dragStartOffsetX;
+	private int dragStartOffsetY;
+	private int dragOffsetX;
+	private int dragOffsetY;
+	private final double[] fpsGraphSamples = new double[GRAPH_MAX_SAMPLES];
+	private final double[] tpsGraphSamples = new double[GRAPH_MAX_SAMPLES];
+	private int graphStart;
+	private int graphSize;
+	private long lastGraphSampleMs;
+	private boolean graphDragging;
+	private boolean graphResizing;
+	private double graphDragStartMouseX;
+	private double graphDragStartMouseY;
+	private int graphDragStartOffsetX;
+	private int graphDragStartOffsetY;
+	private int graphDragOffsetX;
+	private int graphDragOffsetY;
+	private int graphResizeStartWidth;
+	private int graphResizeStartHeight;
+	private int graphResizeWidth;
+	private int graphResizeHeight;
+	
+	public GameStatsHud(GameStatsHack hack)
+	{
+		this.hack = hack;
+	}
+	
+	public void render(GuiGraphicsExtractor context)
+	{
+		if(MC == null || hack == null)
+			return;
+		
+		boolean enabled = hack.isEnabled();
+		if(enabled && !wasEnabled)
+			resetSessionStats();
+		wasEnabled = enabled;
+		
+		if(!enabled)
+			return;
+		
+		Font font = MC.font;
+		if(font == null)
+			return;
+		
+		updateSessionTracking();
+		updateAverages();
+		updateGraphSamples();
+		
+		double scale = hack.getFontScale();
+		List<String> lines = buildLines();
+		if(lines.isEmpty())
+			return;
+		
+		boolean renderGraph = shouldRenderGraph();
+		boolean separateGraphWindow = renderGraph && hack.separateGraphWindow();
+		
+		float maxTextWidth = 0F;
+		for(String line : lines)
+			maxTextWidth =
+				Math.max(maxTextWidth, (float)(font.width(line) * scale));
+		
+		float lineHeight = (float)(font.lineHeight * scale);
+		float textHeight = lines.size() * lineHeight
+			+ Math.max(0, lines.size() - 1) * LINE_GAP;
+		float graphBlockHeight = 0F;
+		if(renderGraph && !separateGraphWindow)
+		{
+			float graphGap = Math.max(2F, GRAPH_GAP * (float)scale);
+			float graphToTextGap =
+				Math.max(1F, GRAPH_TO_TEXT_GAP * (float)scale);
+			float graphHeight = Math.max(12F, GRAPH_HEIGHT * (float)scale);
+			graphBlockHeight = graphGap + graphToTextGap + graphHeight;
+		}
+		
+		float boxWidth = maxTextWidth + PADDING * 2F;
+		float boxHeight = textHeight + PADDING * 2F + graphBlockHeight;
+		
+		boolean pinnedAboveHackList = hack.pinAboveHackList();
+		float anchorX = BASE_X;
+		float anchorY = BASE_Y;
+		if(pinnedAboveHackList)
+		{
+			HackListOtf hackListOtf =
+				WurstClient.INSTANCE.getOtfs().hackListOtf;
+			Position position = hackListOtf.getPosition();
+			// Beast's HackList is always at the top, left or right
+			boolean isLeft = position == Position.LEFT;
+			anchorX = isLeft ? 2 : context.guiWidth() - boxWidth - 2;
+			anchorY = 2;
+			if(isLeft
+				&& WurstClient.INSTANCE.getOtfs().wurstLogoOtf.isVisible())
+				anchorY = Math.max(anchorY, 22);
+		}
+		
+		float x = pinnedAboveHackList ? anchorX : anchorX + getCurrentOffsetX();
+		float y = pinnedAboveHackList ? anchorY : anchorY + getCurrentOffsetY();
+		
+		if(!pinnedAboveHackList)
+			handleDrag(context, x, y, boxWidth, boxHeight);
+		
+		x = pinnedAboveHackList ? anchorX : anchorX + getCurrentOffsetX();
+		y = pinnedAboveHackList ? anchorY : anchorY + getCurrentOffsetY();
+		
+		if(hack.hasBackgroundBox())
+		{
+			int bgColor = withAlpha(hack.getBackgroundColorI(),
+				hack.getBackgroundOpacity());
+			RenderUtils.fill2D(context, x, y, x + boxWidth, y + boxHeight,
+				bgColor);
+		}
+		
+		int fontColor = withAlpha(hack.getFontColorI(), hack.getFontOpacity());
+		int strokeColor = withAlpha(0xFF000000,
+			Math.min(255, (int)Math.round(hack.getFontOpacity() * 0.9)));
+		
+		float drawY = y + PADDING;
+		if(renderGraph && !separateGraphWindow)
+		{
+			float drawX = x + PADDING;
+			float graphGap = Math.max(2F, GRAPH_GAP * (float)scale);
+			float graphToTextGap =
+				Math.max(1F, GRAPH_TO_TEXT_GAP * (float)scale);
+			float graphHeight = Math.max(12F, GRAPH_HEIGHT * (float)scale);
+			drawFpsTpsGraph(context, drawX, drawY, boxWidth - PADDING * 2F,
+				graphHeight);
+			drawY += graphHeight + graphToTextGap + graphGap;
+		}
+		
+		for(String line : lines)
+		{
+			float drawX = x + PADDING;
+			int ix = Math.round(drawX);
+			int iy = Math.round(drawY);
+			
+			if(hack.hasFontStroke())
+				drawStrokeText(context, font, line, ix, iy, strokeColor, scale);
+			
+			RenderUtils.drawScaledText(context, font, line, ix, iy, fontColor,
+				false, scale);
+			drawY += lineHeight + LINE_GAP;
+		}
+		
+		if(separateGraphWindow)
+			renderSeparateGraphWindow(context);
+	}
+	
+	public boolean isPinnedAboveHackList()
+	{
+		return hack != null && hack.isEnabled() && hack.pinAboveHackList();
+	}
+	
+	public int getHackListReservedHeight(GuiGraphicsExtractor context)
+	{
+		if(!isPinnedAboveHackList() || MC == null || MC.font == null)
+			return 0;
+		
+		Layout layout = buildLayout();
+		if(layout == null)
+			return 0;
+		
+		return (int)Math.ceil(layout.boxHeight() + HACKLIST_GAP);
+	}
+	
+	private List<String> buildLines()
+	{
+		ArrayList<String> lines = new ArrayList<>(10);
+		boolean showPrefixes = hack.showPrefixes();
+		boolean showAverages = hack.showAverages();
+		
+		if(hack.showFps())
+		{
+			int fps = MC.getFps();
+			String fpsValue = Integer.toString(fps);
+			if(showAverages && fpsSampleCount > 0)
+				fpsValue +=
+					" (" + formatRounded(fpsSampleSum / fpsSampleCount) + ")";
+			lines.add(withPrefix(showPrefixes, "FPS", fpsValue));
+		}
+		
+		if(hack.showTps())
+		{
+			double tps = getServerTps();
+			String tpsValue = Double.isNaN(tps) ? "--"
+				: String.format(Locale.ROOT, "%.2f", tps);
+			if(showAverages && tpsSampleCount > 0)
+				tpsValue += " (" + String.format(Locale.ROOT, "%.2f",
+					tpsSampleSum / tpsSampleCount) + ")";
+			lines.add(withPrefix(showPrefixes, "TPS", tpsValue));
+		}
+		
+		if(hack.showMspt())
+		{
+			double tps = getServerTps();
+			String msptValue = formatMspt(tps);
+			if(showAverages && tpsSampleCount > 0)
+			{
+				double averageTps = tpsSampleSum / tpsSampleCount;
+				msptValue += " (" + formatMspt(averageTps) + ")";
+			}
+			lines.add(withPrefix(showPrefixes, "MSPT", msptValue));
+		}
+		
+		if(hack.showPing())
+		{
+			int ping = getPlayerPing();
+			String pingValue = ping < 0 ? "--" : Integer.toString(ping);
+			if(showAverages && pingSampleCount > 0)
+				pingValue +=
+					" (" + formatRounded(pingSampleSum / pingSampleCount) + ")";
+			lines.add(withPrefix(showPrefixes, "Ping", pingValue));
+		}
+		
+		if(hack.showPlayTime())
+			lines.add(withPrefix(showPrefixes, "Play Time",
+				formatDurationMs(elapsedSessionMs())));
+		
+		if(hack.showCurrentTime())
+			lines.add(withPrefix(showPrefixes, "Time",
+				LocalTime.now().format(TIME_FORMAT)));
+		
+		if(hack.showWorldTime())
+			lines
+				.add(withPrefix(showPrefixes, "World Time", getWorldTime24h()));
+		
+		if(hack.showPacketRate())
+			lines.add(
+				withPrefix(showPrefixes, "Packets", hack.getIncomingPacketRate()
+					+ "/" + hack.getOutgoingPacketRate()));
+		
+		if(hack.showDistanceTravelled())
+			lines.add(withPrefix(showPrefixes, "Distance",
+				formatDistance(distanceTravelledMeters)));
+		
+		if(hack.showSpeed())
+			lines.add(withPrefix(showPrefixes, "Speed",
+				String.format(Locale.ROOT, "%.2fb/s", smoothedSpeedBps)));
+		
+		if(hack.showMobKills())
+			lines.add(withPrefix(showPrefixes, "Mob Kills",
+				Integer.toString(getSessionMobKills())));
+		
+		if(hack.showPlayerKills())
+			lines.add(withPrefix(showPrefixes, "Player Kills",
+				Integer.toString(getSessionPlayerKills())));
+		
+		if(hack.showXpGained())
+			lines.add(withPrefix(showPrefixes, "XP Gained",
+				Integer.toString(getSessionXpGained())));
+		
+		return lines;
+	}
+	
+	private void updateSessionTracking()
+	{
+		long now = System.currentTimeMillis();
+		
+		if(MC.player == null)
+		{
+			hasLastPos = false;
+			lastMovementSampleMs = now;
+			resetMovementSpeed();
+			return;
+		}
+		
+		double x = MC.player.getX();
+		double y = MC.player.getY();
+		double z = MC.player.getZ();
+		if(hasLastPos)
+		{
+			double dx = x - lastX;
+			double dy = y - lastY;
+			double dz = z - lastZ;
+			double delta = Math.sqrt(dx * dx + dy * dy + dz * dz);
+			if(Double.isFinite(delta) && delta >= 0)
+			{
+				distanceTravelledMeters += delta;
+				pushMovementSample(x, z, now);
+			}
+		}
+		
+		lastX = x;
+		lastY = y;
+		lastZ = z;
+		hasLastPos = true;
+		lastMovementSampleMs = now;
+		
+		if(mobKillsBaseline < 0)
+			mobKillsBaseline = getCurrentMobKills();
+		if(playerKillsBaseline < 0)
+			playerKillsBaseline = getCurrentPlayerKills();
+		if(xpBaseline < 0)
+			xpBaseline = getCurrentTotalXp();
+	}
+	
+	private void updateAverages()
+	{
+		long now = System.currentTimeMillis();
+		if(now - lastSampleMs < SAMPLE_INTERVAL_MS)
+			return;
+		
+		lastSampleMs = now;
+		
+		int fps = MC.getFps();
+		if(fps >= 0)
+		{
+			fpsSampleSum += fps;
+			fpsSampleCount++;
+		}
+		
+		double tps = getServerTps();
+		if(!Double.isNaN(tps))
+		{
+			tpsSampleSum += tps;
+			tpsSampleCount++;
+		}
+		
+		int ping = getPlayerPing();
+		if(ping >= 0)
+		{
+			pingSampleSum += ping;
+			pingSampleCount++;
+		}
+	}
+	
+	private void resetSessionStats()
+	{
+		long now = System.currentTimeMillis();
+		sessionStartMs = now;
+		lastSampleMs = now - SAMPLE_INTERVAL_MS;
+		lastGraphSampleMs = now - GRAPH_SAMPLE_INTERVAL_MS;
+		
+		fpsSampleCount = 0L;
+		pingSampleCount = 0L;
+		tpsSampleCount = 0L;
+		
+		fpsSampleSum = 0;
+		pingSampleSum = 0;
+		tpsSampleSum = 0;
+		
+		distanceTravelledMeters = 0;
+		hasLastPos = false;
+		lastX = 0;
+		lastY = 0;
+		lastZ = 0;
+		lastMovementSampleMs = now;
+		resetMovementSpeed();
+		mobKillsBaseline = -1;
+		playerKillsBaseline = -1;
+		xpBaseline = -1;
+		graphStart = 0;
+		graphSize = 0;
+		graphDragging = false;
+		graphResizing = false;
+	}
+	
+	private long elapsedSessionMs()
+	{
+		if(sessionStartMs <= 0)
+			return 0;
+		
+		return Math.max(0, System.currentTimeMillis() - sessionStartMs);
+	}
+	
+	private static String formatRounded(double value)
+	{
+		return Integer.toString((int)Math.round(value));
+	}
+	
+	private static String formatDurationMs(long durationMs)
+	{
+		long totalSeconds = Math.max(0, durationMs / 1000L);
+		long hours = totalSeconds / 3600L;
+		long minutes = (totalSeconds % 3600L) / 60L;
+		long seconds = totalSeconds % 60L;
+		return String.format(Locale.ROOT, "%02d:%02d:%02d", hours, minutes,
+			seconds);
+	}
+	
+	private static String formatDistance(double meters)
+	{
+		return String.format(Locale.ROOT, "%.1f", meters);
+	}
+	
+	private static String formatMspt(double tps)
+	{
+		if(Double.isNaN(tps) || tps <= 0D)
+			return "--";
+		
+		double mspt = 1000D / tps;
+		return String.format(Locale.ROOT, "%.2f", mspt);
+	}
+	
+	private void resetMovementSpeed()
+	{
+		movementPoints.clear();
+		smoothedSpeedBps = 0;
+	}
+	
+	private void pushMovementSample(double x, double z, long nowMs)
+	{
+		if(!Double.isFinite(x) || !Double.isFinite(z))
+			return;
+		
+		movementPoints.addLast(new MovementPoint(x, z, nowMs));
+		long minTime = nowMs - SPEED_WINDOW_MS;
+		while(movementPoints.size() > 2
+			&& movementPoints.peekFirst().timestampMs < minTime)
+			movementPoints.removeFirst();
+		
+		MovementPoint oldest = movementPoints.peekFirst();
+		MovementPoint newest = movementPoints.peekLast();
+		if(oldest == null || newest == null)
+			return;
+		
+		long dtMs = newest.timestampMs - oldest.timestampMs;
+		if(dtMs <= 0L)
+			return;
+		
+		double dx = newest.x - oldest.x;
+		double dz = newest.z - oldest.z;
+		double netDistance = Math.hypot(dx, dz);
+		double dtSec = dtMs / 1000D;
+		double speed = netDistance / dtSec;
+		double maxDistance = SPEED_MAX_PLAUSIBLE_BPS * dtSec;
+		speed = Math.min(speed, maxDistance / dtSec);
+		smoothedSpeedBps = speed;
+	}
+	
+	private static String getWorldTime24h()
+	{
+		if(MC.level == null)
+			return "--:--";
+		
+		long dayTime = Math.floorMod(MC.level.getOverworldClockTime(), 24000L);
+		int hour = (int)(dayTime / 1000L);
+		int minute = (int)Math.floor((dayTime % 1000L) * 60D / 1000D);
+		return String.format(Locale.ROOT, "%02d:%02d", hour, minute);
+	}
+	
+	private static String withPrefix(boolean showPrefix, String prefix,
+		String value)
+	{
+		return showPrefix ? prefix + ": " + value : value;
+	}
+	
+	private Layout buildLayout()
+	{
+		if(MC == null || hack == null || MC.font == null)
+			return null;
+		
+		double scale = hack.getFontScale();
+		List<String> lines = buildLines();
+		if(lines.isEmpty())
+			return null;
+		
+		boolean renderGraph = shouldRenderGraph();
+		boolean separateGraphWindow = renderGraph && hack.separateGraphWindow();
+		
+		float maxTextWidth = 0F;
+		for(String line : lines)
+			maxTextWidth =
+				Math.max(maxTextWidth, (float)(MC.font.width(line) * scale));
+		
+		float lineHeight = (float)(MC.font.lineHeight * scale);
+		float textHeight = lines.size() * lineHeight
+			+ Math.max(0, lines.size() - 1) * LINE_GAP;
+		float graphBlockHeight = 0F;
+		if(renderGraph && !separateGraphWindow)
+		{
+			float graphGap = Math.max(2F, GRAPH_GAP * (float)scale);
+			float graphToTextGap =
+				Math.max(1F, GRAPH_TO_TEXT_GAP * (float)scale);
+			float graphHeight = Math.max(12F, GRAPH_HEIGHT * (float)scale);
+			graphBlockHeight = graphGap + graphToTextGap + graphHeight;
+		}
+		
+		float boxWidth = maxTextWidth + PADDING * 2F;
+		float boxHeight = textHeight + PADDING * 2F + graphBlockHeight;
+		return new Layout(scale, boxWidth, boxHeight);
+	}
+	
+	private int getSessionMobKills()
+	{
+		int tracked = hack.getSessionMobKills();
+		int current = getCurrentMobKills();
+		if(current < 0 || mobKillsBaseline < 0)
+			return tracked;
+		int statsDelta = Math.max(0, current - mobKillsBaseline);
+		return Math.max(tracked, statsDelta);
+	}
+	
+	private int getSessionPlayerKills()
+	{
+		int tracked = hack.getSessionPlayerKills();
+		int current = getCurrentPlayerKills();
+		if(current < 0 || playerKillsBaseline < 0)
+			return tracked;
+		int statsDelta = Math.max(0, current - playerKillsBaseline);
+		return Math.max(tracked, statsDelta);
+	}
+	
+	private int getSessionXpGained()
+	{
+		int current = getCurrentTotalXp();
+		if(current < 0 || xpBaseline < 0)
+			return 0;
+		return Math.max(0, current - xpBaseline);
+	}
+	
+	private int getCurrentMobKills()
+	{
+		if(MC.player == null)
+			return -1;
+		
+		try
+		{
+			int customMobKills = MC.player.getStats()
+				.getValue(Stats.CUSTOM.get(Stats.MOB_KILLS));
+			int perEntityMobKills = 0;
+			for(EntityType<?> type : BuiltInRegistries.ENTITY_TYPE)
+			{
+				if(type == net.wurstclient.util.RegistryUtils
+					.entityType("player"))
+					continue;
+				
+				perEntityMobKills += MC.player.getStats()
+					.getValue(Stats.ENTITY_KILLED.get(type));
+			}
+			
+			return Math.max(customMobKills, perEntityMobKills);
+		}catch(Throwable ignored)
+		{
+			return -1;
+		}
+	}
+	
+	private int getCurrentPlayerKills()
+	{
+		if(MC.player == null)
+			return -1;
+		
+		try
+		{
+			return MC.player.getStats()
+				.getValue(Stats.CUSTOM.get(Stats.PLAYER_KILLS));
+		}catch(Throwable ignored)
+		{
+			return -1;
+		}
+	}
+	
+	private int getCurrentTotalXp()
+	{
+		if(MC.player == null)
+			return -1;
+		
+		try
+		{
+			return MC.player.totalExperience;
+		}catch(Throwable ignored)
+		{
+			return -1;
+		}
+	}
+	
+	private double getServerTps()
+	{
+		ServerObserver observer = WurstClient.INSTANCE.getServerObserver();
+		return observer != null ? observer.getTps() : Double.NaN;
+	}
+	
+	private int getPlayerPing()
+	{
+		try
+		{
+			var handler = MC.getConnection();
+			if(handler == null || MC.player == null)
+				return -1;
+			
+			var entry = handler.getPlayerInfo(MC.player.getUUID());
+			if(entry == null)
+				return -1;
+			
+			try
+			{
+				return entry.getLatency();
+			}catch(Throwable ignored)
+			{}
+			
+			try
+			{
+				var m = entry.getClass().getMethod("getLatency");
+				Object o = m.invoke(entry);
+				if(o instanceof Integer i)
+					return i;
+				if(o instanceof Long l)
+					return l.intValue();
+			}catch(NoSuchMethodException ignored)
+			{}
+			
+			try
+			{
+				var m = entry.getClass().getMethod("getLatencyMs");
+				Object o = m.invoke(entry);
+				if(o instanceof Integer i)
+					return i;
+				if(o instanceof Long l)
+					return l.intValue();
+			}catch(NoSuchMethodException ignored)
+			{}
+			
+			try
+			{
+				var f = entry.getClass().getDeclaredField("latency");
+				f.setAccessible(true);
+				Object o = f.get(entry);
+				if(o instanceof Integer i)
+					return i;
+				if(o instanceof Long l)
+					return l.intValue();
+			}catch(NoSuchFieldException ignored)
+			{}
+		}catch(Throwable ignored)
+		{}
+		
+		return -1;
+	}
+	
+	private void drawStrokeText(GuiGraphicsExtractor context, Font font,
+		String text, int x, int y, int strokeColor, double scale)
+	{
+		RenderUtils.drawScaledText(context, font, text, x - 1, y, strokeColor,
+			false, scale);
+		RenderUtils.drawScaledText(context, font, text, x + 1, y, strokeColor,
+			false, scale);
+		RenderUtils.drawScaledText(context, font, text, x, y - 1, strokeColor,
+			false, scale);
+		RenderUtils.drawScaledText(context, font, text, x, y + 1, strokeColor,
+			false, scale);
+	}
+	
+	private boolean shouldRenderGraph()
+	{
+		return hack.showGraph() && (hack.showFps() || hack.showTps());
+	}
+	
+	private void updateGraphSamples()
+	{
+		if(!hack.showFps() && !hack.showTps())
+			return;
+		
+		long now = System.currentTimeMillis();
+		if(now - lastGraphSampleMs < GRAPH_SAMPLE_INTERVAL_MS)
+			return;
+		
+		lastGraphSampleMs = now;
+		
+		double fps = hack.showFps() ? Math.max(0, MC.getFps()) : Double.NaN;
+		double tps = hack.showTps() ? getServerTps() : Double.NaN;
+		pushGraphSample(fps, tps);
+	}
+	
+	private void pushGraphSample(double fps, double tps)
+	{
+		if(graphSize < GRAPH_MAX_SAMPLES)
+		{
+			int idx = (graphStart + graphSize) % GRAPH_MAX_SAMPLES;
+			fpsGraphSamples[idx] = fps;
+			tpsGraphSamples[idx] = tps;
+			graphSize++;
+			return;
+		}
+		
+		fpsGraphSamples[graphStart] = fps;
+		tpsGraphSamples[graphStart] = tps;
+		graphStart = (graphStart + 1) % GRAPH_MAX_SAMPLES;
+	}
+	
+	private double getGraphSample(double[] samples, int idx)
+	{
+		if(idx < 0 || idx >= graphSize)
+			return Double.NaN;
+		
+		return samples[(graphStart + idx) % GRAPH_MAX_SAMPLES];
+	}
+	
+	private void drawFpsTpsGraph(GuiGraphicsExtractor context, float x, float y,
+		float width, float height)
+	{
+		float safeWidth = Math.max(30F, width);
+		float safeHeight = Math.max(12F, height);
+		RenderUtils.fill2D(context, x, y, x + safeWidth, y + safeHeight,
+			0x40000000);
+		RenderUtils.drawBorder2D(context, x, y, x + safeWidth, y + safeHeight,
+			0x70FFFFFF);
+		drawGuideLine(context, x, y, safeWidth, safeHeight, 0.5, 0x40FFFFFF);
+		
+		if(graphSize < 2 || safeWidth < 2F)
+			return;
+		
+		if(hack.showFps())
+		{
+			int fpsColor = withAlpha(hack.getFpsGraphColorI(), 255);
+			drawGraphSeries(context, fpsGraphSamples, x, y, safeWidth,
+				safeHeight, FPS_GRAPH_TARGET, fpsColor);
+		}
+		
+		if(hack.showTps())
+		{
+			int tpsColor = withAlpha(hack.getTpsGraphColorI(), 255);
+			drawGraphSeries(context, tpsGraphSamples, x, y, safeWidth,
+				safeHeight, TPS_GRAPH_TARGET, tpsColor);
+		}
+	}
+	
+	private void drawGuideLine(GuiGraphicsExtractor context, float x, float y,
+		float width, float height, double normalizedValue, int color)
+	{
+		float lineY = valueToGraphY(normalizedValue, y, height);
+		RenderUtils.drawLine2D(context, x, lineY, x + width - 1F, lineY, color);
+	}
+	
+	private void drawGraphSeries(GuiGraphicsExtractor context, double[] samples,
+		float x, float y, float width, float height, double target, int color)
+	{
+		int pointCount = Math.max(2, Math.min((int)width, graphSize));
+		boolean hasPrev = false;
+		float prevX = 0F;
+		float prevY = 0F;
+		
+		for(int i = 0; i < pointCount; i++)
+		{
+			double t = i / (double)(pointCount - 1);
+			int sampleIndex = (int)Math.round(t * (graphSize - 1));
+			double sample = getGraphSample(samples, sampleIndex);
+			if(!Double.isFinite(sample))
+			{
+				hasPrev = false;
+				continue;
+			}
+			
+			double normalized = Math.max(0.0, Math.min(1.0, sample / target));
+			float sx = (float)(x + t * (width - 1F));
+			float sy = valueToGraphY(normalized, y, height);
+			
+			if(hasPrev)
+				RenderUtils.drawLine2D(context, prevX, prevY, sx, sy, color);
+			
+			prevX = sx;
+			prevY = sy;
+			hasPrev = true;
+		}
+	}
+	
+	private float valueToGraphY(double normalizedValue, float y, float height)
+	{
+		double clamped = Math.max(0.0, Math.min(1.0, normalizedValue));
+		return (float)(y + height - 1F - clamped * (height - 1F));
+	}
+	
+	private void renderSeparateGraphWindow(GuiGraphicsExtractor context)
+	{
+		float x = GRAPH_WINDOW_BASE_X + getCurrentGraphOffsetX();
+		float y = GRAPH_WINDOW_BASE_Y + getCurrentGraphOffsetY();
+		float width = getCurrentGraphWidth();
+		float height = getCurrentGraphHeight();
+		
+		handleGraphWindowInteraction(context, x, y, width, height);
+		
+		x = GRAPH_WINDOW_BASE_X + getCurrentGraphOffsetX();
+		y = GRAPH_WINDOW_BASE_Y + getCurrentGraphOffsetY();
+		width = getCurrentGraphWidth();
+		height = getCurrentGraphHeight();
+		
+		int bgColor =
+			withAlpha(hack.getBackgroundColorI(), hack.getBackgroundOpacity());
+		RenderUtils.fill2D(context, x, y, x + width, y + height, bgColor);
+		drawFpsTpsGraph(context, x + PADDING, y + PADDING, width - PADDING * 2F,
+			height - PADDING * 2F);
+	}
+	
+	private void handleGraphWindowInteraction(GuiGraphicsExtractor context,
+		float x, float y, float width, float height)
+	{
+		boolean canEdit = MC.screen instanceof ChatScreen
+			|| MC.screen instanceof AbstractContainerScreen<?>;
+		if(!canEdit)
+		{
+			if(graphDragging)
+				commitGraphDrag();
+			if(graphResizing)
+				commitGraphResize();
+			graphDragging = false;
+			graphResizing = false;
+			return;
+		}
+		
+		Window window = MC.getWindow();
+		if(window == null)
+		{
+			if(graphDragging)
+				commitGraphDrag();
+			if(graphResizing)
+				commitGraphResize();
+			graphDragging = false;
+			graphResizing = false;
+			return;
+		}
+		
+		double mouseX = getScaledMouseX(context);
+		double mouseY = getScaledMouseY(context);
+		boolean leftDown = SdlUtils.getMouseButtonState(
+			InputConstants.MOUSE_BUTTON_LEFT) == InputConstants.PRESS;
+		boolean overWindow = mouseX >= x && mouseX <= x + width && mouseY >= y
+			&& mouseY <= y + height;
+		boolean overResizeHandle = mouseX >= x + width - GRAPH_RESIZE_MARGIN
+			&& mouseX <= x + width && mouseY >= y + height - GRAPH_RESIZE_MARGIN
+			&& mouseY <= y + height;
+		
+		if(leftDown)
+		{
+			if(!graphDragging && !graphResizing && overResizeHandle)
+			{
+				graphResizing = true;
+				graphDragStartMouseX = mouseX;
+				graphDragStartMouseY = mouseY;
+				graphResizeStartWidth = hack.getGraphWindowWidth();
+				graphResizeStartHeight = hack.getGraphWindowHeight();
+				graphResizeWidth = graphResizeStartWidth;
+				graphResizeHeight = graphResizeStartHeight;
+			}
+			
+			if(graphResizing)
+			{
+				graphResizeWidth = clampGraphWidth(graphResizeStartWidth
+					+ (int)Math.round(mouseX - graphDragStartMouseX));
+				graphResizeHeight = clampGraphHeight(graphResizeStartHeight
+					+ (int)Math.round(mouseY - graphDragStartMouseY));
+				return;
+			}
+			
+			if(!graphDragging && overWindow)
+			{
+				graphDragging = true;
+				graphDragStartMouseX = mouseX;
+				graphDragStartMouseY = mouseY;
+				graphDragStartOffsetX = hack.getGraphWindowOffsetX();
+				graphDragStartOffsetY = hack.getGraphWindowOffsetY();
+				graphDragOffsetX = graphDragStartOffsetX;
+				graphDragOffsetY = graphDragStartOffsetY;
+			}
+			
+			if(graphDragging)
+			{
+				graphDragOffsetX = clampGraphOffsetX(graphDragStartOffsetX
+					+ (int)Math.round(mouseX - graphDragStartMouseX));
+				graphDragOffsetY = clampGraphOffsetY(graphDragStartOffsetY
+					+ (int)Math.round(mouseY - graphDragStartMouseY));
+			}
+			return;
+		}
+		
+		if(graphDragging)
+			commitGraphDrag();
+		if(graphResizing)
+			commitGraphResize();
+		graphDragging = false;
+		graphResizing = false;
+	}
+	
+	private int getCurrentGraphOffsetX()
+	{
+		return graphDragging ? graphDragOffsetX : hack.getGraphWindowOffsetX();
+	}
+	
+	private int getCurrentGraphOffsetY()
+	{
+		return graphDragging ? graphDragOffsetY : hack.getGraphWindowOffsetY();
+	}
+	
+	private int getCurrentGraphWidth()
+	{
+		return graphResizing ? graphResizeWidth : hack.getGraphWindowWidth();
+	}
+	
+	private int getCurrentGraphHeight()
+	{
+		return graphResizing ? graphResizeHeight : hack.getGraphWindowHeight();
+	}
+	
+	private int clampGraphOffsetX(int x)
+	{
+		return Math.max(hack.getGraphWindowMinOffsetX(),
+			Math.min(hack.getGraphWindowMaxOffsetX(), x));
+	}
+	
+	private int clampGraphOffsetY(int y)
+	{
+		return Math.max(hack.getGraphWindowMinOffsetY(),
+			Math.min(hack.getGraphWindowMaxOffsetY(), y));
+	}
+	
+	private int clampGraphWidth(int width)
+	{
+		return Math.max(hack.getGraphWindowMinWidth(),
+			Math.min(hack.getGraphWindowMaxWidth(), width));
+	}
+	
+	private int clampGraphHeight(int height)
+	{
+		return Math.max(hack.getGraphWindowMinHeight(),
+			Math.min(hack.getGraphWindowMaxHeight(), height));
+	}
+	
+	private void commitGraphDrag()
+	{
+		hack.setGraphWindowOffsets(graphDragOffsetX, graphDragOffsetY);
+	}
+	
+	private void commitGraphResize()
+	{
+		hack.setGraphWindowSize(graphResizeWidth, graphResizeHeight);
+	}
+	
+	private void handleDrag(GuiGraphicsExtractor context, float x, float y,
+		float width, float height)
+	{
+		boolean canEdit = MC.screen instanceof ChatScreen
+			|| MC.screen instanceof AbstractContainerScreen<?>;
+		if(!canEdit)
+		{
+			if(dragging)
+				commitDraggedOffset();
+			dragging = false;
+			return;
+		}
+		
+		Window window = MC.getWindow();
+		if(window == null)
+		{
+			if(dragging)
+				commitDraggedOffset();
+			dragging = false;
+			return;
+		}
+		
+		double mouseX = getScaledMouseX(context);
+		double mouseY = getScaledMouseY(context);
+		boolean leftDown = SdlUtils.getMouseButtonState(
+			InputConstants.MOUSE_BUTTON_LEFT) == InputConstants.PRESS;
+		boolean overHud = mouseX >= x && mouseX <= x + width && mouseY >= y
+			&& mouseY <= y + height;
+		
+		if(leftDown && overHud)
+		{
+			if(!dragging)
+			{
+				dragging = true;
+				dragStartMouseX = mouseX;
+				dragStartMouseY = mouseY;
+				dragStartOffsetX = hack.getHudOffsetX();
+				dragStartOffsetY = hack.getHudOffsetY();
+				dragOffsetX = dragStartOffsetX;
+				dragOffsetY = dragStartOffsetY;
+			}
+			
+			dragOffsetX = clampHudOffsetX(
+				dragStartOffsetX + (int)Math.round(mouseX - dragStartMouseX));
+			dragOffsetY = clampHudOffsetY(
+				dragStartOffsetY + (int)Math.round(mouseY - dragStartMouseY));
+			return;
+		}
+		
+		if(!leftDown)
+		{
+			if(dragging)
+				commitDraggedOffset();
+			dragging = false;
+		}
+	}
+	
+	private int getCurrentOffsetX()
+	{
+		return dragging ? dragOffsetX : hack.getHudOffsetX();
+	}
+	
+	private int getCurrentOffsetY()
+	{
+		return dragging ? dragOffsetY : hack.getHudOffsetY();
+	}
+	
+	private int clampHudOffsetX(int x)
+	{
+		return Math.max(hack.getHudOffsetMinX(),
+			Math.min(hack.getHudOffsetMaxX(), x));
+	}
+	
+	private int clampHudOffsetY(int y)
+	{
+		return Math.max(hack.getHudOffsetMinY(),
+			Math.min(hack.getHudOffsetMaxY(), y));
+	}
+	
+	private void commitDraggedOffset()
+	{
+		hack.setHudOffsets(dragOffsetX, dragOffsetY);
+	}
+	
+	private static double getScaledMouseX(GuiGraphicsExtractor context)
+	{
+		Window window = MC.getWindow();
+		if(window == null)
+			return 0;
+		
+		return MC.mouseHandler.xpos() * context.guiWidth()
+			/ window.getScreenWidth();
+	}
+	
+	private static double getScaledMouseY(GuiGraphicsExtractor context)
+	{
+		Window window = MC.getWindow();
+		if(window == null)
+			return 0;
+		
+		return MC.mouseHandler.ypos() * context.guiHeight()
+			/ window.getScreenHeight();
+	}
+	
+	private static int withAlpha(int rgb, int alpha)
+	{
+		return (Math.max(0, Math.min(255, alpha)) << 24) | (rgb & 0x00FFFFFF);
+	}
+	
+	private static record Layout(double scale, float boxWidth, float boxHeight)
+	{}
+	
+	private static final class MovementPoint
+	{
+		private final double x;
+		private final double z;
+		private final long timestampMs;
+		
+		private MovementPoint(double x, double z, long timestampMs)
+		{
+			this.x = x;
+			this.z = z;
+			this.timestampMs = timestampMs;
+		}
+	}
+}

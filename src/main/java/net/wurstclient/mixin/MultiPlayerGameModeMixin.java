@@ -180,6 +180,15 @@ public abstract class MultiPlayerGameModeMixin implements IMultiPlayerGameMode
 	}
 	
 	@Override
+	public void windowClick_raw(int syncId, int slot, int button,
+		ContainerInput input)
+	{
+		if(syncId == 0)
+			openInventoryFirst();
+		handleContainerInput(syncId, slot, button, input, minecraft.player);
+	}
+	
+	@Override
 	public void windowClick_PICKUP(int slot)
 	{
 		openInventoryFirst();

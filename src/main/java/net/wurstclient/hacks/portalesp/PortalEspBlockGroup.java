@@ -24,6 +24,7 @@ import net.wurstclient.util.BlockUtils;
 public final class PortalEspBlockGroup
 {
 	protected final ArrayList<AABB> boxes = new ArrayList<>();
+	private final ArrayList<BlockPos> positions = new ArrayList<>();
 	private final Block block;
 	private final ColorSetting color;
 	private final CheckboxSetting enabled;
@@ -43,6 +44,7 @@ public final class PortalEspBlockGroup
 			return;
 		
 		boxes.add(box);
+		positions.add(pos.immutable());
 	}
 	
 	private AABB getBox(BlockPos pos)
@@ -56,6 +58,7 @@ public final class PortalEspBlockGroup
 	public void clear()
 	{
 		boxes.clear();
+		positions.clear();
 	}
 	
 	public boolean isEnabled()
@@ -81,6 +84,11 @@ public final class PortalEspBlockGroup
 	public List<AABB> getBoxes()
 	{
 		return Collections.unmodifiableList(boxes);
+	}
+	
+	public List<BlockPos> getPositions()
+	{
+		return Collections.unmodifiableList(positions);
 	}
 	
 }

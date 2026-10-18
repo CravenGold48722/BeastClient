@@ -14,11 +14,29 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import net.minecraft.client.renderer.entity.MobRenderer;
+import net.minecraft.world.entity.Mob;
 import net.wurstclient.WurstClient;
 
 @Mixin(MobRenderer.class)
 public abstract class MobRendererMixin
 {
+	/**
+	 * MobOwners and MobHealth (ported from the CevAPI fork) show name tags
+	 * on the mobs they label.
+	 */
+	@Inject(at = @At("HEAD"),
+		method = "shouldShowName(Lnet/minecraft/world/entity/Mob;D)Z",
+		cancellable = true)
+	private void onShouldShowName(Mob mob, double distanceSq,
+		CallbackInfoReturnable<Boolean> cir)
+	{
+		if(WurstClient.INSTANCE.getHax().mobOwnersHack
+			.shouldForceMobNametag(mob)
+			|| WurstClient.INSTANCE.getHax().mobHealthHack
+				.shouldForceMobNametags(mob))
+			cir.setReturnValue(true);
+	}
+	
 	/**
 	 * Makes name-tagged mobs always show their name tags if configured in
 	 * NameTags.

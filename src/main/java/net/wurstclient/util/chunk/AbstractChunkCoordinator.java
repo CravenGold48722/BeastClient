@@ -14,6 +14,7 @@ import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiPredicate;
+import java.util.stream.Stream;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
@@ -34,6 +35,9 @@ public abstract class AbstractChunkCoordinator implements PacketInputListener
 	
 	protected final Set<ChunkPos> chunksToUpdate =
 		Collections.synchronizedSet(new HashSet<>());
+	
+	private final HashSet<ChunkPos> readyChunks = new HashSet<>();
+	private int matchesVersion;
 	
 	public AbstractChunkCoordinator(BiPredicate<BlockPos, BlockState> query,
 		ChunkAreaSetting area)
@@ -88,6 +92,16 @@ public abstract class AbstractChunkCoordinator implements PacketInputListener
 			searchersChanged = true;
 		}
 		
+		// count searchers that finished since the last update
+		boolean resultsChanged = searchersChanged;
+		readyChunks.retainAll(searchers.keySet());
+		for(ChunkSearcher searcher : searchers.values())
+			if(searcher.isDone() && readyChunks.add(searcher.getPos()))
+				resultsChanged = true;
+			
+		if(resultsChanged)
+			matchesVersion++;
+		
 		return searchersChanged;
 	}
 	
@@ -101,6 +115,33 @@ public abstract class AbstractChunkCoordinator implements PacketInputListener
 		searchers.values().forEach(ChunkSearcher::cancel);
 		searchers.clear();
 		chunksToUpdate.clear();
+		readyChunks.clear();
+		matchesVersion++;
+	}
+	
+	/**
+	 * True once at least one chunk has been searched completely.
+	 */
+	public boolean hasReadyMatches()
+	{
+		return !readyChunks.isEmpty();
+	}
+	
+	/**
+	 * Changes whenever the set of searched chunks or their results changes.
+	 */
+	public int getMatchesVersion()
+	{
+		return matchesVersion;
+	}
+	
+	/**
+	 * The matches of the chunks that have been searched completely so far.
+	 */
+	protected Stream<ChunkSearcher.Result> streamReadyMatches()
+	{
+		return searchers.values().stream().filter(ChunkSearcher::isDone)
+			.flatMap(ChunkSearcher::getMatches);
 	}
 	
 	public boolean isDone()

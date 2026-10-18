@@ -29,6 +29,7 @@ public final class CmdList
 	public final DamageCmd damageCmd = new DamageCmd();
 	public final DigCmd digCmd = new DigCmd();
 	public final DropCmd dropCmd = new DropCmd();
+	public final ElytraInfoCmd elytraInfoCmd = new ElytraInfoCmd();
 	public final EnabledHaxCmd enabledHaxCmd = new EnabledHaxCmd();
 	public final EnchantCmd enchantCmd = new EnchantCmd();
 	public final ExcavateCmd excavateCmd = new ExcavateCmd();
@@ -42,9 +43,13 @@ public final class CmdList
 	public final HelpCmd helpCmd = new HelpCmd();
 	public final InvseeCmd invseeCmd = new InvseeCmd();
 	public final IpCmd ipCmd = new IpCmd();
+	public final ItemHandlerCmd itemHandlerCmd = new ItemHandlerCmd();
 	public final ItemListCmd itemListCmd = new ItemListCmd();
 	public final JumpCmd jumpCmd = new JumpCmd();
 	public final LeaveCmd leaveCmd = new LeaveCmd();
+	public final LootSorterCmd lootSorterCmd = new LootSorterCmd();
+	public final MeasurementEspCmd measurementEspCmd = new MeasurementEspCmd();
+	public final MobSearchCmd mobSearchCmd = new MobSearchCmd();
 	public final ModifyCmd modifyCmd = new ModifyCmd();
 	public final PathCmd pathCmd = new PathCmd();
 	public final PotionCmd potionCmd = new PotionCmd();
@@ -52,6 +57,7 @@ public final class CmdList
 	public final RenameCmd renameCmd = new RenameCmd();
 	public final RepairCmd repairCmd = new RepairCmd();
 	public final RvCmd rvCmd = new RvCmd();
+	public final SignHistoryCmd signHistoryCmd = new SignHistoryCmd();
 	public final SvCmd svCmd = new SvCmd();
 	public final SayCmd sayCmd = new SayCmd();
 	public final SetBlockCmd setBlockCmd = new SetBlockCmd();
@@ -61,6 +67,7 @@ public final class CmdList
 	public final SetSliderCmd setSliderCmd = new SetSliderCmd();
 	public final SettingsCmd settingsCmd = new SettingsCmd();
 	public final TacoCmd tacoCmd = new TacoCmd();
+	public final TargetPlaceCmd targetPlaceCmd = new TargetPlaceCmd();
 	public final TCmd tCmd = new TCmd();
 	public final TooManyHaxCmd tooManyHaxCmd = new TooManyHaxCmd();
 	public final TpCmd tpCmd = new TpCmd();
@@ -68,6 +75,9 @@ public final class CmdList
 	public final VClipCmd vClipCmd = new VClipCmd();
 	public final ViewCompCmd viewCompCmd = new ViewCompCmd();
 	public final ViewNbtCmd viewNbtCmd = new ViewNbtCmd();
+	public final WaypointCmd waypointCmd = new WaypointCmd();
+	public final WaypointsCmd waypointsCmd = new WaypointsCmd();
+	public final WindChargeKeyCmd windChargeKeyCmd = new WindChargeKeyCmd();
 	public final XrayCmd xrayCmd = new XrayCmd();
 	
 	private final TreeMap<String, Command> cmds =

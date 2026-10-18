@@ -337,6 +337,9 @@ processResources {
 tasks.withType(JavaCompile).configureEach {
 	// Minecraft 26.1 (26.1-snapshot-1) upwards uses Java 25.
 	it.options.release = 25
+	// -Pmaxerrs=N: list more than javac's default 100 errors
+	if(project.hasProperty("maxerrs"))
+		it.options.compilerArgs += ["-Xmaxerrs", project.property("maxerrs").toString()]
 }
 
 java {

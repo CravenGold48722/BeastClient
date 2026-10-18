@@ -31,6 +31,11 @@ public abstract class DeltaTrackerTimerMixin
 	public void onBeginRenderTick(long timeMillis,
 		CallbackInfoReturnable<Integer> cir)
 	{
-		deltaTicks *= WurstClient.INSTANCE.getHax().timerHack.getTimerSpeed();
+		// a hack's temporary request (TimerManager, ported from the CevAPI
+		// fork) wins over the Timer hack while it lasts
+		Float requested =
+			WurstClient.INSTANCE.getTimerManager().getRequestedTimerSpeed();
+		deltaTicks *= requested != null ? requested
+			: WurstClient.INSTANCE.getHax().timerHack.getTimerSpeed();
 	}
 }

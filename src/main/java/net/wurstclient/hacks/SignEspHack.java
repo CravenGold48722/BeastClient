@@ -1,0 +1,853 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.hacks;
+
+import com.mojang.blaze3d.platform.InputConstants;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.math.Axis;
+import java.awt.Color;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiPredicate;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.Font.DisplayMode;
+import java.util.stream.Stream;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.decoration.GlowItemFrame;
+import net.minecraft.world.entity.decoration.ItemFrame;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.SignBlock;
+import net.minecraft.world.level.block.StandingSignBlock;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.entity.SignText;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+import net.wurstclient.Category;
+import net.wurstclient.SearchTags;
+import net.wurstclient.events.CameraTransformViewBobbingListener;
+import net.wurstclient.events.RenderListener;
+import net.wurstclient.events.UpdateListener;
+import net.wurstclient.events.PacketInputListener;
+import net.wurstclient.events.MouseButtonPressListener;
+import net.wurstclient.hack.Hack;
+import net.wurstclient.nicewurst.NiceWurstModule;
+import net.wurstclient.settings.CheckboxSetting;
+import net.wurstclient.settings.ChunkAreaSetting;
+import net.wurstclient.settings.ColorSetting;
+import net.wurstclient.settings.EspStyleSetting;
+import net.wurstclient.settings.SliderSetting;
+import net.wurstclient.settings.Setting;
+import net.wurstclient.util.BlockUtils;
+import net.wurstclient.util.ChatUtils;
+import net.wurstclient.util.EntityUtils;
+import net.wurstclient.util.EspLimitUtils;
+import net.wurstclient.util.RenderUtils;
+import net.wurstclient.util.RotationUtils;
+import net.wurstclient.util.chunk.ChunkSearcher.Result;
+import net.wurstclient.util.chunk.ChunkSearcherCoordinator;
+
+@SearchTags({"sign esp", "SignESP"})
+public final class SignEspHack extends Hack
+	implements UpdateListener, CameraTransformViewBobbingListener,
+	RenderListener, PacketInputListener, MouseButtonPressListener
+{
+	private final SignHistory history = new SignHistory();
+	private final CheckboxSetting signHistory = new CheckboxSetting(
+		"Sign History",
+		"Remember sign text changes and removals for each server and dimension.",
+		false);
+	private final ConcurrentLinkedQueue<BlockPos> historyQueue =
+		new ConcurrentLinkedQueue<>();
+	private final Set<BlockPos> queuedHistoryPositions =
+		ConcurrentHashMap.newKeySet();
+	private final Set<BlockPos> historyScanPositions =
+		ConcurrentHashMap.newKeySet();
+	private int historyMatchesVersion = -1;
+	private final EspStyleSetting style = new EspStyleSetting();
+	private final net.wurstclient.settings.CheckboxSetting stickyArea =
+		new net.wurstclient.settings.CheckboxSetting("Sticky area",
+			"Off: Re-centers every chunk to match ESP drop-off.\n"
+				+ "On: Keeps results anchored so you can path back to them.",
+			false);
+	// Signs are always included; frame inclusion is controlled by a single
+	// checkbox that used to be named "Include signs" in the UI per request.
+	private final SignEspGroup signs =
+		new SignEspGroup(
+			new ColorSetting("Sign color",
+				"Signs will be highlighted in this color.", Color.ORANGE),
+			null);
+	private final List<SignEspGroup> groups = Arrays.asList(signs);
+	// Frames (incl. glow) toggle/group - controlled by a single checkbox
+	// labeled "Include frames".
+	private final CheckboxSetting framesEnabled =
+		new CheckboxSetting("Include frames", false);
+	private final FrameEspEntityGroup frames =
+		new FrameEspEntityGroup(new ColorSetting("Frame color",
+			"Item frames (including glow frames) will be highlighted in this color.",
+			Color.YELLOW), framesEnabled);
+	private final List<FrameEspEntityGroup> entityGroups =
+		Arrays.asList(frames);
+	private final ChunkAreaSetting area = new ChunkAreaSetting("Area",
+		"The area around the player to search in.\n"
+			+ "Higher values require a faster computer.");
+	// New: optionally show detected count in HackList
+	private final CheckboxSetting showCountInHackList = new CheckboxSetting(
+		"HackList count",
+		"Appends the number of found signs/frames to this hack's entry in the HackList.",
+		false);
+	private final CheckboxSetting tracerFlash = new CheckboxSetting(
+		"Tracer flash", "Make tracers pulse with a smooth fade.", false);
+	private final CheckboxSetting nearestTracerOnly = new CheckboxSetting(
+		"Nearest tracer only", "Only draw the closest SignESP tracer.", false);
+	private final CheckboxSetting textOverlay =
+		new CheckboxSetting("Text overlay",
+			"Reads the sign text and displays it as a world label.", false);
+	private final SliderSetting overlayScale =
+		new SliderSetting("Overlay scale", 0.5, 0.5, 2.0, 0.05,
+			SliderSetting.ValueDisplay.DECIMAL);
+	private final BiPredicate<BlockPos, BlockState> query =
+		(pos, state) -> state.getBlock() instanceof SignBlock;
+	private final ChunkSearcherCoordinator coordinator =
+		new ChunkSearcherCoordinator(query, area);
+	private boolean groupsUpToDate;
+	private ChunkAreaSetting.ChunkArea lastAreaSelection;
+	private ChunkPos lastPlayerChunk;
+	private int foundCount;
+	private int lastMatchesVersion;
+	
+	// Above-ground filter
+	private final CheckboxSetting onlyAboveGround = new CheckboxSetting(
+		"Above ground only",
+		"Only show signs/frames at or above the configured Y level.", false);
+	private final SliderSetting aboveGroundY = new SliderSetting(
+		"Set ESP Y limit", 62, -65, 255, 1, SliderSetting.ValueDisplay.INTEGER);
+	
+	public SignEspHack()
+	{
+		super("SignESP");
+		setCategory(Category.RENDER);
+		addSetting(style);
+		groups.stream().flatMap(SignEspGroup::getSettings)
+			.forEach(this::addSetting);
+		entityGroups.stream().flatMap(FrameEspEntityGroup::getSettings)
+			.forEach(this::addSetting);
+		addSetting(showCountInHackList);
+		addSetting(tracerFlash);
+		addSetting(nearestTracerOnly);
+		addSetting(textOverlay);
+		addSetting(overlayScale);
+		addSetting(area);
+		addSetting(stickyArea);
+		addSetting(onlyAboveGround);
+		addSetting(aboveGroundY);
+		addSetting(signHistory);
+	}
+	
+	public List<AABB> getMapaSignBoxes()
+	{
+		return signs.getBoxes();
+	}
+	
+	public List<AABB> getMapaFrameBoxes(float partialTicks)
+	{
+		entityGroups.stream().filter(FrameEspEntityGroup::isEnabled)
+			.forEach(group -> group.updateBoxes(partialTicks));
+		return entityGroups.stream().flatMap(group -> group.getBoxes().stream())
+			.toList();
+	}
+	
+	public int getMapaSignColor()
+	{
+		return signs.getColorI(0xFF);
+	}
+	
+	public int getMapaFrameColor()
+	{
+		return entityGroups.isEmpty() ? 0xFFFFFFFF
+			: entityGroups.get(0).getColorI(0xFF);
+	}
+	
+	@Override
+	protected void onEnable()
+	{
+		groupsUpToDate = false;
+		historyMatchesVersion = -1;
+		historyScanPositions.clear();
+		lastAreaSelection = area.getSelected();
+		lastPlayerChunk = ChunkPos.containing(MC.player.blockPosition());
+		lastMatchesVersion = coordinator.getMatchesVersion();
+		EVENTS.add(UpdateListener.class, this);
+		EVENTS.add(CameraTransformViewBobbingListener.class, this);
+		EVENTS.add(RenderListener.class, this);
+		EVENTS.add(PacketInputListener.class, this);
+		EVENTS.add(MouseButtonPressListener.class, this);
+		EVENTS.add(net.wurstclient.events.PacketInputListener.class,
+			coordinator);
+	}
+	
+	@Override
+	protected void onDisable()
+	{
+		EVENTS.remove(UpdateListener.class, this);
+		EVENTS.remove(CameraTransformViewBobbingListener.class, this);
+		EVENTS.remove(RenderListener.class, this);
+		EVENTS.remove(PacketInputListener.class, this);
+		EVENTS.remove(MouseButtonPressListener.class, this);
+		EVENTS.remove(net.wurstclient.events.PacketInputListener.class,
+			coordinator);
+		coordinator.reset();
+		lastMatchesVersion = coordinator.getMatchesVersion();
+		groups.forEach(SignEspGroup::clear);
+		entityGroups.forEach(FrameEspEntityGroup::clear);
+		historyScanPositions.clear();
+		historyMatchesVersion = -1;
+		foundCount = 0;
+	}
+	
+	@Override
+	public void onUpdate()
+	{
+		if(signHistory.isChecked())
+			updateSignHistory();
+		ChunkAreaSetting.ChunkArea currentArea = area.getSelected();
+		if(currentArea != lastAreaSelection)
+		{
+			lastAreaSelection = currentArea;
+			coordinator.reset();
+			historyScanPositions.clear();
+			historyMatchesVersion = -1;
+			groupsUpToDate = false;
+		}
+		// Recenter per chunk when sticky is off
+		ChunkPos currentChunk = ChunkPos.containing(MC.player.blockPosition());
+		if(!stickyArea.isChecked() && !currentChunk.equals(lastPlayerChunk))
+		{
+			lastPlayerChunk = currentChunk;
+			coordinator.reset();
+			historyScanPositions.clear();
+			historyMatchesVersion = -1;
+			groupsUpToDate = false;
+		}
+		boolean searchersChanged = coordinator.update();
+		if(searchersChanged)
+			groupsUpToDate = false;
+		int matchesVersion = coordinator.getMatchesVersion();
+		if(matchesVersion != lastMatchesVersion)
+		{
+			lastMatchesVersion = matchesVersion;
+			groupsUpToDate = false;
+		}
+		boolean partialScan = false;
+		if(!groupsUpToDate && (partialScan ? coordinator.hasReadyMatches()
+			: coordinator.isDone()))
+			updateGroupBoxes();
+	}
+	
+	private void updateSignHistory()
+	{
+		int version = coordinator.getMatchesVersion();
+		if(version != historyMatchesVersion)
+		{
+			historyMatchesVersion = version;
+			coordinator.getReadyMatches().map(Result::pos).forEach(pos -> {
+				BlockPos immutable = pos.immutable();
+				if(historyScanPositions.add(immutable))
+					queueHistoryPosition(immutable);
+			});
+		}
+		String server = getHistoryServer();
+		String dimension = MC.level.dimension().identifier().toString();
+		// Never scan or serialize the whole history on one client tick.
+		for(int i = 0; i < 64; i++)
+		{
+			BlockPos pos = historyQueue.poll();
+			if(pos == null)
+				break;
+			queuedHistoryPositions.remove(pos);
+			if(MC.level.getBlockEntity(pos) instanceof SignBlockEntity sign)
+				history.record(server, dimension, pos, sign);
+			// Only record removals for positions that are already known signs.
+			// Block updates arrive for every changed block (grass, redstone,
+			// water, etc.); treating each one as a possible removed sign used
+			// to grow the history file without bound, which made the
+			// background save increasingly slow and stalled the game.
+			else if(MC.level.hasChunkAt(pos)
+				&& !(MC.level.getBlockState(pos)
+					.getBlock() instanceof SignBlock)
+				&& history.hasRecord(server, dimension, pos))
+				history.recordRemoved(server, dimension, pos);
+		}
+	}
+	
+	private void queueHistoryPosition(BlockPos pos)
+	{
+		BlockPos immutable = pos.immutable();
+		if(queuedHistoryPositions.add(immutable))
+			historyQueue.add(immutable);
+	}
+	
+	private String getHistoryServer()
+	{
+		if(MC.getCurrentServer() != null && MC.getCurrentServer().ip != null
+			&& !MC.getCurrentServer().ip.isBlank())
+			return MC.getCurrentServer().ip.trim()
+				.toLowerCase(java.util.Locale.ROOT);
+		return "singleplayer";
+	}
+	
+	public void printHistoryAtTarget(boolean full)
+	{
+		if(!signHistory.isChecked())
+		{
+			ChatUtils.message("Enable Sign History in SignESP first.");
+			return;
+		}
+		if(!(MC.hitResult instanceof net.minecraft.world.phys.BlockHitResult hit)
+			|| !(MC.level.getBlockState(hit.getBlockPos())
+				.getBlock() instanceof SignBlock))
+		{
+			ChatUtils.message("You are not looking at a sign.");
+			return;
+		}
+		BlockPos pos = hit.getBlockPos();
+		SignHistory.SignRecord record = history.getRecord(getHistoryServer(),
+			MC.level.dimension().identifier().toString(), pos, false);
+		if(record == null || record.entries.isEmpty())
+		{
+			ChatUtils.message("No history recorded for this sign.");
+			return;
+		}
+		List<SignHistory.Entry> entries = record.entries;
+		if(!full
+			&& MC.level.getBlockEntity(pos) instanceof SignBlockEntity sign)
+		{
+			SignHistory.Entry current = SignHistory.Entry.present(sign, false);
+			SignHistory.Entry previous = null;
+			for(int i = entries.size() - 1; i >= 0; i--)
+			{
+				SignHistory.Entry entry = entries.get(i);
+				if(!"removed".equals(entry.state) && !entry.sameText(current))
+				{
+					previous = entry;
+					break;
+				}
+			}
+			if(previous == null)
+			{
+				ChatUtils.message(
+					"No previous sign state differs from current text.");
+				return;
+			}
+			entries = List.of(previous);
+		}
+		for(SignHistory.Entry entry : entries)
+			ChatUtils.message(entry.date + " - "
+				+ ("removed".equals(entry.state) ? "removed"
+					: "front=\"" + String.join(" / ", entry.front)
+						+ "\", back=\"" + String.join(" / ", entry.back)
+						+ "\""));
+	}
+	
+	@Override
+	public void onMouseButtonPress(
+		MouseButtonPressListener.MouseButtonPressEvent event)
+	{
+		if(signHistory.isChecked()
+			&& event.getButton() == InputConstants.MOUSE_BUTTON_MIDDLE
+			&& event.getAction() == InputConstants.PRESS)
+			printHistoryAtTarget(false);
+	}
+	
+	@Override
+	public void onReceivedPacket(PacketInputEvent event)
+	{
+		if(!signHistory.isChecked())
+			return;
+		if(event.getPacket() instanceof ClientboundBlockUpdatePacket update)
+			queueHistoryPosition(update.getPos());
+		else if(event
+			.getPacket() instanceof ClientboundSectionBlocksUpdatePacket update)
+			update.runUpdates((pos, state) -> queueHistoryPosition(pos));
+	}
+	
+	@Override
+	public void onCameraTransformViewBobbing(
+		CameraTransformViewBobbingEvent event)
+	{
+		if(style.getSelected().hasLines())
+			event.cancel();
+	}
+	
+	@Override
+	public void onRender(PoseStack matrixStack, float partialTicks)
+	{
+		// Render on top of ChestESP: while ChestESP is active, re-register this
+		// RenderListener last so the SignESP sign/frame highlights draw over
+		// the chest highlight boxes instead of underneath them.
+		if(WURST.getHax().chestEspHack.isEnabled())
+		{
+			EVENTS.remove(RenderListener.class, this);
+			EVENTS.add(RenderListener.class, this);
+		}
+		
+		// Update entity-group boxes each frame for smooth rendering
+		entityGroups.stream().filter(FrameEspEntityGroup::isEnabled)
+			.forEach(g -> g.updateBoxes(partialTicks));
+		if(style.getSelected().hasBoxes())
+			renderBoxes(matrixStack);
+		if(style.getSelected().hasLines())
+			renderTracers(matrixStack, partialTicks);
+	}
+	
+	private void renderBoxes(PoseStack matrixStack)
+	{
+		for(SignEspGroup group : groups)
+		{
+			if(!group.isEnabled())
+				continue;
+			group.getEntries().forEach(entry -> {
+				if(nearestTracerOnly.isChecked() && group.getEntries().stream()
+					.anyMatch(other -> other.getCenter()
+						.distanceToSqr(net.wurstclient.util.RotationUtils
+							.getEyesPos()) < entry.getCenter().distanceToSqr(
+								net.wurstclient.util.RotationUtils
+									.getEyesPos())))
+					return;
+				int quadsColor = entry.getColorI(0x40);
+				int linesColor = entry.getColorI(0x80);
+				// Draw every component of the sign's shape (post + board for
+				// standing signs, thin rectangle for wall signs) so the
+				// highlight matches the sign instead of one big box.
+				RenderUtils.drawSolidBoxes(matrixStack, entry.getBoxes(),
+					quadsColor, false);
+				RenderUtils.drawOutlinedBoxes(matrixStack, entry.getBoxes(),
+					linesColor, false);
+				if(textOverlay.isChecked())
+					drawTextOverlay(matrixStack, entry);
+			});
+		}
+		// frames
+		for(FrameEspEntityGroup group : entityGroups)
+		{
+			if(!group.isEnabled())
+				continue;
+			List<AABB> boxes = group.getBoxes();
+			// Outline only (no fill) so the item displayed inside the frame
+			// stays uncolored, but keep depth testing off so the frame
+			// outlines remain visible through walls like the rest of SignESP.
+			int linesColor = group.getColorI(0x80);
+			RenderUtils.drawOutlinedBoxes(matrixStack, boxes, linesColor,
+				false);
+		}
+	}
+	
+	private void renderTracers(PoseStack matrixStack, float partialTicks)
+	{
+		for(SignEspGroup group : groups)
+		{
+			if(!group.isEnabled())
+				continue;
+			group.getEntries().forEach(entry -> {
+				int color = entry.getColorI(0x80);
+				if(tracerFlash.isChecked())
+					color = RenderUtils.flashColor(color);
+				RenderUtils.drawTracers("SignESP", matrixStack, partialTicks,
+					java.util.List.of(entry.getCenter()), color, false);
+			});
+		}
+		// frames
+		for(FrameEspEntityGroup group : entityGroups)
+		{
+			if(!group.isEnabled())
+				continue;
+			List<AABB> boxes = group.getBoxes();
+			List<Vec3> ends = boxes.stream().map(AABB::getCenter).toList();
+			if(nearestTracerOnly.isChecked())
+				ends = net.wurstclient.util.EspLimitUtils.collectNearest(ends,
+					1, v -> v.distanceToSqr(
+						net.wurstclient.util.RotationUtils.getEyesPos()));
+			int color = group.getColorI(0x80);
+			if(tracerFlash.isChecked())
+				color = RenderUtils.flashColor(color);
+			RenderUtils.drawTracers("SignESP", matrixStack, partialTicks, ends,
+				color, false);
+		}
+	}
+	
+	private boolean hasText(SignText signText)
+	{
+		for(int i = 0; i < 4; i++)
+		{
+			var component = signText.getMessages(false)[i];
+			if(component != null && !component.getString().isBlank())
+				return true;
+		}
+		return false;
+	}
+	
+	private void drawTextOverlay(PoseStack matrices, SignEspEntry entry)
+	{
+		if(MC.level == null || MC.player == null || MC.font == null)
+			return;
+		SignBlockEntity sign =
+			MC.level.getBlockEntity(entry.pos) instanceof SignBlockEntity s ? s
+				: null;
+		if(sign == null)
+			return;
+		SignText frontText = sign.getText(true);
+		SignText backText = sign.getText(false);
+		boolean frontHasText = hasText(frontText);
+		boolean backHasText = hasText(backText);
+		SignText signText = frontHasText && backHasText
+			? sign.getText(sign.isFacingFrontText(MC.player))
+			: frontHasText ? frontText : backText;
+		if(!frontHasText && !backHasText)
+			return;
+		List<String> lines = new ArrayList<>();
+		for(int i = 0; i < 4; i++)
+		{
+			var component = signText.getMessages(false)[i];
+			lines.add(component == null ? "" : component.getString());
+		}
+		if(lines.stream().allMatch(String::isBlank))
+			return;
+		Vec3 cam = RenderUtils.getCameraPos();
+		Vec3 pos = entry.getCenter().add(0, 0.2, 0);
+		Vec3 dir = pos.subtract(cam);
+		double dist = dir.length();
+		if(dist < 5)
+			return;
+		if(dist > 12)
+			pos = cam.add(dir.scale(12 / dist));
+		matrices.pushPose();
+		matrices.translate(pos.x - cam.x, pos.y - cam.y, pos.z - cam.z);
+		RenderUtils.applyWorldTextOrientation(matrices);
+		RenderUtils.mulPose(matrices, Axis.YP.rotationDegrees(180));
+		float distanceScale = (float)Math.min(1.0, (dist - 5.0) / 7.0);
+		float scale = 0.025F * overlayScale.getValueF() * distanceScale;
+		matrices.scale(scale, -scale, scale);
+		Font font = MC.font;
+		int lineHeight = font.lineHeight + 2;
+		int background =
+			(int)(MC.options.getBackgroundOpacity(0.25F) * 255) << 24;
+		DisplayMode layer =
+			NiceWurstModule.enforceTextLayer(DisplayMode.SEE_THROUGH);
+		for(int i = 0; i < lines.size(); i++)
+		{
+			String line = lines.get(i);
+			int x = -font.width(line) / 2;
+			RenderUtils.drawTextInBatch(font, line, x, i * lineHeight,
+				0xFFFFFFFF, false, matrices.last().pose(), null, layer,
+				background, 0xF000F0);
+		}
+		matrices.popPose();
+	}
+	
+	private void updateGroupBoxes()
+	{
+		groups.forEach(SignEspGroup::clear);
+		int globalLimit = getEffectiveGlobalEspLimit();
+		if(globalLimit > 0)
+		{
+			for(Result result : getNearestReadyMatches(globalLimit))
+				addToGroupBoxes(result);
+		}else
+			coordinator.getReadyMatches().forEach(this::addToGroupBoxes);
+		groupsUpToDate = true;
+		// compute count from both sign boxes and frame boxes
+		int signs = groups.stream().mapToInt(g -> g.getBoxes().size()).sum();
+		int framesCount =
+			entityGroups.stream().mapToInt(g -> g.getBoxes().size()).sum();
+		foundCount = Math.min(signs + framesCount, 999);
+	}
+	
+	private int getEffectiveGlobalEspLimit()
+	{
+		return 0;
+	}
+	
+	private List<Result> getNearestReadyMatches(int limit)
+	{
+		var eyesPos = RotationUtils.getEyesPos();
+		return EspLimitUtils.collectNearest(coordinator.getReadyMatches(),
+			limit, r -> r.pos().distToCenterSqr(eyesPos), result -> {
+				if(onlyAboveGround.isChecked()
+					&& result.pos().getY() < aboveGroundY.getValue())
+					return false;
+				return true;
+			});
+	}
+	
+	private void addToGroupBoxes(Result result)
+	{
+		if(onlyAboveGround.isChecked()
+			&& result.pos().getY() < aboveGroundY.getValue())
+			return;
+		for(SignEspGroup group : groups)
+		{
+			group.add(result.pos());
+			break;
+		}
+	}
+	
+	@Override
+	public String getRenderName()
+	{
+		String base = getName();
+		if(showCountInHackList.isChecked() && foundCount > 0)
+			return base + " [" + foundCount + "]";
+		return base;
+	}
+	
+	private static final class SignEspGroup
+	{
+		private final ArrayList<SignEspEntry> entries = new ArrayList<>();
+		private final ColorSetting color;
+		private final CheckboxSetting enabled;
+		
+		private SignEspGroup(ColorSetting color, CheckboxSetting enabled)
+		{
+			this.color = Objects.requireNonNull(color);
+			this.enabled = enabled;
+		}
+		
+		public void add(BlockPos pos)
+		{
+			if(!isEnabled())
+				return;
+			if(!BlockUtils.canBeClicked(pos))
+				return;
+			List<AABB> boxes = getSignShapeBoxes(pos);
+			if(boxes.isEmpty())
+				return;
+			entries.add(
+				new SignEspEntry(pos, boxes, color.getColorI(0xFF) & 0xFFFFFF));
+		}
+		
+		/**
+		 * Returns the component boxes of the sign's actual shape (e.g. post and
+		 * board of a standing sign) moved to world coordinates, or a full-block
+		 * box as a fallback.
+		 */
+		private List<AABB> getSignShapeBoxes(BlockPos pos)
+		{
+			BlockState state = BlockUtils.getState(pos);
+			
+			// Standing signs use a full-block collision shape in this MC
+			// version, so build the shape from the actual sign model instead
+			// (a thin post plus a flat board that rotates with the sign).
+			if(state.getBlock() instanceof StandingSignBlock sign)
+				return standingSignBoxes(pos, state, sign);
+				
+			// Wall signs (and anything else) use their collision shape, which
+			// for wall signs is already a thin board.
+			var shape =
+				state.getShape(net.wurstclient.WurstClient.MC.level, pos);
+			if(shape.isEmpty())
+				return List.of(new AABB(pos));
+			return shape.toAabbs().stream().map(b -> b.move(pos)).toList();
+		}
+		
+		/**
+		 * Builds the boxes for a standing sign from its model geometry: a thin
+		 * post at the bottom and a flat board that rotates around the block's
+		 * vertical center axis with the sign's yaw.
+		 */
+		private List<AABB> standingSignBoxes(BlockPos pos, BlockState state,
+			StandingSignBlock sign)
+		{
+			double x = pos.getX();
+			double y = pos.getY();
+			double z = pos.getZ();
+			
+			// Post: thin, centered, bottom of the block.
+			AABB post = new AABB(x + 7.33333 / 16.0, y, z + 7.33333 / 16.0,
+				x + 8.66667 / 16.0, y + 9.33333 / 16.0, z + 8.66667 / 16.0);
+			
+			// Board: flat, spans the block, rotates around the vertical center
+			// axis with the sign's yaw.
+			double rad = Math.toRadians(sign.getYRotationDegrees(state));
+			double halfX = 0.5 * Math.abs(Math.cos(rad))
+				+ 0.0416667 * Math.abs(Math.sin(rad));
+			double halfZ = 0.5 * Math.abs(Math.sin(rad))
+				+ 0.0416667 * Math.abs(Math.cos(rad));
+			AABB board =
+				new AABB(x + 0.5 - halfX, y + 9.33333 / 16.0, z + 0.5 - halfZ,
+					x + 0.5 + halfX, y + 17.33333 / 16.0, z + 0.5 + halfZ);
+			
+			return List.of(post, board);
+		}
+		
+		public void clear()
+		{
+			entries.clear();
+		}
+		
+		public boolean isEnabled()
+		{
+			return enabled == null || enabled.isChecked();
+		}
+		
+		public Stream<Setting> getSettings()
+		{
+			return Stream.of(enabled, color).filter(Objects::nonNull);
+		}
+		
+		public int getColorI(int alpha)
+		{
+			return color.getColorI(alpha);
+		}
+		
+		public List<AABB> getBoxes()
+		{
+			return entries.stream().flatMap(e -> e.getBoxes().stream())
+				.toList();
+		}
+		
+		public List<SignEspEntry> getEntries()
+		{
+			return java.util.Collections.unmodifiableList(entries);
+		}
+	}
+	
+	private static final class SignEspEntry
+	{
+		private static final int RECENT_COLOR = 0x00FF00;
+		private final BlockPos pos;
+		private final List<AABB> boxes;
+		private final int baseColor;
+		
+		private SignEspEntry(BlockPos pos, List<AABB> boxes, int baseColor)
+		{
+			this.pos = pos;
+			this.boxes = boxes;
+			this.baseColor = baseColor;
+		}
+		
+		public List<AABB> getBoxes()
+		{
+			return boxes;
+		}
+		
+		/** Center of the union of all shape boxes (used for tracers). */
+		public Vec3 getCenter()
+		{
+			AABB first = boxes.get(0);
+			double minX = first.minX, minY = first.minY, minZ = first.minZ;
+			double maxX = first.maxX, maxY = first.maxY, maxZ = first.maxZ;
+			for(AABB b : boxes)
+			{
+				minX = Math.min(minX, b.minX);
+				minY = Math.min(minY, b.minY);
+				minZ = Math.min(minZ, b.minZ);
+				maxX = Math.max(maxX, b.maxX);
+				maxY = Math.max(maxY, b.maxY);
+				maxZ = Math.max(maxZ, b.maxZ);
+			}
+			return new Vec3((minX + maxX) / 2, (minY + maxY) / 2,
+				(minZ + maxZ) / 2);
+		}
+		
+		public int getColorI(int alpha)
+		{
+			AutoSignHack autoSign = WURST.getHax().autoSignHack;
+			if(false)
+				return (alpha << 24) | RECENT_COLOR;
+			
+			return (alpha << 24) | baseColor;
+		}
+	}
+	
+	private final class FrameEspEntityGroup
+	{
+		private final ArrayList<AABB> boxes = new ArrayList<>();
+		private final ColorSetting color;
+		private final CheckboxSetting enabled;
+		
+		private FrameEspEntityGroup(ColorSetting color, CheckboxSetting enabled)
+		{
+			this.color = Objects.requireNonNull(color);
+			this.enabled = enabled;
+		}
+		
+		public void updateBoxes(float partialTicks)
+		{
+			boxes.clear();
+			if(!isEnabled())
+				return;
+			int globalLimit = getEffectiveGlobalEspLimit();
+			if(globalLimit <= 0)
+			{
+				for(var e : net.wurstclient.WurstClient.MC.level
+					.entitiesForRendering())
+				{
+					if(e instanceof ItemFrame || e instanceof GlowItemFrame)
+					{
+						if(onlyAboveGround.isChecked()
+							&& e.getY() < aboveGroundY.getValue())
+							continue;
+						AABB b = EntityUtils.getLerpedBox(e, partialTicks);
+						boxes.add(b);
+					}
+				}
+				return;
+			}
+			
+			var eyesPos = RotationUtils.getEyesPos();
+			var nearest = EspLimitUtils.collectNearest(
+				net.wurstclient.WurstClient.MC.level.entitiesForRendering(),
+				globalLimit, e -> e.distanceToSqr(eyesPos), e -> {
+					if(!(e instanceof ItemFrame || e instanceof GlowItemFrame))
+						return false;
+					if(onlyAboveGround.isChecked()
+						&& e.getY() < aboveGroundY.getValue())
+						return false;
+					return true;
+				});
+			for(var e : nearest)
+			{
+				AABB b = EntityUtils.getLerpedBox(e, partialTicks);
+				boxes.add(b);
+			}
+		}
+		
+		public void clear()
+		{
+			boxes.clear();
+		}
+		
+		public boolean isEnabled()
+		{
+			return enabled == null || enabled.isChecked();
+		}
+		
+		public Stream<Setting> getSettings()
+		{
+			return Stream.of(enabled, color).filter(Objects::nonNull);
+		}
+		
+		public int getColorI(int alpha)
+		{
+			return color.getColorI(alpha);
+		}
+		
+		public List<AABB> getBoxes()
+		{
+			return java.util.Collections.unmodifiableList(boxes);
+		}
+	}
+}

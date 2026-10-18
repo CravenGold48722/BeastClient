@@ -858,6 +858,46 @@ category you didn't sweep.
   MileyCyrus, HeadRoll, ItemGenerator, BuildRandom, ForceOp, CrashChest, AutoLibrarian.
 - `build.gradle` is modified vs. upstream: `withSourcesJar()` removed.
 
+### Features ported from other clients (user, 2026-10-18)
+
+User: "ANY features `../UI+Feature_Inpirations` [the CevAPI Wurst fork, MC 26.3] OR
+`../Feature_Inpirations+Additions` [Meteor Client] have that beast doesn't should be added to
+beast, if it has some that we also have, DO NOT REPLACE OURS WITH THEIRS". Done in batches,
+each built, smoke-tested and shipped. Rules that came out of it:
+- **Never bulk-copy unread code** (the auto-mode classifier blocks it): scan each batch for
+  network/token/exec/file-delete use, read what's flagged, copy only the dependency closure.
+- **Duplicates of Beast features are skipped, not merged**: AutoMace and AttributeSwap
+  (= MaceAssist), SurfaceXray (user: "we already have xray"), HideWurst (= RecordingMode),
+  PacketDelay (= Blink), GlobalToggle (only drives CevAPI's own ESP pipeline). SpearAssist
+  went **into MaceAssist** as its "Spear" setting group (`hacks/maceassist/SpearAssist`;
+  user: "integrate spearassist into maceassist, remember we already have lunge-swapping") -
+  without its "pass" mode, which needed CevAPI's AimAssist/Flight hooks.
+- CevAPI's categories Intel/Tools/Creative-Op map to Render/Other/Other (the ClickGUI bar
+  has exactly ten slots).
+- 26.3 -> 26.1.2: `MC.gui.setScreen/screen()` -> `MC.setScreen/screen`, SDL input ->
+  GLFW (`util/SdlUtils` reimplemented), `FirstPersonHandsAndItemsRenderer` ->
+  `ItemInHandRenderer` (`ViewmodelItemInHandRendererMixin`), `swing(hand, anim, false)` ->
+  `swing(hand)`, `ServerboundPunchPacket` doesn't exist, `ServerboundMoveVehiclePacket` is
+  a (Vec3, yRot, xRot, onGround) record, sign text uses booleans not `SignTextSlot`.
+- Their shared-class additions became **additive shims**, never replacements:
+  `RenderUtils` (flash colors, tracer/curve widths, octahedrons, circles, labels - drawn
+  through Beast's buffers and RecordingMode), chunk-search readiness/version
+  (`AbstractChunkCoordinator`), `Setting.isVisibleInGui`/`resetToDefault`, `SettingGroup`
+  (Beast-styled popup row), `Hack(name, description, false)` for plain-English
+  descriptions, `Hack.getStatusText()` (HackList suffix), `TimerManager` (a hack's timer
+  request beats the Timer hack while it lasts), `NiceWurstModule` is a pass-through stub.
+- Their hooks inside mixins Beast also has go into **new mixin classes** (RenderAdjust*,
+  FunCreepers*, AntiBlast*, ContainerOverlayHooksMixin for every container-screen overlay
+  and click, BlockAndItemHooksGameModeMixin, ...) or as small additions to ours.
+  Netty-thread callbacks only set flags (ServerObserver -> AntiCheatDetect via
+  `MC.execute`); ChestRecorder's per-snapshot `new Timer()` threads became one scheduler
+  that runs on the client thread.
+- Gametest `PortedFeaturesTest` (`gametest ported`) switches every ported hack on and off
+  (looking at the sky), opens a chest and the inventory with ChestSearch/EnchantmentHandler
+  on, and must end clean. Add each new batch to its list.
+- Still open: StaffMonitor/SimulationSonar (AutoClicker's pause checks return false until
+  then), AutoFly (ClutchFall's flying check).
+
 ### MaceAssistHack (COMBAT)
 
 A port of the standalone **BetterMaceSwap** mod (`C:\Users\rbnst\BetterMaceSwap`, package

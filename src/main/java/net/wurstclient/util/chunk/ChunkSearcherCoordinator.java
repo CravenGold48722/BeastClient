@@ -42,4 +42,9 @@ public final class ChunkSearcherCoordinator extends AbstractChunkCoordinator
 	{
 		return searchers.values().stream().flatMap(ChunkSearcher::getMatches);
 	}
+	
+	public Stream<Result> getReadyMatches()
+	{
+		return streamReadyMatches();
+	}
 }

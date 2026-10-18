@@ -568,6 +568,16 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			5, 0.25, 8, 0.25, ValueDisplay.DECIMAL.withSuffix(" blocks"));
 	
 	private Entity target;
+	
+	/**
+	 * The entity AimAssist is aiming at, or null. (Read by InfiniteReach,
+	 * ported from the CevAPI fork.)
+	 */
+	public Entity getCurrentTarget()
+	{
+		return target;
+	}
+	
 	private boolean switchKeyDownLastTick;
 	
 	/**

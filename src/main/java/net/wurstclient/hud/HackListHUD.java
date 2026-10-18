@@ -84,7 +84,8 @@ public final class HackListHUD implements UpdateListener
 				drawWithOffset(context, e, partialTicks);
 		else
 			for(HackListEntry e : activeHax)
-				drawString(context, e.hack.getRenderName());
+				drawString(context, e.hack.getRenderName(),
+					e.hack.getStatusText(), e.hack.getStatusTextColor());
 	}
 	
 	public void updateState(Hack hack)
@@ -146,15 +147,26 @@ public final class HackListHUD implements UpdateListener
 	
 	private void drawString(GuiGraphicsExtractor context, String s)
 	{
+		drawString(context, s, null, 0);
+	}
+	
+	/**
+	 * Draws one line; a hack's status text (see {@link Hack#getStatusText()})
+	 * follows its name in its own color.
+	 */
+	private void drawString(GuiGraphicsExtractor context, String s,
+		String status, int statusColor)
+	{
 		Font tr = BeastFont.get();
 		int posX;
+		int statusWidth = status == null ? 0 : tr.width(" " + status);
 		
 		if(otf.getPosition() == Position.LEFT)
 			posX = 2;
 		else
 		{
 			int screenWidth = context.guiWidth();
-			int stringWidth = tr.width(s);
+			int stringWidth = tr.width(s) + statusWidth;
 			
 			posX = screenWidth - stringWidth - 2;
 		}
@@ -167,7 +179,20 @@ public final class HackListHUD implements UpdateListener
 			context.text(tr, s, posX, posY, textColor | CommonColors.BLACK,
 				false);
 		
+		if(status != null)
+			drawStatus(context, tr, status, posX + tr.width(s), posY,
+				statusColor, 0xFF000000);
+		
 		posY += 9;
+	}
+	
+	private void drawStatus(GuiGraphicsExtractor context, Font tr,
+		String status, int x, int y, int color, int alpha)
+	{
+		String text = " " + status;
+		context.text(tr, text, x + 1, y + 1,
+			CommonColors.BLACK & 0xFFFFFF | alpha & 0xFC000000, false);
+		context.text(tr, text, x, y, color & 0xFFFFFF | alpha, false);
 	}
 	
 	private void drawWithOffset(GuiGraphicsExtractor context, HackListEntry e,
@@ -175,6 +200,8 @@ public final class HackListHUD implements UpdateListener
 	{
 		Font tr = BeastFont.get();
 		String s = e.hack.getRenderName();
+		String status = e.hack.getStatusText();
+		int statusWidth = status == null ? 0 : tr.width(" " + status);
 		
 		float offset =
 			e.offset * partialTicks + e.prevOffset * (1 - partialTicks);
@@ -185,7 +212,7 @@ public final class HackListHUD implements UpdateListener
 		else
 		{
 			int screenWidth = context.guiWidth();
-			int stringWidth = tr.width(s);
+			int stringWidth = tr.width(s) + statusWidth;
 			
 			posX = screenWidth - stringWidth - 2 + 5 * offset;
 		}
@@ -198,6 +225,10 @@ public final class HackListHUD implements UpdateListener
 				(alpha >>> 24) / 255F, false);
 		else
 			context.text(tr, s, (int)posX, posY, textColor | alpha, false);
+		
+		if(status != null)
+			drawStatus(context, tr, status, (int)posX + tr.width(s), posY,
+				e.hack.getStatusTextColor(), alpha);
 		
 		posY += 9;
 	}

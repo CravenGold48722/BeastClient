@@ -34,6 +34,8 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.WurstClient;
 import net.wurstclient.WurstRenderLayers;
+import org.joml.Quaternionfc;
+import net.minecraft.util.FormattedCharSequence;
 
 public enum RenderUtils
 {
@@ -1209,6 +1211,431 @@ public enum RenderUtils
 		}
 		
 		return cursor;
+	}
+	
+	// Helpers used by the features ported from the CevAPI fork. They draw
+	// through the same buffers and RecordingMode check as the methods above;
+	// the "source" names CevAPI passes for its global tracer limits are not
+	// used here.
+	
+	private static final float DEFAULT_LINE_WIDTH = 2F;
+	private static final double MIN_LINE_WIDTH = 0.5;
+	private static final double MAX_LINE_WIDTH = 20;
+	private static final long TRACER_FLASH_PERIOD_MS = 700L;
+	private static final float TRACER_FLASH_MIN_ALPHA = 0.2F;
+	
+	public static void mulPose(PoseStack matrices, Quaternionfc rotation)
+	{
+		matrices.mulPose(rotation);
+	}
+	
+	/**
+	 * Turns the matrices to face the camera, for text drawn in the world.
+	 */
+	public static void applyWorldTextOrientation(PoseStack matrices)
+	{
+		Rotation rotation = getCameraRotation();
+		matrices.mulPose(
+			new Matrix4f().rotateY((float)Math.toRadians(-rotation.yaw())));
+		matrices.mulPose(
+			new Matrix4f().rotateX((float)Math.toRadians(rotation.pitch())));
+	}
+	
+	public static int flashColor(int color)
+	{
+		return flashColor(color, System.currentTimeMillis());
+	}
+	
+	public static int flashColor(int color, long nowMs)
+	{
+		return setAlpha(color, getTracerFlashAlpha(nowMs));
+	}
+	
+	public static float getTracerFlashAlpha()
+	{
+		return getTracerFlashAlpha(System.currentTimeMillis());
+	}
+	
+	public static float getTracerFlashAlpha(long nowMs)
+	{
+		float cycle =
+			(nowMs % TRACER_FLASH_PERIOD_MS) / (float)TRACER_FLASH_PERIOD_MS;
+		float pulse = 0.5F - 0.5F * Mth.cos((float)(cycle * Math.PI * 2.0));
+		return TRACER_FLASH_MIN_ALPHA + (1.0F - TRACER_FLASH_MIN_ALPHA) * pulse;
+	}
+	
+	public static int setAlpha(int color, float alpha)
+	{
+		int a = (int)(Mth.clamp(alpha, 0F, 1F) * 255F);
+		return (color & 0x00FFFFFF) | (a << 24);
+	}
+	
+	private static float clampLineWidth(double width)
+	{
+		return (float)Mth.clamp(width, MIN_LINE_WIDTH, MAX_LINE_WIDTH);
+	}
+	
+	public static void drawTracer(String source, PoseStack matrices,
+		float partialTicks, Vec3 end, int color, boolean depthTest)
+	{
+		drawTracer(matrices, partialTicks, end, color, depthTest);
+	}
+	
+	public static void drawTracers(String source, PoseStack matrices,
+		float partialTicks, List<Vec3> ends, int color, boolean depthTest)
+	{
+		drawTracers(matrices, partialTicks, ends, color, depthTest);
+	}
+	
+	public static void drawTracers(String source, PoseStack matrices,
+		float partialTicks, List<ColoredPoint> ends, boolean depthTest)
+	{
+		drawTracers(matrices, partialTicks, ends, depthTest);
+	}
+	
+	public static void drawTracers(String source, PoseStack matrices,
+		float partialTicks, List<ColoredPoint> ends, boolean depthTest,
+		double lineWidth)
+	{
+		drawTracers(matrices, partialTicks, ends, depthTest, lineWidth);
+	}
+	
+	public static void drawTracers(PoseStack matrices, float partialTicks,
+		List<ColoredPoint> ends, boolean depthTest, double lineWidth)
+	{
+		if(ends == null || ends.isEmpty())
+			return;
+		
+		MultiBufferSource.BufferSource vcp = getVCP();
+		RenderType layer = WurstRenderLayers.getLines(depthTest);
+		VertexConsumer buffer = vcp.getBuffer(layer);
+		
+		Vec3 start = getTracerOrigin(partialTicks);
+		Vec3 offset = getCameraPos().reverse();
+		float width = clampLineWidth(lineWidth);
+		for(ColoredPoint end : ends)
+			drawLine(matrices.last(), buffer, start.toVector3f(),
+				end.point().add(offset).toVector3f(), end.color(), width);
+		
+		vcp.endBatch(layer);
+	}
+	
+	/**
+	 * Draws a line like the other drawLine methods, with a line width.
+	 */
+	public static void drawLine(PoseStack.Pose entry, VertexConsumer buffer,
+		Vector3f from, Vector3f to, int color, float width)
+	{
+		if(isWorldRenderingHidden())
+			return;
+		
+		Vector3f normal = new Vector3f(to).sub(from);
+		if(normal.lengthSquared() > 0)
+			normal.normalize();
+		else
+			normal.set(0, 1, 0);
+		
+		buffer.addVertex(entry, from).setColor(color).setNormal(entry, normal)
+			.setLineWidth(width);
+		
+		// same workaround for lines through the screen as above
+		float t = new Vector3f(from).negate().dot(normal);
+		float length = new Vector3f(to).sub(from).length();
+		if(t > 0 && t < length)
+		{
+			Vector3f closeToCam = new Vector3f(normal).mul(t).add(from);
+			buffer.addVertex(entry, closeToCam).setColor(color)
+				.setNormal(entry, normal).setLineWidth(width);
+			buffer.addVertex(entry, closeToCam).setColor(color)
+				.setNormal(entry, normal).setLineWidth(width);
+		}
+		
+		buffer.addVertex(entry, to).setColor(color).setNormal(entry, normal)
+			.setLineWidth(width);
+	}
+	
+	public static void drawLine(PoseStack matrices, VertexConsumer buffer,
+		Vec3 start, Vec3 end, int color, float width)
+	{
+		drawLine(matrices.last(), buffer, start.toVector3f(), end.toVector3f(),
+			color, width);
+	}
+	
+	/**
+	 * Outlined boxes; the line width is CevAPI's parameter, Beast's boxes are
+	 * always drawn 2 pixels wide.
+	 */
+	public static void drawOutlinedBoxes(PoseStack matrices,
+		List<ColoredBox> boxes, boolean depthTest, double lineWidth)
+	{
+		drawOutlinedBoxes(matrices, boxes, depthTest);
+	}
+	
+	public static void drawCircle(PoseStack matrices, Vec3 center,
+		double radius, int segments, int color, boolean depthTest)
+	{
+		if(segments < 3 || radius <= 0)
+			return;
+		
+		MultiBufferSource.BufferSource vcp = getVCP();
+		RenderType layer = WurstRenderLayers.getLines(depthTest);
+		VertexConsumer buffer = vcp.getBuffer(layer);
+		
+		Vec3 c = center.add(getCameraPos().reverse());
+		double step = Math.PI * 2 / segments;
+		Vec3 prev = c.add(radius, 0, 0);
+		for(int i = 1; i <= segments; i++)
+		{
+			double angle = i * step;
+			Vec3 next =
+				c.add(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+			drawLine(matrices, buffer, prev, next, color, DEFAULT_LINE_WIDTH);
+			prev = next;
+		}
+		
+		vcp.endBatch(layer);
+	}
+	
+	public static void drawCurvedLine(PoseStack matrices, List<Vec3> points,
+		int color, boolean depthTest, double width)
+	{
+		if(points.size() < 2 || isWorldRenderingHidden())
+			return;
+		
+		MultiBufferSource.BufferSource vcp = getVCP();
+		RenderType layer = WurstRenderLayers.getLines(depthTest);
+		VertexConsumer buffer = vcp.getBuffer(layer);
+		
+		Vec3 offset = getCameraPos().reverse();
+		float lineWidth = clampLineWidth(width);
+		PoseStack.Pose entry = matrices.last();
+		for(int i = 1; i < points.size(); i++)
+		{
+			Vector3f prev = points.get(i - 1).add(offset).toVector3f();
+			Vector3f current = points.get(i).add(offset).toVector3f();
+			Vector3f normal = new Vector3f(current).sub(prev);
+			if(normal.lengthSquared() > 0)
+				normal.normalize();
+			else
+				normal.set(0, 1, 0);
+			buffer.addVertex(entry, prev).setColor(color)
+				.setNormal(entry, normal).setLineWidth(lineWidth);
+			buffer.addVertex(entry, current).setColor(color)
+				.setNormal(entry, normal).setLineWidth(lineWidth);
+		}
+		
+		vcp.endBatch(layer);
+	}
+	
+	public static void drawCurvedLine(String source, PoseStack matrices,
+		List<Vec3> points, int color, boolean depthTest)
+	{
+		drawCurvedLine(matrices, points, color, depthTest);
+	}
+	
+	public static void drawCurvedLine(String source, PoseStack matrices,
+		List<Vec3> points, int color, boolean depthTest, double width)
+	{
+		drawCurvedLine(matrices, points, color, depthTest, width);
+	}
+	
+	public static void drawOutlinedOctahedrons(PoseStack matrices,
+		List<AABB> boxes, int color, boolean depthTest)
+	{
+		drawOutlinedOctahedrons(matrices,
+			boxes.stream().map(box -> new ColoredBox(box, color)).toList(),
+			depthTest);
+	}
+	
+	public static void drawOutlinedOctahedrons(PoseStack matrices,
+		List<ColoredBox> boxes, boolean depthTest)
+	{
+		if(boxes.isEmpty())
+			return;
+		
+		MultiBufferSource.BufferSource vcp = getVCP();
+		RenderType layer = WurstRenderLayers.getLines(depthTest);
+		VertexConsumer buffer = vcp.getBuffer(layer);
+		
+		Vec3 camOffset = getCameraPos().reverse();
+		for(ColoredBox box : boxes)
+			drawOutlinedOctahedron(matrices, buffer, box.box().move(camOffset),
+				box.color());
+		
+		vcp.endBatch(layer);
+	}
+	
+	public static void drawSolidOctahedrons(PoseStack matrices,
+		List<AABB> boxes, int color, boolean depthTest)
+	{
+		drawSolidOctahedrons(matrices,
+			boxes.stream().map(box -> new ColoredBox(box, color)).toList(),
+			depthTest);
+	}
+	
+	public static void drawSolidOctahedrons(PoseStack matrices,
+		List<ColoredBox> boxes, boolean depthTest)
+	{
+		if(boxes.isEmpty())
+			return;
+		
+		MultiBufferSource.BufferSource vcp = getVCP();
+		RenderType layer = WurstRenderLayers.getQuads(depthTest);
+		VertexConsumer buffer = vcp.getBuffer(layer);
+		
+		Vec3 camOffset = getCameraPos().reverse();
+		for(ColoredBox box : boxes)
+			drawSolidOctahedron(matrices, buffer, box.box().move(camOffset),
+				box.color());
+		
+		vcp.endBatch(layer);
+	}
+	
+	public static void drawOutlinedOctahedron(PoseStack matrices,
+		VertexConsumer buffer, AABB box, int color)
+	{
+		PoseStack.Pose entry = matrices.last();
+		float cx = (float)box.getCenter().x;
+		float cy = (float)box.getCenter().y;
+		float cz = (float)box.getCenter().z;
+		Vector3f top = new Vector3f(cx, (float)box.maxY, cz);
+		Vector3f bottom = new Vector3f(cx, (float)box.minY, cz);
+		Vector3f east = new Vector3f((float)box.maxX, cy, cz);
+		Vector3f west = new Vector3f((float)box.minX, cy, cz);
+		Vector3f north = new Vector3f(cx, cy, (float)box.minZ);
+		Vector3f south = new Vector3f(cx, cy, (float)box.maxZ);
+		
+		Vector3f[][] edges = {{top, east}, {top, west}, {top, north},
+			{top, south}, {bottom, east}, {bottom, west}, {bottom, north},
+			{bottom, south}, {east, north}, {north, west}, {west, south},
+			{south, east}};
+		for(Vector3f[] edge : edges)
+			drawLine(entry, buffer, edge[0], edge[1], color,
+				DEFAULT_LINE_WIDTH);
+	}
+	
+	public static void drawSolidOctahedron(PoseStack matrices,
+		VertexConsumer buffer, AABB box, int color)
+	{
+		if(isWorldRenderingHidden())
+			return;
+		
+		PoseStack.Pose entry = matrices.last();
+		float cx = (float)box.getCenter().x;
+		float cy = (float)box.getCenter().y;
+		float cz = (float)box.getCenter().z;
+		Vector3f center = new Vector3f(cx, cy, cz);
+		Vector3f top = new Vector3f(cx, (float)box.maxY, cz);
+		Vector3f bottom = new Vector3f(cx, (float)box.minY, cz);
+		Vector3f east = new Vector3f((float)box.maxX, cy, cz);
+		Vector3f west = new Vector3f((float)box.minX, cy, cz);
+		Vector3f north = new Vector3f(cx, cy, (float)box.minZ);
+		Vector3f south = new Vector3f(cx, cy, (float)box.maxZ);
+		
+		Vector3f[][] faces = {{top, east, north}, {top, north, west},
+			{top, west, south}, {top, south, east}, {bottom, north, east},
+			{bottom, west, north}, {bottom, south, west},
+			{bottom, east, south}};
+		for(Vector3f[] f : faces)
+		{
+			Vector3f normal = new Vector3f(f[1]).sub(f[0])
+				.cross(new Vector3f(f[2]).sub(f[0]));
+			if(normal.lengthSquared() > 0)
+			{
+				Vector3f faceDir =
+					new Vector3f(f[0]).add(f[1]).add(f[2]).div(3F).sub(center);
+				if(normal.dot(faceDir) < 0)
+					normal.negate();
+				normal.normalize();
+			}else
+				normal.set(0, 1, 0);
+			
+			// quads: the last corner twice
+			for(Vector3f v : new Vector3f[]{f[0], f[1], f[2], f[2]})
+				buffer.addVertex(entry, v).setColor(color).setNormal(entry,
+					normal);
+		}
+	}
+	
+	/**
+	 * Draws text with the matrix and display mode given, right away.
+	 */
+	public static void drawTextInBatch(Font font, String text, float x, float y,
+		int color, boolean shadow, Matrix4f matrix, MultiBufferSource vcp,
+		Font.DisplayMode displayMode, int backgroundColor, int packedLight)
+	{
+		if(text == null || text.isEmpty() || isWorldRenderingHidden())
+			return;
+		
+		MultiBufferSource.BufferSource buffers = getVCP();
+		font.drawInBatch(text, x, y, color, shadow, matrix, buffers,
+			displayMode, backgroundColor, packedLight);
+		buffers.endBatch();
+	}
+	
+	public static void drawTextInBatch(Font font, FormattedCharSequence text,
+		float x, float y, int color, boolean shadow, Matrix4f matrix,
+		MultiBufferSource vcp, Font.DisplayMode displayMode,
+		int backgroundColor, int packedLight)
+	{
+		if(text == null || isWorldRenderingHidden())
+			return;
+		
+		MultiBufferSource.BufferSource buffers = getVCP();
+		font.drawInBatch(text, x, y, color, shadow, matrix, buffers,
+			displayMode, backgroundColor, packedLight);
+		buffers.endBatch();
+	}
+	
+	/**
+	 * Draws text with a 1-pixel outline in another color.
+	 */
+	public static void drawOutlinedTextInBatch(Font font, String text, float x,
+		float y, int color, int outlineColor, Matrix4f matrix,
+		Font.DisplayMode displayMode, int backgroundColor, int packedLight)
+	{
+		if(text == null || text.isEmpty() || isWorldRenderingHidden())
+			return;
+		
+		MultiBufferSource.BufferSource buffers = getVCP();
+		int[][] offsets = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+		for(int[] o : offsets)
+			font.drawInBatch(text, x + o[0], y + o[1], outlineColor, false,
+				matrix, buffers, displayMode, 0, packedLight);
+		font.drawInBatch(text, x, y, color, false, matrix, buffers, displayMode,
+			backgroundColor, packedLight);
+		buffers.endBatch();
+	}
+	
+	public static float getCappedWorldLabelScale(float baseScale,
+		double distance)
+	{
+		double factor = Math.max(1.0, distance * 0.1);
+		factor = Math.min(factor, 1.2);
+		return baseScale * (float)factor;
+	}
+	
+	/**
+	 * Draws text scaled by the given factor.
+	 */
+	public static void drawScaledText(GuiGraphicsExtractor context, Font tr,
+		String text, int x, int y, int color, boolean shadow, double scale)
+	{
+		if(text == null || text.isEmpty())
+			return;
+		
+		if(Math.abs(scale - 1.0) < 1e-6)
+		{
+			context.text(tr, text, x, y, color, shadow);
+			return;
+		}
+		
+		context.pose().pushMatrix();
+		context.pose().scale((float)scale);
+		int sx = (int)Math.round(x / scale);
+		int sy = (int)Math.round(y / scale);
+		context.text(tr, text, sx, sy, color, shadow);
+		context.pose().popMatrix();
 	}
 	
 	public record ColoredPoint(Vec3 point, int color)

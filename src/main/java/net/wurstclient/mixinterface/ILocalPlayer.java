@@ -10,4 +10,10 @@ package net.wurstclient.mixinterface;
 public interface ILocalPlayer
 {
 	public boolean isTouchingWaterBypass();
+	
+	/**
+	 * Sets vanilla's counter for the once-per-20-ticks position packet
+	 * (ElytraWalk).
+	 */
+	public void elytraWalk$setPositionReminder(int value);
 }

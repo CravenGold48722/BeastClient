@@ -1,0 +1,431 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.hacks;
+
+import net.wurstclient.Category;
+import net.wurstclient.hack.Hack;
+import net.wurstclient.settings.ColorSetting;
+import net.wurstclient.settings.EnumSetting;
+import net.wurstclient.settings.SliderSetting;
+import net.wurstclient.settings.SliderSetting.ValueDisplay;
+import net.wurstclient.settings.CheckboxSetting;
+
+public final class ChestSearchHack extends Hack
+{
+	private static final int DISPLAY_RADIUS_UNLIMITED = 2001;
+	private static final int WAYPOINT_TIME_MINUTES_INFINITE = 241;
+	
+	private final EnumSetting<Mode> modeSetting = new EnumSetting<>("Mode",
+		"Automatic scans instantly, Manual requires pressing the Scan button,"
+			+ " and Off disables ChestSearch entirely.",
+		Mode.values(), Mode.AUTOMATIC);
+	private final SliderSetting waypointTimeMinutes = new SliderSetting(
+		"Waypoint time (min)", 1, 1, WAYPOINT_TIME_MINUTES_INFINITE, 1,
+		ValueDisplay.INTEGER.withSuffix(" min")
+			.withLabel(WAYPOINT_TIME_MINUTES_INFINITE, "Infinite"));
+	private final SliderSetting espTimeSec =
+		new SliderSetting("ESP time (s)", 60, 5, 600, 5, ValueDisplay.INTEGER);
+	// controls for cleaner behaviour (exposed in navigator)
+	private final SliderSetting gracePeriodSec = new SliderSetting(
+		"Cleaner grace (s)", 10, 0, 60, 1, ValueDisplay.INTEGER);
+	private final SliderSetting scanRadius = new SliderSetting(
+		"Cleaner scan radius", 64, 8, 512, 8, ValueDisplay.INTEGER);
+	private final SliderSetting maxResults = new SliderSetting(
+		"Max search results", 50, 10, 1000, 10, ValueDisplay.INTEGER);
+	private final SliderSetting displayRadius = new SliderSetting(
+		"Display radius", DISPLAY_RADIUS_UNLIMITED, 1, DISPLAY_RADIUS_UNLIMITED,
+		1, ValueDisplay.INTEGER.withSuffix(" blocks")
+			.withLabel(DISPLAY_RADIUS_UNLIMITED, "Unlimited"));
+	private final ColorSetting waypointColor =
+		new ColorSetting("Waypoint color", new java.awt.Color(0xFFFF00));
+	private final ColorSetting espFillColor =
+		new ColorSetting("ESP fill", new java.awt.Color(0x22FF88));
+	private final ColorSetting espLineColor =
+		new ColorSetting("ESP line", new java.awt.Color(0x22FF88));
+	private final ColorSetting markXColor =
+		new ColorSetting("Opened chest color", new java.awt.Color(0xFF9900));
+	private final CheckboxSetting slotHighlightEnabled =
+		new CheckboxSetting("Slot highlight", true);
+	private final ColorSetting slotHighlightColor =
+		new ColorSetting("Slot highlight color", new java.awt.Color(0x7EC8FF));
+	private final SliderSetting slotHighlightOpacity =
+		new SliderSetting("Slot highlight opacity", 45, 5, 100, 1,
+			ValueDisplay.INTEGER.withSuffix("%"));
+	private final ColorSetting mousePreviewBackground = new ColorSetting(
+		"Mouse preview background", new java.awt.Color(0x101010));
+	private final SliderSetting mousePreviewTransparency =
+		new SliderSetting("Mouse preview transparency", 82, 0, 100, 1,
+			ValueDisplay.INTEGER.withSuffix("%"));
+	private final CheckboxSetting hideOpenedChestTracers =
+		new CheckboxSetting("Hide opened chest tracers",
+			"Disable tracer lines for opened chests recorded by ChestSearch.",
+			false);
+	private final EnumSetting<OpenedChestMarker> openedChestMarker =
+		new EnumSetting<>("Opened chest marker",
+			"Choose how opened chests recorded by ChestSearch should be highlighted.",
+			OpenedChestMarker.values(), OpenedChestMarker.LINE);
+	private final CheckboxSetting markOpenedChest = new CheckboxSetting(
+		"Mark opened chest",
+		"Draw ESP/lines through opened chests that appear in your ChestSearch database.",
+		false);
+	private final CheckboxSetting recordedChestNotifications =
+		new CheckboxSetting("Chat notifications",
+			"Show a chat notification when ChestSearch records a container.",
+			false);
+	private final CheckboxSetting displayOnMouse = new CheckboxSetting(
+		"Display on mouse",
+		"Shows a quick inventory preview when your mouse is over a known chest.",
+		false);
+	private final CheckboxSetting fixedPreviewPosition = new CheckboxSetting(
+		"Fixed preview position",
+		"Shows the mouse-over chest preview at a saved screen position that can be dragged.",
+		false);
+	private final EnumSetting<PreviewAnchor> previewAnchor =
+		new EnumSetting<>("Preview anchor",
+			"Choose where the fixed chest preview should pin itself.",
+			PreviewAnchor.values(), PreviewAnchor.DRAGGED);
+	private final SliderSetting previewAnchorGap = new SliderSetting(
+		"Preview anchor gap", 8, 0, 240, 1, ValueDisplay.INTEGER);
+	private final SliderSetting previewX =
+		new SliderSetting("Preview X", 0, 0, 3840, 1, ValueDisplay.INTEGER);
+	private final SliderSetting previewY =
+		new SliderSetting("Preview Y", 0, 0, 2160, 1, ValueDisplay.INTEGER);
+	private final CheckboxSetting lootMismatchNotifications =
+		new CheckboxSetting("Loot mismatch notifications",
+			"Show a chat notification when a chest does not match the loot table.",
+			false);
+	private final CheckboxSetting consoleLogs =
+		new CheckboxSetting("Console logs",
+			"Print ChestSearch debug messages to the console.", true);
+	private final SliderSetting textScale = new SliderSetting("Text scale", 1.0,
+		0.5, 1.25, 0.05, ValueDisplay.DECIMAL);
+	
+	public ChestSearchHack()
+	{
+		super("ChestSearch");
+		setCategory(Category.ITEMS);
+		// automatic/manual toggle should appear above the timeouts in the
+		// clickui so add it first
+		addSetting(modeSetting);
+		addSetting(waypointTimeMinutes);
+		addSetting(espTimeSec);
+		// expose cleaner settings in navigator so user can tune them
+		addSetting(gracePeriodSec);
+		addSetting(scanRadius);
+		addSetting(maxResults);
+		addSetting(displayRadius);
+		addSetting(textScale);
+		addSetting(waypointColor);
+		addSetting(espFillColor);
+		addSetting(espLineColor);
+		addSetting(markOpenedChest);
+		addSetting(openedChestMarker);
+		addSetting(hideOpenedChestTracers);
+		addSetting(markXColor);
+		addSetting(slotHighlightEnabled);
+		addSetting(slotHighlightColor);
+		addSetting(slotHighlightOpacity);
+		addSetting(recordedChestNotifications);
+		addSetting(displayOnMouse);
+		addSetting(fixedPreviewPosition);
+		addSetting(previewAnchor);
+		addSetting(previewAnchorGap);
+		addSetting(previewX);
+		addSetting(previewY);
+		addSetting(mousePreviewBackground);
+		addSetting(mousePreviewTransparency);
+		addSetting(lootMismatchNotifications);
+		addSetting(consoleLogs);
+	}
+	
+	public int getMarkXColorARGB()
+	{
+		return (0xFF << 24) | (markXColor.getColor().getRGB() & 0x00FFFFFF);
+	}
+	
+	public boolean isMarkOpenedChest()
+	{
+		return markOpenedChest.isChecked();
+	}
+	
+	public boolean shouldHideOpenedChestTracers()
+	{
+		return hideOpenedChestTracers.isChecked();
+	}
+	
+	public OpenedChestMarker getOpenedChestMarker()
+	{
+		try
+		{
+			OpenedChestMarker marker = openedChestMarker.getSelected();
+			return marker != null ? marker : OpenedChestMarker.LINE;
+		}catch(Throwable t)
+		{
+			return OpenedChestMarker.LINE;
+		}
+	}
+	
+	public boolean isRecordNotificationEnabled()
+	{
+		return recordedChestNotifications.isChecked();
+	}
+	
+	public boolean shouldDisplayOnMouse()
+	{
+		return displayOnMouse.isChecked();
+	}
+	
+	public boolean isFixedPreviewPosition()
+	{
+		return fixedPreviewPosition.isChecked();
+	}
+	
+	public int getPreviewX()
+	{
+		return previewX.getValueI();
+	}
+	
+	public PreviewAnchor getPreviewAnchor()
+	{
+		try
+		{
+			PreviewAnchor anchor = previewAnchor.getSelected();
+			return anchor != null ? anchor : PreviewAnchor.DRAGGED;
+		}catch(Throwable t)
+		{
+			return PreviewAnchor.DRAGGED;
+		}
+	}
+	
+	public int getPreviewAnchorGap()
+	{
+		return previewAnchorGap.getValueI();
+	}
+	
+	public boolean usesPinnedPreviewAnchor()
+	{
+		return getPreviewAnchor() != PreviewAnchor.DRAGGED;
+	}
+	
+	public int getPreviewY()
+	{
+		return previewY.getValueI();
+	}
+	
+	public void setPreviewPosition(int x, int y)
+	{
+		previewX.setValue(x);
+		previewY.setValue(y);
+	}
+	
+	public int getMousePreviewBackgroundARGB()
+	{
+		int rgb = mousePreviewBackground.getColor().getRGB() & 0x00FFFFFF;
+		int alpha = (int)Math
+			.round(255 * (mousePreviewTransparency.getValueF() / 100F));
+		alpha = Math.max(0, Math.min(255, alpha));
+		return (alpha << 24) | rgb;
+	}
+	
+	public boolean isLootMismatchNotificationEnabled()
+	{
+		return lootMismatchNotifications.isChecked();
+	}
+	
+	public boolean shouldShowConsoleLogs()
+	{
+		return consoleLogs.isChecked();
+	}
+	
+	public int getCleanerGraceTicks()
+	{
+		return (int)(gracePeriodSec.getValueI() * 20);
+	}
+	
+	public int getCleanerScanRadius()
+	{
+		return scanRadius.getValueI();
+	}
+	
+	public int getMaxSearchResults()
+	{
+		return maxResults.getValueI();
+	}
+	
+	public boolean isDisplayRadiusUnlimited()
+	{
+		return displayRadius.getValueI() >= DISPLAY_RADIUS_UNLIMITED;
+	}
+	
+	public int getDisplayRadius()
+	{
+		return isDisplayRadiusUnlimited() ? Integer.MAX_VALUE
+			: displayRadius.getValueI();
+	}
+	
+	public int getWaypointTimeMs()
+	{
+		int minutes = waypointTimeMinutes.getValueI();
+		if(minutes >= WAYPOINT_TIME_MINUTES_INFINITE)
+			return -1;
+		return minutes * 60 * 1000;
+	}
+	
+	public boolean isAutomaticMode()
+	{
+		return getMode() == Mode.AUTOMATIC;
+	}
+	
+	public boolean isManualMode()
+	{
+		return getMode() == Mode.MANUAL;
+	}
+	
+	public boolean isOffMode()
+	{
+		return getMode() == Mode.OFF;
+	}
+	
+	public Mode getMode()
+	{
+		try
+		{
+			Mode mode = modeSetting.getSelected();
+			return mode != null ? mode : Mode.AUTOMATIC;
+		}catch(Throwable t)
+		{
+			return Mode.AUTOMATIC;
+		}
+	}
+	
+	public int getEspTimeMs()
+	{
+		return (int)(espTimeSec.getValue() * 1000);
+	}
+	
+	public float getTextScaleF()
+	{
+		try
+		{
+			return (float)textScale.getValueF();
+		}catch(Throwable t)
+		{
+			return 1.0f;
+		}
+	}
+	
+	public int getWaypointColorARGB()
+	{
+		return waypointColor.getColor().getRGB();
+	}
+	
+	public int getEspFillARGB()
+	{
+		return (0x40 << 24) | (espFillColor.getColor().getRGB() & 0x00FFFFFF);
+	}
+	
+	public int getEspLineARGB()
+	{
+		return (0x80 << 24) | (espLineColor.getColor().getRGB() & 0x00FFFFFF);
+	}
+	
+	public boolean isSlotHighlightEnabled()
+	{
+		return slotHighlightEnabled.isChecked();
+	}
+	
+	public int getSlotHighlightColorARGB()
+	{
+		int rgb = slotHighlightColor.getColor().getRGB() & 0x00FFFFFF;
+		int alpha =
+			(int)Math.round(255 * (slotHighlightOpacity.getValueF() / 100F));
+		alpha = Math.max(0, Math.min(255, alpha));
+		return (alpha << 24) | rgb;
+	}
+	
+	@Override
+	protected void onEnable()
+	{
+		if(MC.gui == null)
+		{
+			setEnabled(false);
+			return;
+		}
+		
+		try
+		{
+			MC.setScreen(new net.wurstclient.clickgui.screens.ChestSearchScreen(
+				MC.screen, Boolean.TRUE));
+		}catch(Throwable ignored)
+		{}
+		setEnabled(false);
+	}
+	
+	public enum Mode
+	{
+		AUTOMATIC("Automatic"),
+		MANUAL("Manual"),
+		OFF("Off");
+		
+		private final String displayName;
+		
+		private Mode(String displayName)
+		{
+			this.displayName = displayName;
+		}
+		
+		@Override
+		public String toString()
+		{
+			return displayName;
+		}
+	}
+	
+	public enum OpenedChestMarker
+	{
+		LINE("Line"),
+		RECOLOR("Recolor");
+		
+		private final String displayName;
+		
+		private OpenedChestMarker(String displayName)
+		{
+			this.displayName = displayName;
+		}
+		
+		@Override
+		public String toString()
+		{
+			return displayName;
+		}
+	}
+	
+	public enum PreviewAnchor
+	{
+		DRAGGED("Dragged"),
+		HUD_LEFT("HUD Left"),
+		HUD_RIGHT("HUD Right"),
+		TOP_LEFT("Top Left"),
+		TOP_RIGHT("Top Right"),
+		BOTTOM_LEFT("Bottom Left"),
+		BOTTOM_RIGHT("Bottom Right");
+		
+		private final String displayName;
+		
+		private PreviewAnchor(String displayName)
+		{
+			this.displayName = displayName;
+		}
+		
+		@Override
+		public String toString()
+		{
+			return displayName;
+		}
+	}
+}

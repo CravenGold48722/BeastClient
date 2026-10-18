@@ -60,6 +60,14 @@ public final class AutoDropHack extends Hack implements UpdateListener
 		EVENTS.remove(UpdateListener.class, this);
 	}
 	
+	/**
+	 * Whether AutoDrop would throw this item away (AutoLoot asks).
+	 */
+	public boolean isConfiguredJunk(ItemStack stack)
+	{
+		return stack != null && items.contains(stack.getItem());
+	}
+	
 	@Override
 	public void onUpdate()
 	{

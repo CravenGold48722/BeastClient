@@ -390,6 +390,32 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 				+ " again for a while) or just lowered its shield.",
 			true);
 	
+	private final CheckboxSetting landingPunish = new CheckboxSetting(
+		"Landing punish",
+		"With §lAuto combo§r: the moment the target lands from a jump within"
+			+ " 3.4 blocks, jumps for a crit while your hit is still charging -"
+			+ " it lands on them as the charge fills (VexBot's crit chain).",
+		false);
+	
+	private final CheckboxSetting earlyCrits =
+		new CheckboxSetting("Early crits",
+			"With §lAuto combo§r: under 2 blocks, instead of backing off, jumps"
+				+ " straight up once your hit is about half charged - the crit"
+				+ " lands as it fills (VexBot's early crit).",
+			true);
+	
+	private final CheckboxSetting hitSelect = new CheckboxSetting("Hit select",
+		"With §lAuto combo§r: in about half of your attack cycles, against a"
+			+ " target that jump-resets your hits or whose own hit is about to"
+			+ " be ready, holds your ready hit for up to 4 ticks (a few more at"
+			+ " random against jump resets) - it swings first or mistimes its"
+			+ " jump reset, and you hit back while its sword recharges. Never"
+			+ " holds a deflection (VexBot's hit select).\n\n"
+			+ "Holds back hits that would land. Off by default: against an"
+			+ " opponent that never misses (a VexBot on PERFECT) it only handed"
+			+ " it the first hit - it held 5 of 16 sure hits in a fight.",
+		false);
+	
 	private final CheckboxSetting shieldBreaker =
 		new CheckboxSetting("Shield breaker",
 			"When the target holds up a shield toward you: switches to an axe"
@@ -810,6 +836,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(sprintSweeps);
 		addSetting(weakHits);
 		addSetting(punishOpenings);
+		addSetting(landingPunish);
+		addSetting(earlyCrits);
+		addSetting(hitSelect);
 		addSetting(shieldBreaker);
 		addSetting(crouchDodge);
 		addSetting(comboStrafe);
@@ -915,6 +944,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	{
 		// Exactly one attack is allowed per tick; see attackTarget().
 		attackedThisTick = false;
+		hitSelecting = false;
 		tickCount++;
 		
 		// re-armed below if the camera should be aimed this tick
@@ -1519,6 +1549,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		double closing = closingSpeed(target);
 		sprintHeldOff = false;
 		updateOpponentModel();
+		hitSelecting = !deflecting && updateHitSelect();
 		updateShieldBlock(dist);
 		
 		// Every chance at a sprint hit or a crit is taken (user, 2026-10-16:
@@ -1706,6 +1737,44 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 				releaseSprint();
 				return false;
 			}
+		}
+		
+		// Dive bait (learned): out of its crit dive's reach.
+		if(shouldBaitDive())
+		{
+			releaseForward();
+			holdBackward();
+			releaseSprint();
+			return false;
+		}
+		
+		// Landing punish (VexBot): it just landed - jump now, with the hit
+		// up to 6 ticks from charged, and the crit comes down on it as the
+		// charge fills. W and sprint on the way up (see holdAirKeys).
+		int charging = ticksUntilCharged();
+		if(landingPunish.isChecked() && canJump && !deflecting
+			&& tickCount - targetLandTick <= 3 && dist <= REACH + 0.4
+			&& charging <= 6 && !isTargetHitComing())
+		{
+			KeyPresser.press(MC.options.keyJump);
+			airMode = AirMode.NONE;
+			return true;
+		}
+		
+		// Early crits (VexBot): too close to stay - rather than backing off,
+		// straight up while the hit charges, the crit as it fills.
+		// (only against one that fights back - a still target is sprint-hit
+		// every 12 ticks; the jump made it 19)
+		if(earlyCrits.isChecked() && canJump && !deflecting && dist < TOO_CLOSE
+			&& charging >= 2 && charging <= 6 && !isFalling(target)
+			&& tickCount - targetSwingTick <= 40)
+		{
+			releaseForward();
+			releaseBackward();
+			releaseSprint();
+			KeyPresser.press(MC.options.keyJump);
+			airMode = AirMode.HOP_CRIT;
+			return true;
 		}
 		
 		boolean fullSpeed = sprintTicks >= FULL_SPEED_TICKS;
@@ -1914,11 +1983,13 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return null;
 		return String.format(Locale.ROOT,
 			"%s (sprint %.2f, crit %.2f), counters %.2f, shrugs %.2f,"
-				+ " races lost %.2f, their reach %.2f, margin %.2f",
+				+ " races lost %.2f, their reach %.2f (max %.2f), dives %.2f,"
+				+ " margin %.2f",
 			currentStyle(), model.mean(OpponentModel.SPRINT_COMBO),
 			model.mean(OpponentModel.CRIT_TRADER), model.counterRate(),
 			model.knockbackShrugRate(), model.raceLossRate(),
-			model.theirReach(), model.reachMargin());
+			model.theirReach(), model.maxReach(), model.diveRate(),
+			model.reachMargin());
 	}
 	
 	/** The style playing now, by name (tests). */
@@ -1975,6 +2046,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	/** Our hit landed on the target. */
 	private void noteHitLanded(boolean crit, boolean race)
 	{
+		rollHitSelect();
 		if(model == null)
 			return;
 		model.ourHitLanded(crit, playedStyle());
@@ -1994,9 +2066,41 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		if(isHitCharged() && EntityUtils
 			.distanceToHitboxSq(target) <= (REACH + 0.2) * (REACH + 0.2))
 			model.raceObserved(true);
-		model.hitTaken(theirReachToUs(), playedStyle());
+		// a dive: it came down onto us from above (a crit)
+		boolean dive =
+			!target.onGround() && target.getY() - MC.player.getY() > 0.3;
+		model.hitTaken(theirReachToUs(), playedStyle(), dive);
 		if(watchHitTick != NEVER)
 			watchCountered = true;
+	}
+	
+	/**
+	 * Their reach: vanilla's 3, or (Adaptive) the longest they've hit us
+	 * from lately - a VexBot crits from up to 3.5 (user, 2026-10-17: it
+	 * kept locking AimAssist in combos).
+	 */
+	private double theirReach()
+	{
+		return isAdaptive() && model != null ? Math.max(REACH, model.maxReach())
+			: REACH;
+	}
+	
+	/**
+	 * Adaptive, against one that crit-dives onto us (VexBot holds W through
+	 * our knockback and crits on the way down): it's in the air with its
+	 * hit ready and we can't hit it first - back out of its reach, so it
+	 * lands short (and Landing punish gets it).
+	 */
+	private static final boolean DIVE_BAIT = false;
+	
+	private boolean shouldBaitDive()
+	{
+		return DIVE_BAIT && isAdaptive() && model != null
+			&& model.diveRate() > 0.5 && !target.onGround()
+			&& targetTicksUntilCharged() <= 1
+			&& tickCount - targetSwingTick <= 40
+			&& theirReachToUs() <= theirReach() + 0.5 && !canLandGoodHit()
+			&& hasRoomBehind();
 	}
 	
 	/** How far beyond their reach to wait while our hit charges. */
@@ -2178,6 +2282,14 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private void trackTargetMotion()
 	{
 		Vec3 pos = target.position();
+		// when it lands (see Landing punish)
+		boolean onGround = target.onGround();
+		if(target != motionTracked)
+			targetLandTick = NEVER;
+		else if(onGround && !targetWasOnGround)
+			targetLandTick = tickCount;
+		targetWasOnGround = onGround;
+		
 		if(target != motionTracked || lastTargetPos == null)
 			targetMotion = Vec3.ZERO;
 		else
@@ -2766,8 +2878,62 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	private boolean isGoodMomentToHit()
 	{
-		return !skipFalling.isChecked() || isLaggy(target)
-			|| !isFalling(target);
+		return !hitSelecting && (!skipFalling.isChecked() || isLaggy(target)
+			|| !isFalling(target));
+	}
+	
+	// ── VexBot's hit select ──
+	// Its sword AI, in 45% of its attack cycles, holds a ready swing for up
+	// to 4 ticks (+0-3 at random once the opponent has jump-reset twice)
+	// while the opponent's hit is about to be ready or the opponent jump-
+	// resets: the opponent swings first (and is answered while recharging)
+	// or jumps too early.
+	
+	private boolean targetWasOnGround;
+	private int targetLandTick = NEVER;
+	private boolean hitSelectThisCycle;
+	private int hitSelectHeld;
+	private int hitSelectLimit;
+	/** Holding a ready hit this tick (see updateHitSelect). */
+	private boolean hitSelecting;
+	
+	/** Our hit landed: a new attack cycle. */
+	private void rollHitSelect()
+	{
+		hitSelectThisCycle = random.nextInt(100) < 45;
+		hitSelectHeld = 0;
+		hitSelectLimit = 4 + (isJumpResetter() ? random.nextInt(4) : 0);
+	}
+	
+	/** Whether to hold the ready hit this tick; counts the ticks held. */
+	private boolean updateHitSelect()
+	{
+		// (only against one that fights: a still, knockback-proof target
+		// "shrugs" every hit too)
+		if(!hitSelect.isChecked() || !hitSelectThisCycle
+			|| hitSelectHeld >= hitSelectLimit || !isChargedToStrike()
+			|| tickCount - targetSwingTick > 40)
+			return false;
+		
+		boolean imminent =
+			tickCount - targetSwingTick <= 40 && targetTicksUntilCharged() <= 2;
+		if(!imminent && !isJumpResetter() || theirReachToUs() > REACH + 0.2)
+			return false;
+		
+		hitSelectHeld++;
+		return true;
+	}
+	
+	/** The target shrugs our knockback off (jump resets), as learned. */
+	private boolean isJumpResetter()
+	{
+		return model != null && model.knockbackShrugRate() > 0.6;
+	}
+	
+	/** For the tests: holding a ready hit for hit select this tick. */
+	public boolean isHitSelecting()
+	{
+		return hitSelecting;
 	}
 	
 	private static boolean isFalling(Entity e)

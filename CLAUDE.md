@@ -510,6 +510,17 @@ does it. When writing or touching a hack:
   waits 0.6-1.4 blocks outside their reach (by races lost) instead of the fixed 1.0. (The
   first version, 120-tick windows, only chose after 12 s; an adaptive VexBot learns too.)
   `AimAssistComboTest.rematchFight` fights the same bot again and logs both openings.
+  **VexBot's playbook, from its jar** (user, 2026-10-17: Vex was combo-locking AimAssist): its
+  crits land from up to attackRange + 1 (a server-side bot, never reach-checked - measured
+  3.05-3.65 eye-to-hitbox), it jump-resets **before** your hit (your charge >= 0.85, facing
+  it), holds W through your knockback and crits on the way down, jumps when being comboed,
+  hit-selects 45% of cycles, feints. Copying its moves as checkboxes - Landing punish, Hit
+  select (both off), Early crits (on), Dive bait (`DIVE_BAIT` false) - made AimAssist WORSE
+  against it (23:31 with all on, 26:24 with the measured set); spacing on its learned longer
+  reach made it passive (the model still learns `maxReach`/`diveRate`). The test's VexBot had
+  kept the still-bot part's knockback resistance 1 and jump strength 0 through respawns (same
+  UUID, saved attributes) - every fight before 2026-10-17 was against a bot taking no
+  knockback; `spawnBot` resets both.
   **Races** (both charged, both in reach): `isChargedToStrike` strikes on
   vanilla's 0.9 threshold a tick sooner against a target that swung in the last 40 ticks, and
   falling with the hit charged and the target in reach keeps sprint (letting go for a crit
@@ -896,23 +907,40 @@ Design points that were deliberate, don't "fix" them blindly:
   tick in reach, hits in the air), a 10,000-block drop at max gravity 2 blocks to the side facing
   away (hits after landing), and the cobweb. Test mobs need `PersistenceRequired` - hostile mobs
   despawn instantly >128 blocks (3D) from players.
-- **Pearl catch = the wind charge hits your own pearl in the air** (measured 2026-10-17 in
-  `MaceTriggerTest`; vanilla: the pearl "lands" on whatever it hits and puts you at its last
-  position, **keeping your velocity**, fall distance reset, 5 damage). Pearl + wind charge
-  straight up 4 ticks apart = 18.5 blocks; a wind charge at your feet instead, 6.1 at most.
-  The old "snap straight up, fire straight up" missed any pearl that wasn't exactly straight
-  up (a 70° throw: 0 blocks). Now the camera turns onto the pearl (humanized, `pearlAim`, its
-  own `CameraAim`) at `windAimPoint`: the pearl moved on with vanilla physics (gravity 0.03,
-  then x0.99) until the wind charge (1.5 blocks/tick, straight, no drag, moving **2 ticks**
-  after the use - with 1 it passed 0.7 behind) reaches it; it fires once on it
-  (`isWindOnPearl`, atan(0.25/dist)) or after 10 ticks. 70° throw: 22.5 blocks. Delays of
-  8-19 ticks missed (the wind charge's ~0.4° spread is the pearl's width at 25-30 blocks),
-  so "Pearl catch delay" stays 1-5. **Chaining** (checkbox, off; user: others "get WAY
-  higher" in an elytra mace kit): after the catch's pearl is gone (`findOwnPearl` removed),
-  2-4 ticks, turn up, wait out the 20-tick pearl cooldown, throw (`rightClickItem`), catch
-  again - until a fresh right-click of yours (cancelled, does nothing else; the start click
-  must be let go first) or no pearls/wind charges. Gametest: 3 pearls from one click, links
-  21-23 blocks, none after the stop click.
+- **Pearl catch, solved exactly** (user, 2026-10-17: "calculates the EXACT trajectory of the
+  pearl ... and the angle you need to throw the wind-charge"; `util/PearlCatchSolver`,
+  `PearlCatchSolverTest`). The catch = the **pearl** hitting your own wind charge (wind
+  charges are pickable, pearls aren't) - you land at the pearl's position before that move,
+  **keeping your velocity**. Vanilla, read from 26.1.2 and checked against server traces in
+  the gametest (every predicted wind spawn = the server's; 5 of 5 traced throws predicted
+  right):
+  - both throws: `shootFromRotation` - float-trig direction (`Mth`), normalized, + random
+    `triangle(0, 0.0172275)` per axis (server-side, unknowable), x1.5, + the thrower's
+    **known movement** = the last movement packet's position change (`handleMovePlayer`
+    `clientDeltaMovement`; ZERO if a tick had none), its y only if not on the ground; the
+    server uses the rotation in the use packet (wrapped). The use goes out at tick start, so
+    the known movement is the last tick's.
+  - pearl from feet x/z, eye y - 0.1F: velocity -0.03 y, x0.99F, move; wind charge from eye
+    height, constant velocity. Pearl's spawn packet comes **inside a bundle** (missed it at
+    first: never exact, never fired) - it gives the exact start incl. the spread.
+  - hit: the pearl's move must **enter** the wind charge's box (0.3125, from 0.15 below its
+    position) grown by `clamp((tickCount - 2)/20, 0, 0.3)` - `getEntityHitResult` is
+    `bb.clip(from, to)` only, starting inside misses (counting "inside" rated angled shots
+    90%+ that missed). The pearl ticks first; the wind charge is at its previous position.
+  The solver: every fire tick x meeting point, aimed centred, plus straight up and at the
+  camera's yaw (no turn), only shots the camera can turn to in time (yaw+pitch distance -
+  near straight up a yaw swing counted as 9 ticks made every shot late), rated by **hit
+  rate over 200 spread samples x the server a tick early/on time/late** (client ticks vs
+  server ticks; head-on meetings with the falling pearl miss on a tick, chases don't).
+  Highest catch with 85%+, else the best rate. MaceAssist locks a plan (re-checked every
+  tick; a new plan each tick made the camera chase), fires on the actual rotation's rate.
+  Throws: steeper than 45° waits for a jump, flatter for a sprint-jump, thrown on the first
+  airborne tick (the jump in the pearl's speed). Launch first waits for its own wind charge
+  cooldown (<= 2 ticks) before throwing - the sure window is 2-4 ticks after the pearl.
+  Gametest `MaceTriggerTest` (`gametest mace -parts catch` runs it alone, first): straight
+  up 5/5 (~35 blocks), 70° 4/5, Launch first 3/5 (33); 30°/10° 0/5 in game though the
+  simulation says ~95% - not found yet. A solve is ~1.7 ms. **Chaining** (checkbox, off):
+  catch after catch until a fresh right-click of yours.
 - **Cobweb on right click** (default on): a fresh right-click on a block with a sword puts a
   cobweb there from the hotbar (offhand: vanilla does it, the sword has no use), before Wind on
   right click. Placed the tick after the click and switched back the tick after that (vanilla's
@@ -1005,6 +1033,12 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
   ("all drawn" before the rebuild was scheduled): `assertScreenshotEquals` retries a
   mismatch twice 10 ticks apart and records templates only after 20 ticks; `in_game` also
   waits for the wall's block to reach the client.
+- **Quick rounds:** `gametest aimassistcombo -parts fight,rematch` (parts: still, falling,
+  taps, fight, rematch, crit, shield; `gametest mace -parts catch` = the pearl catch test
+  alone) and `-record` for fight screenshots (off by default - ~900 a run). A round is ~2.5
+  min, ~1.5 of it game startup. Wait loops must not match their own command line (a
+  `Get-CimInstance ... -match 'gametest.ps1'` loop found itself and never ended), and a `cut`
+  in a Monitor pipe buffers (no events).
 - `PacketBudgetTest` counts packets, swings per attack and aim settling in singleplayer; feel and
   accuracy still need a launch of the client.
 - **Real anticheats (`AnticheatTest`, user, 2026-10-13).** The gametests also join two real

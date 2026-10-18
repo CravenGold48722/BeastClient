@@ -117,6 +117,11 @@ def updateScreenshots = project.hasProperty("updateScreenshots")
 // Only some of the gametests: -Ponly=mace,scaffold (see gametest.cmd)
 def onlyTests = project.findProperty("only")
 
+// Only some parts of a test (-Pparts=fight,rematch) and fight videos
+// (-Precord) - a quick round on one fight instead of the whole test
+def testParts = project.findProperty("parts")
+def recordFights = project.hasProperty("record")
+
 // The test client's memory (user, 2026-10-17: "set a memory limit, it was
 // using 5GB"): a 2 GB heap at most (it was 3), started small; unused heap
 // given back to Windows after each collection and every 10 s instead of
@@ -143,10 +148,14 @@ loom {
 			vmArg("-Dwurst.test.templateDir=$screenshotTemplateDir")
 			if (onlyTests)
 				vmArg("-Dwurst.test.only=$onlyTests")
+			if (testParts)
+				vmArg("-Dwurst.test.parts=$testParts")
+			if (recordFights)
+				vmArg("-Dwurst.test.record=true")
 			if (updateScreenshots)
 				vmArg("-Dwurst.test.updateTemplates=true")
 		}
-		
+
 		clientWithMods {
 			inherit client
 		}

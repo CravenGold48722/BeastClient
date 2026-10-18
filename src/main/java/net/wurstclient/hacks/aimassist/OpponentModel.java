@@ -52,7 +52,10 @@ public final class OpponentModel
 	private double knockbackShrugRate = 0.5;
 	private double raceLossRate = 0.5;
 	private double theirReach = 3;
-	private int counterSamples, shrugSamples, raceSamples, reachSamples;
+	private double maxReach = 3;
+	private double diveRate = 0.5;
+	private int counterSamples, shrugSamples, raceSamples, reachSamples,
+		diveSamples;
 	
 	private final double[] weight = new double[2];
 	private final double[] sum = new double[2];
@@ -116,8 +119,33 @@ public final class OpponentModel
 	/** It hit us while we played this style. */
 	public void hitTaken(double reach, int played)
 	{
+		hitTaken(reach, played, false);
+	}
+	
+	/**
+	 * It hit us while we played this style, from this far, diving onto us
+	 * (falling from above - a crit) or not.
+	 */
+	public void hitTaken(double reach, int played, boolean dive)
+	{
 		theirReach = ema(theirReach, reach, reachSamples++);
+		// the longest it has hit from, slowly forgotten: a server-side bot
+		// (VexBot) crits from up to 3.5, beyond vanilla's 3
+		maxReach = Math.max(reach, maxReach - 0.01);
+		diveRate = ema(diveRate, dive ? 1 : 0, diveSamples++);
 		score(-1, played);
+	}
+	
+	/** The longest reach it has hit us from lately (vanilla's 3 at first). */
+	public double maxReach()
+	{
+		return maxReach;
+	}
+	
+	/** How many of its hits are crit dives onto us. */
+	public double diveRate()
+	{
+		return diveRate;
 	}
 	
 	private static double ema(double old, double value, int samples)

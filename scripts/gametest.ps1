@@ -10,6 +10,8 @@ param(
 	[switch]$NoSweep,
 	[switch]$NoPerfMods,
 	[string]$Features,
+	[string]$Parts,
+	[switch]$Record,
 	[switch]$Help,
 	[Parameter(ValueFromRemainingArguments = $true)][string[]]$Tests
 )
@@ -22,6 +24,8 @@ gametest mace scaffold     only tests whose name contains "mace" or "scaffold"
 gametest anticheat         only the Grim and Intave servers (or: grim, intave)
 gametest -nosweep          without the per-feature tests on them (~10 min less each)
 gametest grim -features blink,criticals   only those features' tests (names contain)
+gametest aimassistcombo -parts fight,rematch   only those parts of a test
+gametest aimassistcombo -record   save fight screenshots for videos (slower)
 gametest -noperfmods       without the performance mods from .minecraft\mods
                            (screenshot templates are recorded with them)
 gametest -mods             with Sodium etc. installed
@@ -57,6 +61,14 @@ if($NoPerfMods)
 if($Features)
 {
 	$gradleArgs += "-Pfeatures=$Features"
+}
+if($Parts)
+{
+	$gradleArgs += "-Pparts=$Parts"
+}
+if($Record)
+{
+	$gradleArgs += "-Precord"
 }
 if($Update)
 {

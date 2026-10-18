@@ -40,6 +40,13 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
+import net.minecraft.network.protocol.game.ClientboundBundlePacket;
+import net.minecraft.network.protocol.Packet;
+import net.wurstclient.util.PearlCatchSolver;
+import net.wurstclient.util.KeyPresser;
+import net.wurstclient.events.PacketInputListener;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.wurstclient.SearchTags;
 import net.wurstclient.events.LeftClickListener;
 import net.wurstclient.events.PlayerAttacksEntityListener;
@@ -73,7 +80,7 @@ import net.wurstclient.util.RotationUtils;
 	"mace trigger bot", "auto chestplate", "stun slam", "wind charge"})
 public final class MaceAssistHack extends Hack
 	implements UpdateListener, RenderListener, PlayerAttacksEntityListener,
-	LeftClickListener, RightClickListener
+	LeftClickListener, RightClickListener, PacketInputListener
 {
 	// ── Attribute swapping ───────────────────────────────────────────────
 	
@@ -127,23 +134,30 @@ public final class MaceAssistHack extends Hack
 	
 	// ── Pearl catching ───────────────────────────────────────────────────
 	
-	private final CheckboxSetting pearlCatching =
-		new CheckboxSetting("Pearl catching",
-			"After throwing an ender pearl while looking up, locks the camera"
-				+ " straight up and fires a wind charge so you catch your own"
-				+ " pearl.",
-			true);
-	
-	private final SliderSetting pearlCatchDelay =
-		new SliderSetting("Pearl catch delay",
-			"Ticks between the pearl leaving your hand and the wind charge.", 2,
-			1, 5, 1, ValueDisplay.INTEGER.withSuffix(" ticks"));
+	private final CheckboxSetting pearlCatching = new CheckboxSetting(
+		"Pearl catching",
+		"After you throw an ender pearl, shoots it down with a wind charge"
+			+ " so you land where it was - as high up as can be done for"
+			+ " sure: the pearl's path and the shot are worked out with"
+			+ " vanilla's own physics. On the ground, a throw steeper than 45"
+			+ " degrees waits for a jump and one flatter for a sprint-jump,"
+			+ " so the pearl gets your speed too.",
+		true);
 	
 	private final SliderSetting pearlCatchAngle =
 		new SliderSetting("Pearl catch angle",
-			"How far up you have to be looking for a pearl throw to count as a"
-				+ " catch attempt.",
-			60, 60, 90, 1, ValueDisplay.DEGREES);
+			"How far up you have to be throwing for the pearl to be caught (0 ="
+				+ " any throw from straight ahead up). Throws below this travel"
+				+ " normally.",
+			0, 0, 90, 1, ValueDisplay.DEGREES);
+	
+	private final CheckboxSetting pearlLaunchFirst = new CheckboxSetting(
+		"Launch first",
+		"On the ground, a pearl catch starts with a wind charge at your feet:"
+			+ " the pearl goes up from the top of that jump, so the catch takes"
+			+ " you higher (VexBot's \"higher\" pearl catch). Your right-click"
+			+ " with the pearl starts it; the pearl is thrown at the top.",
+		true);
 	
 	private final CheckboxSetting pearlChaining = new CheckboxSetting(
 		"Chaining",
@@ -354,23 +368,94 @@ public final class MaceAssistHack extends Hack
 	private int slamFollowUpDelay;
 	private boolean slamFollowUpPending;
 	
-	private boolean pearlThrown;
-	private int pearlCatchTimer;
 	private int pearlReturnSlot = -1;
-	/** Aiming straight up for a catch's wind charge (turned in onRender). */
-	private boolean cameraLocked;
-	/** The pearl a catch's wind charge goes for; null = not seen yet. */
-	private Entity catchPearl;
-	/** Ticks a catch's wind charge has waited for the camera to be on it. */
-	private int windAimWait;
-	private static final int MAX_WIND_AIM_WAIT = 10;
+	
+	/** A catch under way (see tickCatch); null = none. */
+	private PearlCatch pearlCatch;
+	/** Ticks counted in onUpdate - the clock catches are timed on. */
+	private int clock;
+	/** Our position at the start of the last tick (see knownMovement). */
+	private Vec3 lastTickPos;
+	/** The server's spawn packet for our newest pearl (netty thread). */
+	private volatile PearlSpawn pearlSpawn;
+	
+	/** A jump or sprint-jump before the throw; null = none. */
+	private ThrowPrep throwPrep;
+	private int prepTicks;
+	private InteractionHand prepHand;
+	
+	private enum ThrowPrep
+	{
+		JUMP,
+		SPRINT_JUMP;
+	}
+	
+	private record PearlSpawn(Vec3 pos, Vec3 vel, long nanos)
+	{}
+	
+	/** A catch under way: the pearl thrown, its wind charge to come. */
+	private static final class PearlCatch
+	{
+		/** The clock when the pearl's use packet went out. */
+		final int throwTick;
+		/** Where vanilla starts it and how fast, without the spread. */
+		final Vec3 nominalSpawn;
+		final Vec3 nominalVel;
+		final long thrownNanos;
+		/** From the server's spawn packet: the exact start, at this age. */
+		Vec3 spawnPos;
+		Vec3 spawnVel;
+		int spawnAge = -1;
+		boolean pearlSeen;
+		/** The pearl's path from now ([0]) and its age now. */
+		Vec3[] path;
+		int age;
+		/** The plan the camera turns to: fresh, or the locked one. */
+		PearlCatchSolver.Plan plan;
+		/**
+		 * The plan kept while it still works (re-checked every tick): a new
+		 * best plan every tick moved the target and the camera chased it
+		 * until the window for a sure shot was gone.
+		 */
+		PearlCatchSolver.Plan locked;
+		/** The clock tick the locked plan fires in. */
+		int lockedFire;
+		/** Ticks a fire was held back by the exact check. */
+		int held;
+		
+		PearlCatch(int throwTick, Vec3 nominalSpawn, Vec3 nominalVel)
+		{
+			this.throwTick = throwTick;
+			this.nominalSpawn = nominalSpawn;
+			this.nominalVel = nominalVel;
+			thrownNanos = System.nanoTime();
+		}
+	}
 	
 	/** The human-like turn up for pearl catches (the mace aim has its own). */
 	private final CameraAim pearlAim = new CameraAim();
 	private static final Object PEARL_AIM = new Object();
-	private static final double PEARL_AIM_SPEED = 900;
+	private static final double PEARL_AIM_SPEED = 1500;
+	/**
+	 * What the solver counts on per tick (the humanized turn eases in and
+	 * out, so less than the top speed's 75).
+	 */
+	private static final double PEARL_TURN_PER_TICK = 50;
 	
 	/** Chaining: where the chain is; null = no chain. */
+	/**
+	 * Launch first: DOWN = turning down for the wind charge at our feet, UP =
+	 * rising, turning up, the pearl at the top; null = not launching.
+	 */
+	private LaunchStep launchStep;
+	private int launchTicks;
+	
+	private enum LaunchStep
+	{
+		DOWN,
+		UP;
+	}
+	
 	private ChainStep chainStep;
 	private Entity chainPearl;
 	private int chainTicks;
@@ -476,8 +561,8 @@ public final class MaceAssistHack extends Hack
 		addSetting(swapOnMobs);
 		
 		addSetting(pearlCatching);
-		addSetting(pearlCatchDelay);
 		addSetting(pearlCatchAngle);
+		addSetting(pearlLaunchFirst);
 		addSetting(pearlChaining);
 		addSetting(pearlReturnMode);
 		
@@ -526,6 +611,7 @@ public final class MaceAssistHack extends Hack
 		EVENTS.add(PlayerAttacksEntityListener.class, this);
 		EVENTS.add(LeftClickListener.class, this);
 		EVENTS.add(RightClickListener.class, this);
+		EVENTS.add(PacketInputListener.class, this);
 	}
 	
 	@Override
@@ -536,6 +622,7 @@ public final class MaceAssistHack extends Hack
 		EVENTS.remove(PlayerAttacksEntityListener.class, this);
 		EVENTS.remove(LeftClickListener.class, this);
 		EVENTS.remove(RightClickListener.class, this);
+		EVENTS.remove(PacketInputListener.class, this);
 		
 		if(MC.player != null)
 		{
@@ -555,6 +642,8 @@ public final class MaceAssistHack extends Hack
 	{
 		if(MC.player == null || MC.level == null)
 			return;
+		
+		clock++;
 		
 		Inventory inventory = MC.player.getInventory();
 		int currentSlot = inventory.getSelectedSlot();
@@ -598,27 +687,23 @@ public final class MaceAssistHack extends Hack
 		if(maceSwapped && --swapBackTimer <= 0)
 			restoreOriginalSlot();
 		
-		tickPearlCatch();
+		tickThrowPrep();
+		tickLaunch();
 		tickChain();
-		
-		if(cameraLocked && catchPearl == null)
-			catchPearl = findOwnPearl();
+		tickCatch();
 		
 		if(windFireDelay > 0 && --windFireDelay == 0)
-		{
-			// a catch's wind charge goes at the pearl: wait for the turn
-			if(cameraLocked && !isWindOnPearl()
-				&& ++windAimWait < MAX_WIND_AIM_WAIT)
-				windFireDelay = 1;
-			else
-				fireWindCharge();
-		}
+			fireWindCharge();
 		
 		if(airPotThrown && --airPotWindDelay <= 0)
 		{
 			airPotThrown = false;
 			fireAirPotWindCharge();
 		}
+		
+		// (before this tick's movement: next tick, the movement from here is
+		// the one the server knows)
+		lastTickPos = MC.player.position();
 	}
 	
 	/**
@@ -672,14 +757,29 @@ public final class MaceAssistHack extends Hack
 		// A pearl catch looks straight up - turned like a hand flicking up
 		// (user, 2026-10-17: "humanize the aim aiming up"; it used to snap
 		// there in one frame).
-		if(cameraLocked || chainStep == ChainStep.THROWING)
+		if(launchStep != null)
 		{
-			// at the pearl (see windAimPoint), straight up until it's seen
-			Vec3 eyes = CameraAim.getFrameEyes(partialTicks);
-			Vec3 point = cameraLocked ? windAimPoint(eyes) : null;
-			Rotation needed =
-				point == null ? new Rotation(MC.player.getYRot(), -90)
-					: RotationUtils.getNeededRotations(eyes, point);
+			pearlAim.turnCamera(PEARL_AIM,
+				new Rotation(MC.player.getYRot(),
+					launchStep == LaunchStep.DOWN ? 80 : -90),
+				new double[2], true, PEARL_AIM_SPEED);
+			return;
+		}
+		
+		PearlCatch c = pearlCatch;
+		if(c != null || chainStep == ChainStep.THROWING)
+		{
+			// the catch's shot (see tickCatch); before there's a plan, at the
+			// pearl a few ticks ahead; before it's seen, straight up
+			Rotation needed;
+			if(c != null && c.plan != null)
+				needed = c.plan.rotation();
+			else if(c != null && c.path != null)
+				needed = RotationUtils.getNeededRotations(
+					CameraAim.getFrameEyes(partialTicks),
+					c.path[Math.min(6, c.path.length - 1)]);
+			else
+				needed = new Rotation(MC.player.getYRot(), -90);
 			pearlAim.turnCamera(PEARL_AIM, needed, new double[2], true,
 				PEARL_AIM_SPEED);
 			return;
@@ -1449,7 +1549,14 @@ public final class MaceAssistHack extends Hack
 	{
 		if(MC.player == null)
 			return;
-			
+		
+		// While launching first, the launch throws the pearl.
+		if(launchStep != null)
+		{
+			event.cancel();
+			return;
+		}
+		
 		// While chaining, the chain throws; a click of yours (after letting
 		// go of the one that started it) ends it - and does nothing else.
 		if(chainStep != null)
@@ -1473,7 +1580,20 @@ public final class MaceAssistHack extends Hack
 			
 			if(stack.is(Items.ENDER_PEARL))
 			{
-				onPearlThrown();
+				// Launch first: this pearl goes up from the top of a jump
+				if(startLaunch())
+				{
+					event.cancel();
+					return;
+				}
+				// a jump or sprint-jump first: thrown in the air
+				if(startThrowPrep(hand))
+				{
+					event.cancel();
+					return;
+				}
+				// vanilla throws it now, before this tick's onUpdate
+				onPearlThrown(clock + 1);
 				return;
 			}
 			
@@ -1485,13 +1605,11 @@ public final class MaceAssistHack extends Hack
 		}
 	}
 	
-	private void onPearlThrown()
+	/** A pearl of ours was thrown (its use packet out at that clock tick). */
+	private void onPearlThrown(int throwTick)
 	{
 		if(!pearlCatching.isChecked())
 			return;
-		
-		pearlThrown = true;
-		pearlCatchTimer = pearlCatchDelay.getValueI();
 		
 		pearlReturnSlot = switch(pearlReturnMode.getSelected())
 		{
@@ -1505,17 +1623,19 @@ public final class MaceAssistHack extends Hack
 		if(pearlReturnSlot == -1)
 			pearlReturnSlot = previousSlot();
 		
-		if(hasWindCharge()
-			&& MC.player.getXRot() <= -(float)pearlCatchAngle.getValue())
+		if(isCatchThrow())
 		{
-			// straight up (turned in onRender)
-			cameraLocked = true;
-			windAimWait = 0;
-			catchPearl = null;
-			
+			startCatch(throwTick);
 			if(pearlChaining.isChecked())
 				startChain();
 		}
+	}
+	
+	/** A throw from here would be caught: wind charges, steep enough. */
+	private boolean isCatchThrow()
+	{
+		return hasWindCharge()
+			&& MC.player.getXRot() <= -(float)pearlCatchAngle.getValue();
 	}
 	
 	private boolean hasWindCharge()
@@ -1530,6 +1650,348 @@ public final class MaceAssistHack extends Hack
 		return MC.player.getXRot() <= -87;
 	}
 	
+	// ── The catch ──
+	// User, 2026-10-17: "calculates the EXACT trajectory of the pearl ...
+	// and calculates the angle you need to throw the wind-charge", from
+	// "virtually any angle", a jump timed before a throw straight up and a
+	// sprint-jump before one between straight ahead and 45 degrees up. The
+	// physics and the solver: util/PearlCatchSolver. Here: what the server
+	// will use - the rotation in the use packet, the movement it knows (the
+	// last tick's), the pearl's own spawn packet - and when.
+	
+	@Override
+	public void onReceivedPacket(PacketInputEvent event)
+	{
+		// netty thread: only note it (tickCatch uses it). An entity's spawn
+		// comes inside a bundle with its data - the bundle is what arrives.
+		if(event.getPacket() instanceof ClientboundBundlePacket bundle)
+		{
+			for(Packet<?> packet : bundle.subPackets())
+				notePearlSpawn(packet);
+			return;
+		}
+		notePearlSpawn(event.getPacket());
+	}
+	
+	private void notePearlSpawn(Packet<?> p)
+	{
+		if(!(p instanceof ClientboundAddEntityPacket packet)
+			|| packet.getType() != EntityType.ENDER_PEARL)
+			return;
+		LocalPlayer player = MC.player;
+		if(player == null || packet.getData() != player.getId())
+			return;
+		pearlSpawn = new PearlSpawn(
+			new Vec3(packet.getX(), packet.getY(), packet.getZ()),
+			packet.getMovement(), System.nanoTime());
+	}
+	
+	/**
+	 * The movement the server knows for us right now: the last tick's (our
+	 * last movement packet's position change).
+	 */
+	private Vec3 knownMovement()
+	{
+		return lastTickPos == null ? Vec3.ZERO
+			: MC.player.position().subtract(lastTickPos);
+	}
+	
+	/** Our pearl was just thrown: the catch starts. */
+	private void startCatch(int throwTick)
+	{
+		LocalPlayer player = MC.player;
+		Vec3 dir = PearlCatchSolver.direction(Mth.wrapDegrees(player.getYRot()),
+			Mth.wrapDegrees(player.getXRot()));
+		Vec3 spawn = new Vec3(player.getX(),
+			player.getEyeY() - PearlCatchSolver.PEARL_SPAWN_DROP,
+			player.getZ());
+		pearlCatch = new PearlCatch(throwTick, spawn, PearlCatchSolver
+			.launch(dir, Vec3.ZERO, knownMovement(), player.onGround()));
+	}
+	
+	/**
+	 * A catch throw on the ground: jump (steeper than 45 degrees) or
+	 * sprint-jump (flatter) first, and throw in the first tick in the air -
+	 * vanilla gives the pearl the thrower's movement, the jump's included.
+	 */
+	private boolean startThrowPrep(InteractionHand hand)
+	{
+		if(!pearlCatching.isChecked() || !MC.player.onGround()
+			|| throwPrep != null || pearlCatch != null || chainStep != null
+			|| launchStep != null || !isCatchThrow())
+			return false;
+		
+		throwPrep =
+			MC.player.getXRot() <= -45 ? ThrowPrep.JUMP : ThrowPrep.SPRINT_JUMP;
+		prepTicks = 0;
+		prepHand = hand;
+		return true;
+	}
+	
+	private void tickThrowPrep()
+	{
+		if(throwPrep == null)
+			return;
+		
+		LocalPlayer player = MC.player;
+		if(++prepTicks > 30
+			|| !player.getItemInHand(prepHand).is(Items.ENDER_PEARL))
+		{
+			throwPrep = null;
+			return;
+		}
+		
+		if(player.onGround())
+		{
+			if(throwPrep == ThrowPrep.SPRINT_JUMP)
+			{
+				// W and sprint until sprinting, then the jump with them
+				KeyPresser.press(MC.options.keyUp, 2);
+				KeyPresser.press(MC.options.keySprint, 2);
+				if(prepTicks < 3 || !player.isSprinting() && prepTicks < 10)
+					return;
+			}
+			KeyPresser.press(MC.options.keyJump);
+			return;
+		}
+		
+		// the first tick in the air: the jump is the movement the server
+		// knows now
+		if(isOnCooldown(Items.ENDER_PEARL))
+			return;
+		throwPrep = null;
+		if(InteractionSimulator.rightClickItem(prepHand))
+			onPearlThrown(clock);
+	}
+	
+	private void tickCatch()
+	{
+		PearlCatch c = pearlCatch;
+		if(c == null)
+			return;
+			
+		// its moves on the server so far (the wind charge fired now comes
+		// that many ticks after it)
+		int now = clock - c.throwTick;
+		if(now > 100)
+		{
+			pearlCatch = null;
+			return;
+		}
+		
+		// the server's spawn packet: where it really started (the random
+		// spread is in it), at which of its moves
+		PearlSpawn spawn = pearlSpawn;
+		if(c.spawnAge < 0 && spawn != null && spawn.nanos() >= c.thrownNanos)
+		{
+			c.spawnPos = spawn.pos();
+			c.spawnVel = spawn.vel();
+			c.spawnAge = matchAge(c, spawn.pos());
+		}
+		
+		// gone: it landed, hit something, or was caught
+		if(findOwnPearl() != null)
+			c.pearlSeen = true;
+		else if(c.pearlSeen || now > 20)
+		{
+			pearlCatch = null;
+			return;
+		}
+		
+		boolean exact = c.spawnAge >= 0;
+		Vec3 pos = exact ? c.spawnPos : c.nominalSpawn;
+		Vec3 vel = exact ? c.spawnVel : c.nominalVel;
+		int from = exact ? c.spawnAge : 0;
+		if(now < from)
+			return;
+		for(int a = from; a < now; a++)
+		{
+			vel = vel.add(0, -PearlCatchSolver.PEARL_GRAVITY, 0)
+				.scale(PearlCatchSolver.PEARL_INERTIA);
+			pos = pos.add(vel);
+		}
+		c.path = PearlCatchSolver.pearlPath(pos, vel, PearlCatchSolver.HORIZON);
+		c.age = now;
+		
+		// the wind charge in hand from the tick after the throw: the
+		// steepest throws' sure shots go 2-4 ticks after it
+		InteractionHand windHand = windHand();
+		
+		PearlCatchSolver.Shooter[] who = predictShooters(50);
+		int earliest = windCooldownTicks();
+		if(windHand == null)
+			earliest = Math.max(earliest, 1);
+			
+		// (the camera turns toward a plan on the nominal path; only one on
+		// the exact path is locked and fired)
+		if(!exact)
+		{
+			c.plan = solveCatch(c, who, earliest);
+			return;
+		}
+		
+		// keep the locked plan while it still works on the exact path
+		if(c.locked != null)
+		{
+			int fire = c.lockedFire - clock;
+			if(fire < 0 || fire >= who.length
+				|| !stillCatches(c, who[fire], fire, c.locked))
+				c.locked = null;
+		}
+		// a new one when there's none - or a sure one over an unsure one
+		if(c.locked == null || !c.locked.sure())
+		{
+			PearlCatchSolver.Plan fresh = solveCatch(c, who, earliest);
+			// Only a sure plan is locked; an unsure one only once the
+			// pearl is near the top of its flight and nothing better can
+			// come. (Locking the best of a poor first tick fired 8-60% shots
+			// the moment the exact path was known - a tick or two of turning
+			// later, sure ones were in reach.)
+			if(fresh != null
+				&& (fresh.sure() || fresh.rate() >= 0.5 || now >= 40)
+				&& (c.locked == null || fresh.sure() && !c.locked.sure()))
+			{
+				c.locked = fresh;
+				c.lockedFire = clock + fresh.fire();
+			}
+			// the camera turns toward the best plan meanwhile
+			c.plan = c.locked != null ? c.locked : fresh;
+		}else
+			c.plan = c.locked;
+		if(c.locked == null)
+			return;
+		
+		InteractionHand hand = windHand;
+		if(hand == null || c.lockedFire > clock
+			|| isOnCooldown(Items.WIND_CHARGE))
+			return;
+			
+		// the exact check, with the rotation the use packet will carry: sure
+		// now; 50%+ once a tick of waiting didn't get it sure (the window
+		// only gets worse); anything at all once the pearl is near its top
+		double rate = currentRate(c, who[0]);
+		boolean go = rate >= PearlCatchSolver.MIN_RATE
+			|| rate >= 0.5 && c.held >= 1 || rate > 0 && now >= 40;
+		if(!go)
+		{
+			// the camera didn't make it: a new plan next tick
+			c.held++;
+			c.locked = null;
+			return;
+		}
+		
+		if(!useItemAndSwingResult(hand))
+			return;
+		pearlCatch = null;
+		int back = pearlReturnSlot;
+		if(hand == InteractionHand.MAIN_HAND && back != -1)
+			MC.execute(() -> {
+				if(MC.player != null)
+					selectSlot(back);
+			});
+	}
+	
+	/**
+	 * Which of the pearl's moves its spawn packet was sent at: the one whose
+	 * nominal position (no spread) is nearest.
+	 */
+	private static int matchAge(PearlCatch c, Vec3 pos)
+	{
+		Vec3[] nominal =
+			PearlCatchSolver.pearlPath(c.nominalSpawn, c.nominalVel, 6);
+		int best = 0;
+		for(int a = 1; a < nominal.length; a++)
+			if(nominal[a].distanceToSqr(pos) < nominal[best].distanceToSqr(pos))
+				best = a;
+		return best;
+	}
+	
+	/**
+	 * Where we'll be for each tick a wind charge could be fired in: eyes,
+	 * the movement the server will know, on the ground - vanilla's air
+	 * physics until we hit something.
+	 */
+	private PearlCatchSolver.Shooter[] predictShooters(int ticks)
+	{
+		LocalPlayer player = MC.player;
+		PearlCatchSolver.Shooter[] who = new PearlCatchSolver.Shooter[ticks];
+		double eye = player.getEyeY() - player.getY();
+		Vec3 pos = player.position();
+		Vec3 vel = player.getDeltaMovement();
+		Vec3 known = knownMovement();
+		boolean ground = player.onGround();
+		AABB box = player.getBoundingBox();
+		for(int f = 0; f < ticks; f++)
+		{
+			who[f] =
+				new PearlCatchSolver.Shooter(pos.add(0, eye, 0), known, ground);
+			if(ground)
+			{
+				known = Vec3.ZERO;
+				continue;
+			}
+			Vec3 next = pos.add(vel);
+			AABB moved = box.move(next.subtract(player.position()));
+			if(!MC.level.noCollision(player, moved))
+			{
+				ground = true;
+				known = Vec3.ZERO;
+				continue;
+			}
+			known = next.subtract(pos);
+			pos = next;
+			vel = new Vec3(vel.x * 0.91, (vel.y - 0.08) * 0.98, vel.z * 0.91);
+		}
+		return who;
+	}
+	
+	/** Whether a planned shot, fired f ticks from now, still catches. */
+	private boolean stillCatches(PearlCatch c, PearlCatchSolver.Shooter s,
+		int fire, PearlCatchSolver.Plan plan)
+	{
+		Vec3 vel = PearlCatchSolver.launch(plan.dir(), Vec3.ZERO, s.known(),
+			s.onGround());
+		if(PearlCatchSolver.hitMove(c.path, c.age, fire, s.eyes(), vel) < 0)
+			return false;
+		return !plan.sure() || PearlCatchSolver.isSure(c.path, c.age, fire,
+			s.eyes(), plan.dir(), s.known(), s.onGround());
+	}
+	
+	/** Ticks until a wind charge can be used again (10 after the last). */
+	private int windCooldownTicks()
+	{
+		float left = MC.player.getCooldowns()
+			.getCooldownPercent(new ItemStack(Items.WIND_CHARGE), 0);
+		return (int)Math.ceil(left * 10);
+	}
+	
+	/**
+	 * The highest sure catch the camera can turn to in time (the turn counted
+	 * in yaw and pitch: near straight up a small change of direction can be
+	 * a big yaw swing - counted as one, every shot came too late for the
+	 * sure window 2-4 ticks after a straight-up throw).
+	 */
+	private PearlCatchSolver.Plan solveCatch(PearlCatch c,
+		PearlCatchSolver.Shooter[] who, int earliest)
+	{
+		return PearlCatchSolver.solve(c.path, c.age, who, earliest, 40,
+			new Rotation(MC.player.getYRot(), MC.player.getXRot()),
+			PEARL_TURN_PER_TICK);
+	}
+	
+	/**
+	 * How often a wind charge used now, with the camera's rotation as it is
+	 * (the one the use packet carries; the server wraps it), catches the
+	 * pearl.
+	 */
+	private double currentRate(PearlCatch c, PearlCatchSolver.Shooter now)
+	{
+		Vec3 dir =
+			PearlCatchSolver.direction(Mth.wrapDegrees(MC.player.getYRot()),
+				Mth.wrapDegrees(MC.player.getXRot()));
+		return PearlCatchSolver.hitRate(c.path, c.age, 0, now.eyes(), dir,
+			now.known(), now.onGround());
+	}
 	// ── Chaining ──
 	// User, 2026-10-17: in an elytra mace kit (pearls + wind charges) others
 	// "always get WAY higher" with pearl catches - one catch after the next.
@@ -1569,7 +2031,7 @@ public final class MaceAssistHack extends Hack
 		if(chainStep == ChainStep.CATCHING)
 		{
 			// the catch's wind charge first
-			if(pearlThrown || windFireDelay > 0 || cameraLocked)
+			if(pearlCatch != null || windFireDelay > 0)
 			{
 				if(chainTicks > 60)
 					stopChain();
@@ -1629,14 +2091,137 @@ public final class MaceAssistHack extends Hack
 			return;
 		
 		// the same catch as after a pearl of yours
-		pearlThrown = true;
-		pearlCatchTimer = pearlCatchDelay.getValueI();
 		pearlReturnSlot = MC.player.getInventory().getSelectedSlot();
-		cameraLocked = true;
-		windAimWait = 0;
-		catchPearl = null;
+		startCatch(clock);
 		chainStep = ChainStep.CATCHING;
 		chainTicks = 0;
+	}
+	
+	// ── Launch first ──
+	// VexBot's "higher" pearl catch (its PearlCatchController): a wind charge
+	// at its feet first (looking 80 degrees down), the pearl thrown from the
+	// top of that jump, then the catch - all of it starts ~6 blocks higher.
+	
+	/** Starts a launch-first catch instead of this throw, if one can go. */
+	private boolean startLaunch()
+	{
+		// (a throw straight up - flatter ones get a sprint-jump instead)
+		if(!pearlLaunchFirst.isChecked() || !pearlCatching.isChecked()
+			|| launchStep != null || chainStep != null || pearlCatch != null
+			|| throwPrep != null || !MC.player.onGround() || !isCatchThrow()
+			|| isOnCooldown(Items.WIND_CHARGE) || MC.player.getXRot() > -75)
+			return false;
+		
+		launchStep = LaunchStep.DOWN;
+		launchTicks = 0;
+		// the slot the catch returns to, as after a pearl of yours
+		pearlReturnSlot = switch(pearlReturnMode.getSelected())
+		{
+			case SWORD -> findItem(ItemTags.SWORDS);
+			case AXE -> findItem(ItemTags.AXES);
+			case ELYTRA -> findItem(Items.ELYTRA);
+			case PEARL -> findItem(Items.ENDER_PEARL);
+			default -> previousSlot();
+		};
+		if(pearlReturnSlot == -1)
+			pearlReturnSlot = MC.player.getInventory().getSelectedSlot();
+		return true;
+	}
+	
+	private void tickLaunch()
+	{
+		if(launchStep == null)
+			return;
+		if(++launchTicks > 60)
+		{
+			launchStep = null;
+			return;
+		}
+		
+		if(launchStep == LaunchStep.DOWN)
+		{
+			// the wind charge at our feet once looking down
+			InteractionHand hand = windHand();
+			if(hand == null || MC.player.getXRot() < 75)
+				return;
+			if(useItemAndSwingResult(hand))
+			{
+				launchStep = LaunchStep.UP;
+				launchTicks = 0;
+			}
+			return;
+		}
+		
+		// UP: the pearl near the top of the jump, looking up
+		if(MC.player.onGround() && launchTicks > 10)
+		{
+			launchStep = null;
+			return;
+		}
+		InteractionHand hand = pearlHand();
+		if(hand == null)
+		{
+			int slot = findItem(Items.ENDER_PEARL);
+			if(slot == -1)
+				launchStep = null;
+			else if(PacketOrder.canChangeSlotNow())
+				selectSlot(slot);
+			return;
+		}
+		// as soon as looking up: still rising, our speed goes into the pearl
+		// (vanilla adds it) - waiting for the top of the jump, after a
+		// humanized 170-degree turn, threw it on the way down: 4.7 blocks
+		// and only once the launch's wind charge cooldown (10 ticks) is
+		// nearly over: a sure catch fires 2-4 ticks after the pearl, and
+		// thrown at once the catch's wind charge came too late (0 of 3)
+		if(!isLookingUp() || isOnCooldown(Items.ENDER_PEARL)
+			|| windCooldownTicks() > 2)
+			return;
+		if(!InteractionSimulator.rightClickItem(hand))
+			return;
+		
+		launchStep = null;
+		// the same catch as after a pearl of yours
+		startCatch(clock);
+		if(pearlChaining.isChecked())
+			startChain();
+	}
+	
+	/** The hand holding a wind charge, switching to one first; or null. */
+	private InteractionHand windHand()
+	{
+		if(MC.player.getMainHandItem().is(Items.WIND_CHARGE))
+			return InteractionHand.MAIN_HAND;
+		if(MC.player.getOffhandItem().is(Items.WIND_CHARGE))
+			return InteractionHand.OFF_HAND;
+		int slot = findItem(Items.WIND_CHARGE);
+		if(slot != -1 && PacketOrder.canChangeSlotNow())
+			selectSlot(slot);
+		return null;
+	}
+	
+	private InteractionHand pearlHand()
+	{
+		if(MC.player.getMainHandItem().is(Items.ENDER_PEARL))
+			return InteractionHand.MAIN_HAND;
+		if(MC.player.getOffhandItem().is(Items.ENDER_PEARL))
+			return InteractionHand.OFF_HAND;
+		return null;
+	}
+	
+	private boolean isOnCooldown(Item item)
+	{
+		return MC.player.getCooldowns().isOnCooldown(new ItemStack(item));
+	}
+	
+	private boolean useItemAndSwingResult(InteractionHand hand)
+	{
+		if(!(MC.gameMode.useItem(MC.player,
+			hand) instanceof InteractionResult.Success success))
+			return false;
+		if(success.swingSource() == InteractionResult.SwingSource.CLIENT)
+			MC.player.swing(hand);
+		return true;
 	}
 	
 	/** The newest ender pearl of ours in the world, or null. */
@@ -1659,7 +2244,7 @@ public final class MaceAssistHack extends Hack
 		// back to where you were - after a catch still under way
 		if(chainHomeSlot != -1)
 		{
-			if(pearlThrown)
+			if(pearlCatch != null)
 				pearlReturnSlot = chainHomeSlot;
 			else if(windFireDelay > 0 && windSlot != -1)
 				windReturnSlot = chainHomeSlot;
@@ -1676,29 +2261,6 @@ public final class MaceAssistHack extends Hack
 		
 		airPotThrown = true;
 		airPotWindDelay = 2;
-	}
-	
-	private void tickPearlCatch()
-	{
-		if(!pearlThrown || --pearlCatchTimer > 0)
-			return;
-		
-		pearlThrown = false;
-		int slot = findItem(Items.WIND_CHARGE);
-		
-		if(slot != -1 && cameraLocked)
-		{
-			windSlot = slot;
-			windReturnSlot = pearlReturnSlot;
-			selectSlot(windSlot);
-			windFireDelay = 2;
-			return;
-		}
-		
-		cameraLocked = false;
-		windSlot = -1;
-		windReturnSlot = -1;
-		windFireDelay = 0;
 	}
 	
 	/** Right-click just pressed, see onUpdate. */
@@ -1819,71 +2381,9 @@ public final class MaceAssistHack extends Hack
 			if(windReturnSlot != -1)
 				selectSlot(windReturnSlot);
 			
-			cameraLocked = false;
-			catchPearl = null;
 			windSlot = -1;
 			windReturnSlot = -1;
 		});
-	}
-	
-	/**
-	 * Where the catch's wind charge has to go: the catch is the wind charge
-	 * hitting your pearl in the air - the pearl "lands" there and puts you
-	 * there (measured, 2026-10-17: pearl and wind charge straight up 4 ticks
-	 * apart = 18.5 blocks up; a wind charge at your feet instead, 6.1 at
-	 * most). "Straight up" missed any pearl that wasn't (a throw at 70
-	 * degrees, a humanized turn ending at 88): so it aims at the pearl where
-	 * the wind charge meets it. Vanilla's physics: the wind charge flies 1.5
-	 * blocks a tick in a straight line from 0.1 below the eyes, with no
-	 * gravity or drag, from 2 ticks after it's used; the pearl loses 0.03 a
-	 * tick to gravity, then keeps 99% of its speed.
-	 *
-	 * @return the point to aim at, or null while the pearl isn't seen
-	 */
-	private Vec3 windAimPoint(Vec3 eyes)
-	{
-		if(catchPearl == null || catchPearl.isRemoved())
-			return null;
-		
-		Vec3 from = eyes.add(0, -0.1, 0);
-		Vec3 pos = catchPearl.position();
-		Vec3 vel = catchPearl.getDeltaMovement();
-		for(int tick = 1; tick <= 80; tick++)
-		{
-			vel = new Vec3(vel.x, vel.y - 0.03, vel.z).scale(0.99);
-			pos = pos.add(vel);
-			// the middle of the pearl (0.25 blocks)
-			Vec3 middle = pos.add(0, 0.125, 0);
-			if(middle.distanceTo(from) <= WIND_CHARGE_SPEED
-				* (tick - WIND_CHARGE_LAG))
-				return middle;
-		}
-		return pos;
-	}
-	
-	private static final double WIND_CHARGE_SPEED = 1.5;
-	
-	/**
-	 * Ticks from using the wind charge until it moves (measured in the
-	 * gametest: with 1 it passed 0.7 blocks behind a pearl thrown at 70
-	 * degrees).
-	 */
-	private static final int WIND_CHARGE_LAG = 2;
-	
-	/**
-	 * The look is on the catch's aim point (or straight up, while the pearl
-	 * isn't seen): within the pearl's and the wind charge's half widths.
-	 */
-	private boolean isWindOnPearl()
-	{
-		Vec3 eyes = MC.player.getEyePosition();
-		Vec3 point = windAimPoint(eyes);
-		if(point == null)
-			return isLookingUp();
-		
-		double dist = Math.max(1, point.distanceTo(eyes));
-		double tolerance = Math.toDegrees(Math.atan(0.25 / dist));
-		return RotationUtils.getAngleToLookVec(point) <= tolerance;
 	}
 	
 	private void fireAirPotWindCharge()
@@ -2050,16 +2550,16 @@ public final class MaceAssistHack extends Hack
 		slamFollowUpSlot = -1;
 		slamFollowUpDelay = 0;
 		
-		pearlThrown = false;
-		pearlCatchTimer = 0;
 		pearlReturnSlot = -1;
-		cameraLocked = false;
-		windAimWait = 0;
-		catchPearl = null;
+		pearlCatch = null;
+		pearlSpawn = null;
+		throwPrep = null;
+		lastTickPos = null;
 		pearlAim.reset();
 		chainStep = null;
 		chainPearl = null;
 		chainHomeSlot = -1;
+		launchStep = null;
 		
 		windFireDelay = 0;
 		windSlot = -1;

@@ -7,6 +7,8 @@
  */
 package net.wurstclient.gametest.tests;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
@@ -51,72 +53,74 @@ public final class MaceTriggerTest extends SingleplayerTest
 	@Override
 	protected void runImpl()
 	{
+		// (user, 2026-10-17: the pearl catch test first, and alone - gametest
+		// mace -parts catch - until it works)
+		testPearlCatchHeight();
+		if(onlyCatch())
+			return;
 		testRiptideDive();
 		testHeavyFall();
 		testCobweb();
-		testPearlCatchHeight();
 		testPearlChain();
 	}
 	
 	/**
-	 * A pearl catch from a throw like the user's (70 degrees up, not
-	 * straight up): MaceAssist turns onto the pearl and its wind charge hits
-	 * it, which puts you where the pearl was. "Straight up" missed it (0
-	 * blocks; now 22.5). Delays past the slider's 5 ticks missed: at 25-30
-	 * blocks the wind charge's own random spread is as wide as the pearl.
+	 * Pearl catches the way the user asked for (2026-10-17): the shot worked
+	 * out exactly (util/PearlCatchSolver), a jump before a steep throw and a
+	 * sprint-jump before a flat one. Straight up (plain and Launch first),
+	 * 70, 30 and 10 degrees up, 3 throws each: the highest point and how
+	 * many were caught. Steep throws must be caught every time - the solver
+	 * only takes shots that hit with any of vanilla's random spread.
 	 */
+	private static boolean onlyCatch()
+	{
+		String parts = System.getProperty("wurst.test.parts");
+		return parts != null && parts.contains("catch");
+	}
+	
 	private void testPearlCatchHeight()
 	{
 		logger.info("Testing MaceAssist pearl catch height");
 		Vec3 home = context.computeOnClient(mc -> mc.player.position());
 		StringBuilder heights = new StringBuilder();
-		double atDefault = 0;
+		List<String> failures = new ArrayList<>();
 		try
 		{
 			runWurstCommand("t MaceAssist on");
-			for(int delay : new int[]{2, 5})
+			// {pitch, launch first}
+			int[][] variants =
+				{{-90, 0}, {-90, 1}, {-70, 0}, {-30, 0}, {-10, 0}};
+			for(int[] variant : variants)
 			{
-				runCommand("gamemode survival");
-				runCommand("effect give @s resistance 60 4 true");
-				clearInventory();
-				runCommand(
-					"item replace entity @s hotbar.3 with ender_pearl 16");
-				runCommand(
-					"item replace entity @s hotbar.5 with wind_charge 64");
-				context.runOnClient(
-					mc -> mc.player.getInventory().setSelectedSlot(3));
-				runWurstCommand(
-					"setslider MaceAssist Pearl_catch_delay " + delay);
-				runCommand(String.format(Locale.ROOT,
-					"tp @s %.3f %.3f %.3f 0 -70", home.x, home.y, home.z));
-				context.waitTicks(10);
-				
-				input.pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+				int pitch = variant[0];
+				boolean launch = variant[1] == 1;
+				runWurstCommand("setcheckbox MaceAssist Launch_first "
+					+ (launch ? "on" : "off"));
 				double best = 0;
-				for(int t = 0; t < 80; t++)
+				int caught = 0;
+				for(int attempt = 0; attempt < 5; attempt++)
 				{
-					context.waitTick();
-					best = Math.max(best,
-						context.computeOnClient(mc -> mc.player.getY())
-							- home.y);
+					double height = catchOnce(home, pitch);
+					best = Math.max(best, height);
+					// (a jump or a launch alone stays under 8)
+					if(height > 8)
+						caught++;
 				}
-				heights.append(String.format(Locale.ROOT, " delay %d: %.1f,",
-					delay, best));
-				if(delay == 2)
-					atDefault = best;
-				runCommand("kill @e[type=ender_pearl]");
-				context.waitFor(mc -> mc.player.onGround(), 400);
+				String name = (launch ? "launch first, " : "") + pitch;
+				heights.append(String.format(Locale.ROOT,
+					" %s: best %.1f, %d of 5 caught;", name, best, caught));
+				if(pitch <= -70 && caught < 3)
+					failures.add(name + ": " + caught + " of 5");
 			}
-			logger.info("Pearl catch from a 70-degree throw, highest point:{}",
-				heights);
-			if(atDefault < 10)
-				throw new RuntimeException(String.format(Locale.ROOT,
-					"The pearl catch only went %.1f blocks up", atDefault));
+			logger.info("Pearl catch heights:{}", heights);
+			if(!failures.isEmpty())
+				throw new RuntimeException(
+					"Steep pearl catches missed: " + failures);
 			
 		}finally
 		{
 			runWurstCommand("t MaceAssist off");
-			runWurstCommand("setslider MaceAssist Pearl_catch_delay 2");
+			runWurstCommand("setcheckbox MaceAssist Launch_first on");
 			runCommand("kill @e[type=ender_pearl]");
 			runCommand("kill @e[type=wind_charge]");
 			context.waitFor(mc -> mc.player.onGround(), 400);
@@ -134,6 +138,35 @@ public final class MaceTriggerTest extends SingleplayerTest
 				mc -> mc.gui.setOverlayMessage(Component.empty(), false));
 			context.waitTicks(10);
 		}
+	}
+	
+	/** One pearl catch from home at this pitch: the highest point. */
+	private double catchOnce(Vec3 home, int pitch)
+	{
+		runCommand("gamemode survival");
+		runCommand("effect give @s resistance 60 4 true");
+		clearInventory();
+		runCommand("item replace entity @s hotbar.3 with ender_pearl 16");
+		runCommand("item replace entity @s hotbar.5 with wind_charge 64");
+		context.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(3));
+		// facing north: the test world's screenshot wall is to the south (a
+		// flat pearl hit it after 6 ticks)
+		runCommand(String.format(Locale.ROOT, "tp @s %.3f %.3f %.3f 180 %d",
+			home.x, home.y, home.z, pitch));
+		// (the wind charge cooldown from the last one, 10 ticks)
+		context.waitTicks(12);
+		
+		input.pressMouse(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+		double best = 0;
+		for(int t = 0; t < 100; t++)
+		{
+			context.waitTick();
+			best = Math.max(best,
+				context.computeOnClient(mc -> mc.player.getY()) - home.y);
+		}
+		runCommand("kill @e[type=ender_pearl]");
+		context.waitFor(mc -> mc.player.onGround(), 600);
+		return best;
 	}
 	
 	/**

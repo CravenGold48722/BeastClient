@@ -61,7 +61,12 @@ public enum LegitDefaultsMigration
 		// BowAimbot: "Predict movement" now scales an exact physics lead, so
 		// 100% is right; the old 20% only made sense for the old guesswork
 		new Batch("legit-defaults-v3",
-			new String[][]{{"BowAimbot", "Predict movement", "0.2"}})};
+			new String[][]{{"BowAimbot", "Predict movement", "0.2"}}),
+		
+		// MaceAssist: pearls are caught from any upward throw now (the catch
+		// is solved exactly, flat throws get a sprint-jump)
+		new Batch("legit-defaults-v4",
+			new String[][]{{"MaceAssist", "Pearl catch angle", "60.0"}})};
 	
 	public static void run(Path wurstFolder,
 		Function<String, Feature> featureByName)

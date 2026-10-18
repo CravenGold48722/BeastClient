@@ -72,6 +72,9 @@ public final class AimAssistComboTest extends SingleplayerTest
 	/** AimAssist's Adaptive style choice, tick by tick. */
 	private final List<String> styles = new ArrayList<>();
 	
+	/** Ticks AimAssist held a ready hit for Hit select (one tick late). */
+	private final List<Boolean> held = new ArrayList<>();
+	
 	/** Ticks where a hit could have gone out (see isChance). */
 	private final List<Boolean> chances = new ArrayList<>();
 	
@@ -91,7 +94,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 	 */
 	private record HitTaken(int tick, boolean onGround, double theirReach,
 		double ourReach, double botAbove, int ourChargeIn, boolean w, boolean s,
-		boolean sprintReady, boolean verifiable)
+		boolean sprintReady, boolean verifiable, boolean crit)
 	{}
 	
 	private final UpdateListener recorder = () -> {
@@ -107,6 +110,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 		styles
 			.add(WurstClient.INSTANCE.getHax().aimAssistHack.getPlayingStyle());
 		sureChances.add(describeSureChance(mc));
+		// (AimAssist runs after this: the last tick's hold)
+		held.add(WurstClient.INSTANCE.getHax().aimAssistHack.isHitSelecting());
 		// the input the last tick was moved with
 		jumped.add(player.input.keyPresses.jump());
 	};
@@ -182,14 +187,21 @@ public final class AimAssistComboTest extends SingleplayerTest
 			// the combo's mechanics with its own style; Adaptive (the default)
 			// only in the real fight
 			runWurstCommand("setmode AimAssist Combat_style sprint_combo");
-			comboOnStillTarget();
-			noHitWhileFalling();
-			tapChoice();
+			if(part("still"))
+				comboOnStillTarget();
+			if(part("falling"))
+				noHitWhileFalling();
+			if(part("taps"))
+				tapChoice();
 			runWurstCommand("setmode AimAssist Combat_style adaptive");
-			realFight();
-			rematchFight();
-			critTraderFight();
-			shieldAndCrouchDodge();
+			if(part("fight"))
+				realFight();
+			if(part("rematch"))
+				rematchFight();
+			if(part("crit"))
+				critTraderFight();
+			if(part("shield"))
+				shieldAndCrouchDodge();
 			
 		}finally
 		{
@@ -350,6 +362,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		logger.info("Fight: score {} hits on the bot, {} taken", hits.size(),
 			taken.stream().filter(h -> h.tick() < fightEnd).count());
 		firstFightOpening = logFightFlow("Fight", hits, taken, fightEnd);
+		logDamage("Fight", hits, taken, fightEnd);
 		logStyleSwitches("Fight", fightEnd);
 		for(HitTaken h : taken)
 			logger.info(String.format(Locale.ROOT,
@@ -465,17 +478,23 @@ public final class AimAssistComboTest extends SingleplayerTest
 		List<String> sure =
 			context.computeOnClient(mc -> new ArrayList<>(sureChances));
 		int sureTicks = 0;
+		int heldBack = 0;
+		List<Boolean> holds = snapshot(held);
 		List<String> sureMissed = new ArrayList<>();
 		for(int t = 0; t < sure.size() && t < fightEnd; t++)
 		{
 			if(sure.get(t) == null)
 				continue;
 			sureTicks++;
-			if(!hitTicks.contains(t))
+			if(t + 1 < holds.size() && holds.get(t + 1))
+				heldBack++;
+			else if(!hitTicks.contains(t))
 				sureMissed.add("tick " + t + ": " + sure.get(t));
 		}
-		logger.info("Fight: {} sure chances (sprint hit or crit), {} missed {}",
-			sureTicks, sureMissed.size(), sureMissed);
+		logger.info(
+			"Fight: {} sure chances (sprint hit or crit), {} held by"
+				+ " Hit select, {} missed {}",
+			sureTicks, heldBack, sureMissed.size(), sureMissed);
 		if(!sureMissed.isEmpty())
 			throw new RuntimeException(
 				"Let " + sureMissed.size() + " of " + sureTicks
@@ -490,6 +509,33 @@ public final class AimAssistComboTest extends SingleplayerTest
 		return context
 			.computeOnClient(mc -> WurstClient.INSTANCE.getHax().aimAssistHack
 				.describeOpponentModel());
+	}
+	
+	/**
+	 * Damage, not just hits (user, 2026-10-17: it looked like 75:25 for
+	 * VexBot while AimAssist landed more hits): a crit counts 1.5 - a hit
+	 * taken is a crit when the bot was falling.
+	 */
+	private void logDamage(String label, List<Attack> ours,
+		List<HitTaken> theirs, int end)
+	{
+		double dealt = 0, taken = 0;
+		int ourCrits = 0, theirCrits = 0;
+		for(Attack a : ours)
+		{
+			dealt += a.crit() ? 1.5 : 1;
+			ourCrits += a.crit() ? 1 : 0;
+		}
+		for(HitTaken h : theirs)
+			if(h.tick() < end)
+			{
+				taken += h.crit() ? 1.5 : 1;
+				theirCrits += h.crit() ? 1 : 0;
+			}
+		logger.info(String.format(Locale.ROOT,
+			"%s: damage (crit = 1.5) ours %.1f (%d crits), theirs %.1f (%d"
+				+ " crits)",
+			label, dealt, ourCrits, taken, theirCrits));
 	}
 	
 	/** realFight's first 100 ticks, ours:theirs. */
@@ -539,6 +585,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 		logger.info("Rematch: score {} hits on the bot, {} taken", hits.size(),
 			taken.stream().filter(h -> h.tick() < fightEnd).count());
 		int[] opening = logFightFlow("Rematch", hits, taken, fightEnd);
+		logDamage("Rematch", hits, taken, fightEnd);
 		logStyleSwitches("Rematch", fightEnd);
 		if(firstFightOpening != null)
 			logger.info("Rematch: first 100 ticks {}:{}, first fight {}:{}",
@@ -648,6 +695,11 @@ public final class AimAssistComboTest extends SingleplayerTest
 	 */
 	private void recordFight(String name, int ticks)
 	{
+		if(!RECORD)
+		{
+			context.waitTicks(ticks);
+			return;
+		}
 		for(int i = 0; i < ticks; i++)
 		{
 			context.waitTick();
@@ -919,6 +971,25 @@ public final class AimAssistComboTest extends SingleplayerTest
 	}
 	
 	private static final String VEX_PLAYSTYLE = "adaptive";
+	
+	/**
+	 * Fight screenshots for videos only on request (gametest -record): ~900
+	 * per run made every round slower.
+	 */
+	private static final boolean RECORD =
+		Boolean.getBoolean("wurst.test.record");
+	
+	/**
+	 * Only some parts (gametest -parts fight,rematch): still, falling, taps,
+	 * fight, rematch, crit, shield. All without it.
+	 */
+	private static boolean part(String name)
+	{
+		String parts = System.getProperty("wurst.test.parts");
+		return parts == null || parts.isBlank()
+			|| java.util.Arrays.asList(parts.split(",")).contains(name);
+	}
+	
 	private static final String VEX_COUNTER_STUN = "100";
 	
 	private void makeTough(String target)
@@ -974,6 +1045,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 			backDown.clear();
 			chances.clear();
 			sureChances.clear();
+			held.clear();
 			styles.clear();
 			forwardDown.clear();
 			jumped.clear();
@@ -1068,7 +1140,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 			ourReach, above, chargeIn, mc.options.keyUp.isDown(),
 			mc.options.keyDown.isDown(),
 			player.isSprinting() && player.wasSprinting,
-			bot != null && HitCheck.isVerifiable(bot));
+			bot != null && HitCheck.isVerifiable(bot),
+			bot != null && isFalling(bot));
 	}
 	
 	private static Field baitTicks;

@@ -35,6 +35,7 @@ public final class HackList implements UpdateListener
 	public final AirMinerHack airMinerHack = new AirMinerHack();
 	public final AirPlaceHack airPlaceHack = new AirPlaceHack();
 	public final AirWalkHack airWalkHack = new AirWalkHack();
+	public final AltGuiHack altGuiHack = new AltGuiHack();
 	public final AnchorAuraHack anchorAuraHack = new AnchorAuraHack();
 	public final AntiAfkHack antiAfkHack = new AntiAfkHack();
 	public final AntiBlastHack antiBlastHack = new AntiBlastHack();
@@ -119,6 +120,8 @@ public final class HackList implements UpdateListener
 	public final ChorusFruitHack chorusFruitHack = new ChorusFruitHack();
 	public final ClickAuraHack clickAuraHack = new ClickAuraHack();
 	public final ClickGuiHack clickGuiHack = new ClickGuiHack();
+	public final ClientChatOverlayHack clientChatOverlayHack =
+		new ClientChatOverlayHack();
 	public final ClutchFallHack clutchFallHack = new ClutchFallHack();
 	public final CoordLoggerHack coordLoggerHack = new CoordLoggerHack();
 	public final CrashChestHack crashChestHack = new CrashChestHack();
@@ -351,6 +354,7 @@ public final class HackList implements UpdateListener
 		new WorkstationEspHack();
 	public final WindChargeKeyHack windChargeKeyHack = new WindChargeKeyHack();
 	public final XCarryHack xCarryHack = new XCarryHack();
+	public final XpGuiHack xpGuiHack = new XpGuiHack();
 	public final XRayHack xRayHack = new XRayHack();
 	
 	private final TreeMap<String, Hack> hax =
@@ -406,6 +410,20 @@ public final class HackList implements UpdateListener
 	public void saveImportantHax()
 	{
 		importantHacksFile.save(this);
+	}
+	
+	/**
+	 * Turns the "Only above ground" filter of every hack that has one on or
+	 * off (AboveGroundFilter / .aboveground, ported from the CevAPI fork).
+	 */
+	public void setAboveGroundFilterEnabled(boolean enabled)
+	{
+		AboveGroundFilterManager.toggle(this, enabled);
+	}
+	
+	public void setAboveGroundFilterY(int y)
+	{
+		AboveGroundFilterManager.setY(this, y);
 	}
 	
 	public Hack getHackByName(String name)

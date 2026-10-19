@@ -22,6 +22,7 @@ import net.minecraft.network.chat.Style;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.StringUtil;
 import net.wurstclient.WurstClient;
+import net.wurstclient.hud.ClientMessageOverlay;
 
 public enum ChatUtils
 {
@@ -136,7 +137,10 @@ public enum ChatUtils
 		}
 		
 		ChatComponent chatHud = MC.gui.getChat();
-		chatHud.addClientSystemMessage(prefix().append(component));
+		MutableComponent message = prefix().append(component);
+		// ClientChatOverlay can show Beast's own messages in their own panel
+		ClientMessageOverlay.getInstance().markWurstClientMessage(message);
+		chatHud.addClientSystemMessage(message);
 	}
 	
 	public static void message(String message)

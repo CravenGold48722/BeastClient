@@ -41,6 +41,7 @@ public class LevelRendererMixin
 		PoseStack matrixStack = new PoseStack();
 		matrixStack.mulPose(positionMatrix);
 		float tickProgress = tickCounter.getGameTimeDeltaPartialTick(false);
+		net.wurstclient.util.HackPerformanceTracker.beginRenderFrame();
 		RenderEvent event = new RenderEvent(matrixStack, tickProgress);
 		EventManager.fire(event);
 	}

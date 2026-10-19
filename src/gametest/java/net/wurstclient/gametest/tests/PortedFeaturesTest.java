@@ -69,7 +69,9 @@ public final class PortedFeaturesTest extends SingleplayerTest
 		"SimulationSonar", "SoulChalice", "StaffMonitor", "Telemetrics",
 		"Towny", "VaultRoll", "VillagerRoll",
 		// big systems
-		"AutoFly", "LootRunner", "Mapa", "NBTEditor");
+		"AutoFly", "LootRunner", "Mapa", "NBTEditor",
+		// alternative GUIs and the chat overlay
+		"AltGUI", "XPGUI", "ClientChatOverlay");
 	
 	public PortedFeaturesTest(ClientGameTestContext context,
 		TestSingleplayerContext spContext)
@@ -139,6 +141,7 @@ public final class PortedFeaturesTest extends SingleplayerTest
 		}
 		
 		testContainerOverlays();
+		testPortedCommandsAndOtfs(failed);
 		
 		if(!failed.isEmpty())
 			throw new RuntimeException(
@@ -151,6 +154,56 @@ public final class PortedFeaturesTest extends SingleplayerTest
 		clearParticles();
 		clearToasts();
 		context.waitTicks(7);
+	}
+	
+	/**
+	 * The ported commands, plus the OTFs that hook every event (performance
+	 * overlay) or the chat (client chat overlay, command prefix).
+	 */
+	private void testPortedCommandsAndOtfs(ArrayList<String> failed)
+	{
+		String error = context.computeOnClient(mc -> {
+			try
+			{
+				var otfs = WurstClient.INSTANCE.getOtfs();
+				otfs.performanceOverlayOtf.doPrimaryAction();
+				return null;
+				
+			}catch(RuntimeException e)
+			{
+				e.printStackTrace();
+				return "PerformanceOverlay threw " + e;
+			}
+		});
+		if(error != null)
+			failed.add(error);
+		
+		// toggled in code, not with .t: no toggle message left on screen
+		setHack("ClientChatOverlay", true);
+		for(String cmd : List.of("panic", "panic restore", "search diamond_ore",
+			"search off", "aboveground on", "aboveground off",
+			"preset save gametest", "preset load gametest", "preset list",
+			"autobuild \"HI\" 2"))
+			runWurstCommand(cmd);
+		context.waitTicks(10);
+		setHack("AutoBuild", false);
+		setHack("ClientChatOverlay", false);
+		// the commands' own toggles (.search, .panic) announce in the action
+		// bar
+		context.runOnClient(mc -> mc.gui.setOverlayMessage(
+			net.minecraft.network.chat.Component.empty(), false));
+		
+		context.runOnClient(mc -> {
+			var otfs = WurstClient.INSTANCE.getOtfs();
+			if(otfs.performanceOverlayOtf.isEnabled())
+				otfs.performanceOverlayOtf.doPrimaryAction();
+		});
+	}
+	
+	private void setHack(String name, boolean enabled)
+	{
+		context.runOnClient(mc -> WurstClient.INSTANCE.getHax()
+			.getHackByName(name).setEnabled(enabled));
 	}
 	
 	/**

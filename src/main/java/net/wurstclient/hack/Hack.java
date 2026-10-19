@@ -157,6 +157,12 @@ public abstract class Hack extends Feature
 		
 		if(this.enabled == enabled)
 			return;
+			
+		// PacketFirewall (ported from the CevAPI fork) can hold hacks back
+		// while it's on; they start once it's off again
+		if(enabled && WURST.getOtfs() != null
+			&& WURST.getOtfs().packetFirewallOtf.pauseRequestedEnable(this))
+			return;
 		
 		TooManyHaxHack tooManyHax = WURST.getHax().tooManyHaxHack;
 		if(enabled && tooManyHax.isEnabled() && tooManyHax.isBlocked(this))
@@ -179,7 +185,9 @@ public abstract class Hack extends Feature
 		else
 			onDisable();
 		
-		if(stateSaved)
+		if(stateSaved
+			&& (WURST.getOtfs() == null || !WURST.getOtfs().packetFirewallOtf
+				.isTemporarilySuppressed(this)))
 			WURST.getHax().saveEnabledHax();
 	}
 	

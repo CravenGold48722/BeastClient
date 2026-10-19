@@ -7,6 +7,8 @@
  */
 package net.wurstclient.hacks;
 
+import java.util.ArrayList;
+
 import net.wurstclient.Category;
 import net.wurstclient.DontBlock;
 import net.wurstclient.SearchTags;
@@ -35,13 +37,48 @@ public final class PanicHack extends Hack implements UpdateListener
 		EVENTS.remove(UpdateListener.class, this);
 	}
 	
+	/** What the last panic turned off, for .panic restore (this session). */
+	private final ArrayList<String> turnedOff = new ArrayList<>();
+	
 	@Override
 	public void onUpdate()
 	{
+		ArrayList<String> now = new ArrayList<>();
 		for(Hack hack : WURST.getHax().getAllHax())
 			if(hack.isEnabled() && hack != this)
+			{
+				now.add(hack.getName());
 				hack.setEnabled(false);
-			
+			}
+		
+		if(!now.isEmpty())
+		{
+			turnedOff.clear();
+			turnedOff.addAll(now);
+		}
+		
 		setEnabled(false);
+	}
+	
+	/**
+	 * Turns back on what the last panic turned off (.panic restore, ported
+	 * from the CevAPI fork).
+	 */
+	public int restoreSavedHacks()
+	{
+		int restored = 0;
+		for(String name : turnedOff)
+		{
+			Hack hack = WURST.getHax().getHackByName(name);
+			if(hack == null || hack.isEnabled())
+				continue;
+			
+			hack.setEnabled(true);
+			if(hack.isEnabled())
+				restored++;
+		}
+		
+		turnedOff.clear();
+		return restored;
 	}
 }

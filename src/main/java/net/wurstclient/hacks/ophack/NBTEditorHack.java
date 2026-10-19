@@ -59,9 +59,9 @@ public final class NBTEditorHack extends Hack
 	private static final String EMPTY_ITEM =
 		"{id:\"minecraft:cod\",count:1,components:{}}";
 	private static final java.util.List<String> BUILT_IN_PRESET_NAMES =
-		java.util.List.of("Charged Creeper Wand", "Fireball Wand",
-			"Speed Hack Rod", "TNT Dropper", "Wither Wand",
-			"Wurst7-CevAPI Legit OP Kit", "Wurst7-CevAPI OP Kit");
+		// CevAPI shipped grief items here (wands, TNT dropper, OP kits);
+		// left out of Beast, your own presets in wurst/nbt-presets still work
+		java.util.List.of();
 	/** NBT keys that /data merge cannot change, so they stay hidden. */
 	private static final String[] POSITION_AND_IDENTITY_KEYS =
 		{"id", "UUID", "Pos", "Motion", "Rotation", "PortalCooldown"};

@@ -40,6 +40,7 @@ import net.wurstclient.mixinterface.IMinecraftClient;
 import net.wurstclient.navigator.Navigator;
 import net.wurstclient.other_feature.OtfList;
 import net.wurstclient.other_feature.OtherFeature;
+import net.wurstclient.presets.PresetManager;
 import net.wurstclient.settings.LegitDefaultsMigration;
 import net.wurstclient.settings.SettingsFile;
 import net.wurstclient.update.ProblematicResourcePackDetector;
@@ -87,6 +88,7 @@ public enum WurstClient
 	private EntitySpeedTracker entitySpeedTracker;
 	private FriendsList friends;
 	private WurstTranslator translator;
+	private PresetManager presetManager;
 	
 	private boolean enabled = true;
 	private static boolean guiInitialized;
@@ -163,6 +165,7 @@ public enum WurstClient
 		friends.load();
 		
 		translator = new WurstTranslator();
+		presetManager = new PresetManager(this, wurstFolder);
 		
 		cmdProcessor = new CmdProcessor(cmds);
 		eventManager.add(ChatOutputListener.class, cmdProcessor);
@@ -362,6 +365,11 @@ public enum WurstClient
 	public FriendsList getFriends()
 	{
 		return friends;
+	}
+	
+	public PresetManager getPresetManager()
+	{
+		return presetManager;
 	}
 	
 	public WurstTranslator getTranslator()

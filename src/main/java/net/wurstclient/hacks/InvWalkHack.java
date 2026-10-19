@@ -103,7 +103,8 @@ public final class InvWalkHack extends Hack implements UpdateListener
 			&& !isCreativeSearchBarOpen(screen))
 			return true;
 		
-		if(allowClickGUI.isChecked() && screen instanceof ClickGuiScreen)
+		if(allowClickGUI.isChecked() && (screen instanceof ClickGuiScreen
+			|| screen instanceof net.wurstclient.xpgui.XpGuiScreen))
 			return true;
 		
 		if(allowOther.isChecked() && screen instanceof AbstractContainerScreen

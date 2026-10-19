@@ -15,6 +15,7 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.KeyEvent;
 import net.wurstclient.WurstClient;
 import net.wurstclient.clickgui.screens.ClickGuiScreen;
+import net.wurstclient.xpgui.XpGuiScreen;
 import net.wurstclient.command.CmdProcessor;
 import net.wurstclient.events.KeyPressListener;
 import net.wurstclient.events.MouseButtonPressListener;
@@ -80,6 +81,11 @@ public final class KeybindProcessor
 			return false;
 		
 		Screen screen = WurstClient.MC.screen;
+		// XPGUI (ported from the CevAPI fork) works like the ClickGUI, except
+		// while one of its text boxes has the keyboard
+		if(screen instanceof XpGuiScreen xp)
+			return !xp.isKeyboardInputCaptured();
+		
 		return screen == null || screen instanceof ClickGuiScreen;
 	}
 	

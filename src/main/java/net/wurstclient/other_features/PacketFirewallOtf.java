@@ -1,0 +1,1754 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.other_features;
+
+import com.mojang.blaze3d.platform.InputConstants;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+
+import org.slf4j.Logger;
+
+import com.mojang.logging.LogUtils;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ServerboundClientCommandPacket;
+import net.minecraft.network.protocol.game.ServerboundChatCommandPacket;
+import net.minecraft.network.protocol.game.ServerboundChatPacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ServerboundInteractPacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket.Pos;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket.PosRot;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket.Rot;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket.StatusOnly;
+import net.minecraft.network.protocol.game.ServerboundMoveVehiclePacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
+import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
+import net.minecraft.network.protocol.game.ServerboundSwingPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
+import net.wurstclient.Category;
+import net.wurstclient.SearchTags;
+import net.wurstclient.events.ConnectionPacketOutputListener;
+import net.wurstclient.events.ConnectionPacketOutputListener.ConnectionPacketOutputEvent;
+import net.wurstclient.events.BlockBreakingProgressListener;
+import net.wurstclient.events.KnockbackListener;
+import net.wurstclient.events.PacketInputListener;
+import net.wurstclient.events.PacketInputListener.PacketInputEvent;
+import net.wurstclient.events.PacketOutputListener;
+import net.wurstclient.events.PlayerAttacksEntityListener;
+import net.wurstclient.events.RightClickListener;
+import net.wurstclient.events.UpdateListener;
+import net.wurstclient.hack.Hack;
+import net.wurstclient.other_feature.OtherFeature;
+import net.wurstclient.settings.CheckboxSetting;
+import net.wurstclient.settings.Setting;
+import net.wurstclient.keybinds.PossibleKeybind;
+import net.wurstclient.clickgui.Component;
+import net.wurstclient.clickgui.ClickGui;
+import net.wurstclient.clickgui.ClickGuiIcons;
+import net.wurstclient.util.RenderUtils;
+import net.wurstclient.WurstClient;
+import net.wurstclient.util.PacketUtils;
+import net.wurstclient.util.ChatUtils;
+import net.wurstclient.util.MovementMutationTracker;
+import net.wurstclient.util.text.WText;
+
+@SearchTags({"packet firewall", "movement packet validator", "movement packets",
+	"anti kick"})
+public final class PacketFirewallOtf extends OtherFeature
+	implements PacketOutputListener, ConnectionPacketOutputListener,
+	PacketInputListener, UpdateListener
+{
+	private static final Logger LOGGER = LogUtils.getLogger();
+	private static final long SETBACK_COOLDOWN_MS = 500;
+	private static final long SETBACK_LOOKBACK_MS = 1500;
+	private static final String HACK_PACKAGE_PREFIX = "net.wurstclient.hacks.";
+	
+	private final CheckboxSetting autoEnableAntiCheat = new CheckboxSetting(
+		"Auto enable on anticheat",
+		"Enable PacketFirewall when the server observer identifies a known anticheat and announce it in chat.",
+		false);
+	private String autoEnabledServer;
+	
+	private final net.wurstclient.util.FirewallActivationPauses<Hack> activationPauses =
+		new net.wurstclient.util.FirewallActivationPauses<>(Hack::isEnabled,
+			hack -> {
+				hack.setEnabled(false);
+				ChatUtils.message("[PacketFirewall] Paused " + hack.getName()
+					+ " while PacketFirewall is enabled.");
+			}, hack -> hack.setEnabled(true));
+	
+	private boolean firewallEnabled;
+	
+	private final CheckboxSetting dropInvalidSetting =
+		new CheckboxSetting("Drop invalid", false);
+	private final CheckboxSetting clampPitchSetting =
+		new CheckboxSetting("Clamp pitch", false);
+	private final CheckboxSetting wrapYawSetting =
+		new CheckboxSetting("Wrap yaw", false);
+	private final CheckboxSetting dedupMovementSetting =
+		new CheckboxSetting("Dedup movement", false);
+	private final CheckboxSetting debugLoggingSetting =
+		new CheckboxSetting("Debug logging", false);
+	private final CheckboxSetting vanillaOnlyPacketsSetting =
+		new CheckboxSetting("Vanilla-only packets",
+			WText.literal("Blocks packet-affecting hack behavior while keeping "
+				+ "hacks enabled so their client-side parts can still run. "
+				+ "Direct packets sent from hacks are blocked and "
+				+ "PacketFirewall stops rewriting movement packets."),
+			false);
+	private final HackSelectionSetting allowedHacksSetting =
+		new HackSelectionSetting();
+	
+	private Vec3 lastGoodPos;
+	private float lastGoodYaw;
+	private float lastGoodPitch;
+	private boolean lastGoodOnGround;
+	private long lastGoodTickTime = -1;
+	private boolean lastGoodValid;
+	
+	private long droppedNaN;
+	private long sanitizedRot;
+	private long sanitizedPos;
+	private long sanitizedOnGround;
+	private long dedupedMoves;
+	
+	private PendingMovement pendingMovement;
+	private boolean sendingPending;
+	
+	private final LinkedHashSet<Hack> temporarilyDisabledHacks =
+		new LinkedHashSet<>();
+	private final LinkedHashSet<Hack> vanillaOnlyPausedHacks =
+		new LinkedHashSet<>();
+	private final LinkedHashSet<String> additionalAllowedHacks =
+		new LinkedHashSet<>();
+	private final LinkedHashSet<String> disabledDefaultHacks =
+		new LinkedHashSet<>();
+	private final LinkedHashMap<Hack, String> suppressedReasons =
+		new LinkedHashMap<>();
+	private final LinkedHashMap<Hack, GrimPacketEvidence> recentGrimEvidence =
+		new LinkedHashMap<>();
+	private final LinkedHashMap<String, Hack> hackClassLookup =
+		new LinkedHashMap<>();
+	private boolean suppressingRiskyHacks;
+	private long lastSetbackMs;
+	private boolean wasVanillaOnlyPacketsEnabled;
+	
+	public PacketFirewallOtf()
+	{
+		super("PacketFirewall",
+			"description.wurst.other_feature.packet_firewall");
+		
+		addSetting(autoEnableAntiCheat);
+		addSetting(dropInvalidSetting);
+		addSetting(clampPitchSetting);
+		addSetting(wrapYawSetting);
+		addSetting(dedupMovementSetting);
+		addSetting(debugLoggingSetting);
+		addSetting(vanillaOnlyPacketsSetting);
+		addSetting(allowedHacksSetting);
+		
+		EVENTS.add(PacketInputListener.class, this);
+		EVENTS.add(PacketOutputListener.class, this);
+		EVENTS.add(ConnectionPacketOutputListener.class, this);
+		EVENTS.add(UpdateListener.class, this);
+	}
+	
+	@Override
+	public Category getCategory()
+	{
+		return Category.OTHER;
+	}
+	
+	@Override
+	public boolean isEnabled()
+	{
+		return firewallEnabled;
+	}
+	
+	@Override
+	public String getPrimaryAction()
+	{
+		return isEnabled() ? "Disable" : "Enable";
+	}
+	
+	@Override
+	public void doPrimaryAction()
+	{
+		firewallEnabled = !firewallEnabled;
+		if(firewallEnabled)
+			pauseActivationHacks();
+		else
+			restoreSuppressedHacks();
+	}
+	
+	@Override
+	public void onSentConnectionPacket(ConnectionPacketOutputEvent event)
+	{
+		if(!isFirewallEnabled() || !isVanillaOnlyPacketsEnabled())
+			return;
+		
+		Packet<?> packet = event.getPacket();
+		SenderResolution sender = resolveSenderHackFromStack();
+		if(sender == null || sender.hack() == null
+			|| isAllowedHack(sender.hack()))
+			return;
+		
+		suppressHackTemporarily(sender.hack(),
+			"vanilla-only packets mode blocked direct outgoing packet");
+		event.cancel();
+		if(debugLoggingSetting.isChecked())
+			LOGGER.info(
+				"[PacketFirewall] vanilla-only: blocked direct {} from {} ({})",
+				packet.getClass().getSimpleName(), sender.hack().getName(),
+				sender.stackFrame());
+	}
+	
+	@Override
+	public void onSentPacket(PacketOutputEvent event)
+	{
+		if(!isFirewallEnabled())
+			return;
+		
+		if(isVanillaOnlyPacketsEnabled())
+		{
+			clearPendingMovement("vanilla-only");
+			
+			Packet<?> packet = event.getPacket();
+			SenderResolution sender = resolveSenderHackFromStack();
+			if(sender != null && sender.hack() != null
+				&& !isAllowedHack(sender.hack())
+				&& isCustomPacketSurface(packet))
+			{
+				suppressHackTemporarily(sender.hack(),
+					"vanilla-only packets mode blocked custom outgoing packet");
+				
+				event.cancel();
+				if(debugLoggingSetting.isChecked())
+					LOGGER.info(
+						"[PacketFirewall] vanilla-only: blocked custom {} from {} ({})",
+						packet.getClass().getSimpleName(),
+						sender.hack().getName(), sender.stackFrame());
+				return;
+			}
+			
+			if(packet instanceof ServerboundMovePlayerPacket
+				&& isMovementTaintedByPausedHack())
+			{
+				event.cancel();
+				if(debugLoggingSetting.isChecked())
+					LOGGER.info(
+						"[PacketFirewall] vanilla-only: blocked movement packet from tainted player state");
+			}
+			
+			return;
+		}
+		
+		boolean allowDedup = !sendingPending;
+		Packet<?> packet = event.getPacket();
+		GrimPacketSurface grimSurface = classifyGrimSurface(packet);
+		if(grimSurface != null)
+			recordGrimPacketEvidence(packet, grimSurface);
+		
+		if(packet instanceof ServerboundMovePlayerPacket movePacket)
+		{
+			recordMovementMutationAttribution(movePacket);
+			handleMovePlayer(event, movePacket, allowDedup);
+			return;
+		}
+		
+		// Movement-adjacent packet that carries vehicle position/rotation.
+		if(packet instanceof ServerboundMoveVehiclePacket vehiclePacket)
+		{
+			handleMoveVehicle(event, vehiclePacket, allowDedup);
+			return;
+		}
+	}
+	
+	@Override
+	public void onReceivedPacket(PacketInputEvent event)
+	{
+		if(!isFirewallEnabled())
+			return;
+		
+		if(!(event.getPacket() instanceof ClientboundPlayerPositionPacket))
+			return;
+		
+		MC.execute(this::handleSetbackOnClientThread);
+	}
+	
+	public void onAntiCheatDetected(String detected)
+	{
+		if(detected == null || "Unknown".equalsIgnoreCase(detected))
+			return;
+		
+		MC.execute(() -> {
+			if(!autoEnableAntiCheat.isChecked() || !WURST.isEnabled()
+				|| MC.player == null || MC.level == null)
+				return;
+			
+			enableForDetectedAntiCheat(
+				WURST.getServerObserver().getServerAddress(), detected);
+		});
+	}
+	
+	private void enableForDetectedAntiCheat(String server, String detected)
+	{
+		if(server != null
+			&& java.util.Objects.equals(server, autoEnabledServer))
+			return;
+		
+		autoEnabledServer = server;
+		if(firewallEnabled)
+			return;
+		
+		firewallEnabled = true;
+		pauseActivationHacks();
+		ChatUtils.message("PacketFirewall: automatically enabled because "
+			+ detected + " was detected.");
+	}
+	
+	private void handleSetbackOnClientThread()
+	{
+		long now = System.currentTimeMillis();
+		if(now - lastSetbackMs < SETBACK_COOLDOWN_MS)
+			return;
+		
+		lastSetbackMs = now;
+		suppressBySetback();
+	}
+	
+	@Override
+	public void onUpdate()
+	{
+		if(MC.player == null || MC.level == null)
+			autoEnabledServer = null;
+		else if(autoEnableAntiCheat.isChecked() && WURST.isEnabled())
+		{
+			var observer = WURST.getServerObserver();
+			String server = observer.getServerAddress();
+			String detected = observer.guessAntiCheat(server);
+			if(detected != null && !"Unknown".equalsIgnoreCase(detected))
+				enableForDetectedAntiCheat(server, detected);
+		}
+		if(!isFirewallEnabled())
+			restoreSuppressedHacks();
+		
+		if(!isFirewallEnabled())
+			return;
+		
+		pauseActivationHacks();
+		boolean vanillaOnly = isVanillaOnlyPacketsEnabled();
+		if(vanillaOnly)
+			clearPendingMovement("vanilla-only");
+		else if(wasVanillaOnlyPacketsEnabled)
+			restoreVanillaOnlyHacks();
+		
+		wasVanillaOnlyPacketsEnabled = vanillaOnly;
+		
+		if(vanillaOnly)
+		{
+			suppressVanillaOnlyMovementHacks();
+			enforceVanillaOnlyFlightState();
+			return;
+		}
+		
+		if(pendingMovement == null)
+			return;
+		
+		long tick = getClientTick();
+		if(pendingMovement.packet.tick <= tick)
+			sendPendingMovement("dedup-tick");
+	}
+	
+	private List<Hack> activationBlockedHacks()
+	{
+		return List.of(WURST.getHax().untouchableHack,
+			WURST.getHax().fastBreakHack, WURST.getHax().speedNukerHack);
+	}
+	
+	private void pauseActivationHacks()
+	{
+		if(!isFirewallEnabled())
+			return;
+		List<Hack> blocked = activationBlockedHacks();
+		if(blocked.stream().anyMatch(Hack::isEnabled))
+			clearPendingMovement("firewall-activation-pause");
+		activationPauses.pause(blocked);
+	}
+	
+	/** Block starts before onEnable can register listeners or send packets. */
+	public boolean pauseRequestedEnable(Hack hack)
+	{
+		if(!isFirewallEnabled() || !activationBlockedHacks().contains(hack))
+			return false;
+		if(activationPauses.requestEnable(hack))
+		{
+			if(WURST.getHud() != null)
+				WURST.getHud().getHackList().updateState(hack);
+			ChatUtils.message("[PacketFirewall] Paused " + hack.getName()
+				+ " while PacketFirewall is enabled.");
+		}
+		return true;
+	}
+	
+	private void enforceVanillaOnlyFlightState()
+	{
+		if(MC.player == null || !vanillaOnlyPausedHacks
+			.contains(WURST.getHax().creativeFlightHack))
+			return;
+		
+		MC.player.getAbilities().flying = false;
+		if(!MC.player.getAbilities().instabuild)
+			MC.player.getAbilities().mayfly = false;
+	}
+	
+	private boolean isFirewallEnabled()
+	{
+		return firewallEnabled && WURST.isEnabled();
+	}
+	
+	public boolean isVanillaOnlyPacketsMode()
+	{
+		return isFirewallEnabled() && isVanillaOnlyPacketsEnabled();
+	}
+	
+	private boolean isVanillaOnlyPacketsEnabled()
+	{
+		return vanillaOnlyPacketsSetting.isChecked();
+	}
+	
+	public Packet<?> enforceVanillaOnly(Packet<?> original, Packet<?> packet,
+		boolean cancelled)
+	{
+		if(!isFirewallEnabled() || !isVanillaOnlyPacketsEnabled())
+			return cancelled ? null : packet;
+		
+		// The vanilla death screen must be able to perform its respawn action.
+		if(original instanceof ServerboundClientCommandPacket command && command
+			.getAction() == ServerboundClientCommandPacket.Action.PERFORM_RESPAWN)
+			return original;
+		
+		SenderResolution sender = resolveSenderHackFromStack();
+		boolean hackOrigin = sender != null && sender.hack() != null
+			&& !isAllowedHack(sender.hack())
+			&& !isAllowedChatPacket(sender.hack(), original, packet);
+		if(hackOrigin)
+			return null;
+		
+		if(cancelled)
+			// Vanilla screens and actions can be cancelled by another listener.
+			// Preserve those packets unless the cancellation came from a
+			// non-allowed hack; otherwise vanilla death-screen actions such
+			// as respawn and leaving to the title screen become unusable.
+			return hackOrigin ? null : original;
+		
+		if(original instanceof ServerboundMovePlayerPacket
+			&& packet instanceof ServerboundMovePlayerPacket move
+			&& !sameMovementPacket((ServerboundMovePlayerPacket)original, move))
+			return original;
+		
+		if(original instanceof ServerboundMovePlayerPacket
+			&& !(packet instanceof ServerboundMovePlayerPacket))
+			return original;
+		
+		return packet;
+	}
+	
+	/**
+	 * Chat automation is already server-facing behavior that vanilla supports.
+	 * Keep it working in vanilla-only mode while still blocking gameplay
+	 * packets
+	 * sent by hacks in the chat category.
+	 */
+	private boolean isAllowedChatPacket(Hack hack, Packet<?> original,
+		Packet<?> packet)
+	{
+		if(hack == null || hack.getCategory() != Category.CHAT)
+			return false;
+		
+		return original instanceof ServerboundChatPacket
+			|| original instanceof ServerboundChatCommandPacket
+			|| packet instanceof ServerboundChatPacket
+			|| packet instanceof ServerboundChatCommandPacket;
+	}
+	
+	private boolean sameMovementPacket(ServerboundMovePlayerPacket a,
+		ServerboundMovePlayerPacket b)
+	{
+		boolean aPos = a instanceof Pos || a instanceof PosRot;
+		boolean bPos = b instanceof Pos || b instanceof PosRot;
+		boolean aRot = a instanceof Rot || a instanceof PosRot;
+		boolean bRot = b instanceof Rot || b instanceof PosRot;
+		if(aPos != bPos || aRot != bRot || a.isOnGround() != b.isOnGround()
+			|| a.horizontalCollision() != b.horizontalCollision())
+			return false;
+		if(aPos && (Double.compare(a.getX(0), b.getX(0)) != 0
+			|| Double.compare(a.getY(0), b.getY(0)) != 0
+			|| Double.compare(a.getZ(0), b.getZ(0)) != 0))
+			return false;
+		return !aRot || Float.compare(a.getYRot(0), b.getYRot(0)) == 0
+			&& Float.compare(a.getXRot(0), b.getXRot(0)) == 0;
+	}
+	
+	private void restoreSuppressedHacks()
+	{
+		if(!suppressingRiskyHacks && temporarilyDisabledHacks.isEmpty()
+			&& suppressedReasons.isEmpty() && recentGrimEvidence.isEmpty()
+			&& vanillaOnlyPausedHacks.isEmpty() && !wasVanillaOnlyPacketsEnabled
+			&& activationPauses.isEmpty())
+			return;
+		
+		for(Hack hack : temporarilyDisabledHacks)
+			if(!hack.isEnabled())
+				hack.setEnabled(true);
+			
+		temporarilyDisabledHacks.clear();
+		activationPauses.restore();
+		vanillaOnlyPausedHacks.clear();
+		suppressedReasons.clear();
+		recentGrimEvidence.clear();
+		MovementMutationTracker.clear();
+		suppressingRiskyHacks = false;
+		wasVanillaOnlyPacketsEnabled = false;
+		clearPendingMovement("firewall-disabled");
+	}
+	
+	private void restoreVanillaOnlyHacks()
+	{
+		if(vanillaOnlyPausedHacks.isEmpty())
+			return;
+		
+		for(Hack hack : new LinkedHashSet<>(vanillaOnlyPausedHacks))
+		{
+			temporarilyDisabledHacks.remove(hack);
+			suppressedReasons.remove(hack);
+			if(!hack.isEnabled())
+				hack.setEnabled(true);
+		}
+		
+		vanillaOnlyPausedHacks.clear();
+		MovementMutationTracker.clear();
+		clearPendingMovement("vanilla-only-disabled");
+	}
+	
+	/** HUD pause status includes activation pauses in either firewall mode. */
+	public boolean isVanillaOnlyPaused(Hack hack)
+	{
+		return hack != null && isFirewallEnabled()
+			&& (activationPauses.contains(hack) || isVanillaOnlyPacketsEnabled()
+				&& vanillaOnlyPausedHacks.contains(hack));
+	}
+	
+	public String getVanillaOnlyPauseStatus(Hack hack)
+	{
+		if(!isVanillaOnlyPaused(hack))
+			return null;
+		
+		return " [paused]";
+	}
+	
+	/** Returns whether this hack was disabled temporarily by the firewall. */
+	public boolean isTemporarilySuppressed(Hack hack)
+	{
+		return hack != null && (activationPauses.contains(hack)
+			|| temporarilyDisabledHacks.contains(hack));
+	}
+	
+	private boolean isCustomPacketSurface(Packet<?> packet)
+	{
+		return packet instanceof ServerboundMovePlayerPacket
+			|| packet instanceof ServerboundMoveVehiclePacket
+			|| packet instanceof ServerboundInteractPacket
+			|| packet instanceof ServerboundPlayerCommandPacket
+			|| isCustomPlayerActionPacket(packet)
+			|| packet instanceof ServerboundUseItemOnPacket
+			|| packet instanceof ServerboundSwingPacket
+			|| packet instanceof ServerboundSetCarriedItemPacket;
+	}
+	
+	private boolean isCustomPlayerActionPacket(Packet<?> packet)
+	{
+		if(!(packet instanceof ServerboundPlayerActionPacket actionPacket))
+			return false;
+		
+		return switch(actionPacket.getAction())
+		{
+			case START_DESTROY_BLOCK, STOP_DESTROY_BLOCK, ABORT_DESTROY_BLOCK -> false;
+			default -> true;
+		};
+	}
+	
+	private boolean isMovementTaintedByPausedHack()
+	{
+		LinkedHashMap<Hack, MovementMutationTracker.MutationEvidence> mutations =
+			MovementMutationTracker.getRecentMutations(SETBACK_LOOKBACK_MS);
+		boolean tainted = false;
+		
+		for(var entry : mutations.entrySet())
+		{
+			Hack hack = entry.getKey();
+			if(hack == null || !hack.isEnabled() || isAllowedHack(hack))
+				continue;
+			
+			suppressHackTemporarily(hack,
+				"vanilla-only packets mode blocked tainted movement");
+			tainted = true;
+		}
+		
+		return tainted;
+	}
+	
+	private GrimPacketSurface classifyGrimSurface(Packet<?> packet)
+	{
+		if(packet instanceof ServerboundMovePlayerPacket)
+			return GrimPacketSurface.PLAYER_FLYING;
+		
+		if(packet instanceof ServerboundMoveVehiclePacket)
+			return GrimPacketSurface.VEHICLE_MOVE;
+		
+		if(packet instanceof ServerboundInteractPacket)
+			return GrimPacketSurface.INTERACT_ENTITY;
+		
+		if(packet instanceof ServerboundPlayerCommandPacket)
+			return GrimPacketSurface.ENTITY_ACTION;
+		
+		if(packet instanceof ServerboundPlayerActionPacket)
+			return GrimPacketSurface.PLAYER_DIGGING;
+		
+		if(packet instanceof ServerboundUseItemOnPacket)
+			return GrimPacketSurface.PLAYER_BLOCK_PLACEMENT;
+		
+		if(packet instanceof ServerboundSwingPacket)
+			return GrimPacketSurface.ANIMATION;
+		
+		if(packet instanceof ServerboundSetCarriedItemPacket)
+			return GrimPacketSurface.HELD_ITEM_CHANGE;
+		
+		return null;
+	}
+	
+	private void recordGrimPacketEvidence(Packet<?> packet,
+		GrimPacketSurface surface)
+	{
+		long now = System.currentTimeMillis();
+		pruneOldEvidence(now);
+		
+		SenderResolution sender = resolveSenderHackFromStack();
+		if(sender == null)
+			return;
+		
+		GrimPacketEvidence evidence = new GrimPacketEvidence(now, surface,
+			packet.getClass().getSimpleName(), sender.stackFrame());
+		recentGrimEvidence.put(sender.hack(), evidence);
+		
+		if(debugLoggingSetting.isChecked())
+			LOGGER.info("[PacketFirewall] observed {} from {} ({})",
+				packet.getClass().getSimpleName(), sender.hack().getName(),
+				surface.debugPath());
+	}
+	
+	private void recordMovementMutationAttribution(
+		ServerboundMovePlayerPacket packet)
+	{
+		long now = System.currentTimeMillis();
+		pruneOldEvidence(now);
+		
+		LinkedHashMap<Hack, MovementMutationTracker.MutationEvidence> mutations =
+			MovementMutationTracker.getRecentMutations(SETBACK_LOOKBACK_MS);
+		for(var entry : mutations.entrySet())
+		{
+			Hack hack = entry.getKey();
+			MovementMutationTracker.MutationEvidence mutation =
+				entry.getValue();
+			if(hack == null || mutation == null || !hack.isEnabled()
+				|| hack == WURST.getHax().panicHack)
+				continue;
+			
+			long timestamp = mutation.timestampMs();
+			if(now - timestamp > SETBACK_LOOKBACK_MS)
+				continue;
+			
+			String source =
+				mutation.source() + ", mutationSender=" + mutation.stackFrame();
+			GrimPacketEvidence evidence = new GrimPacketEvidence(timestamp,
+				GrimPacketSurface.PLAYER_FLYING,
+				packet.getClass().getSimpleName(), source);
+			recentGrimEvidence.put(hack, evidence);
+			
+			if(debugLoggingSetting.isChecked())
+				LOGGER.info(
+					"[PacketFirewall] movement mutation attribution {} -> {} ({})",
+					packet.getClass().getSimpleName(), hack.getName(), source);
+		}
+	}
+	
+	private void suppressBySetback()
+	{
+		long now = System.currentTimeMillis();
+		pruneOldEvidence(now);
+		
+		ArrayList<CandidateSuppression> candidates = new ArrayList<>();
+		for(var entry : recentGrimEvidence.entrySet())
+		{
+			Hack hack = entry.getKey();
+			GrimPacketEvidence evidence = entry.getValue();
+			if(hack == null || evidence == null)
+				continue;
+			
+			if(now - evidence.timestampMs() > SETBACK_LOOKBACK_MS)
+				continue;
+			
+			if(!hack.isEnabled() || hack == WURST.getHax().panicHack)
+				continue;
+			
+			candidates.add(new CandidateSuppression(hack, evidence));
+		}
+		
+		if(candidates.isEmpty())
+		{
+			if(debugLoggingSetting.isChecked())
+				LOGGER.info(
+					"[PacketFirewall] setback seen, but no Grim-attributed packet/movement evidence found in {}ms; no hack auto-disabled.",
+					SETBACK_LOOKBACK_MS);
+			return;
+		}
+		
+		candidates.sort((a, b) -> Long.compare(b.evidence().timestampMs(),
+			a.evidence().timestampMs()));
+		
+		for(CandidateSuppression candidate : candidates)
+		{
+			Hack hack = candidate.hack();
+			GrimPacketEvidence evidence = candidate.evidence();
+			String reason = "grim-core setback after "
+				+ evidence.surface().grimPacketType() + " ("
+				+ evidence.surface().debugPath() + "), packet="
+				+ evidence.packetName() + ", sender=" + evidence.stackFrame();
+			
+			if(!suppressHackTemporarily(hack, reason))
+				continue;
+			
+			suppressingRiskyHacks = !temporarilyDisabledHacks.isEmpty();
+			
+			if(debugLoggingSetting.isChecked())
+				LOGGER.info("[PacketFirewall] auto-disabled {}: {}",
+					hack.getName(), reason);
+			return;
+		}
+	}
+	
+	private void pruneOldEvidence(long now)
+	{
+		recentGrimEvidence.entrySet().removeIf(
+			entry -> now - entry.getValue().timestampMs() > SETBACK_LOOKBACK_MS
+				|| !entry.getKey().isEnabled());
+	}
+	
+	private void suppressVanillaOnlyMovementHacks()
+	{
+		for(Hack hack : WURST.getHax().getAllHax())
+			if(hack.isEnabled() && isPacketAffectingHack(hack))
+			{
+				if(isAllowedHack(hack))
+					continue;
+				vanillaOnlyPausedHacks.add(hack);
+				if(!suppressHackTemporarily(hack,
+					"vanilla-only packets mode paused packet-affecting hack"))
+					vanillaOnlyPausedHacks.remove(hack);
+			}
+	}
+	
+	/**
+	 * Vanilla-only mode pauses movement hacks because they can change the
+	 * client state that produces movement packets, even when they do not send
+	 * packets directly. Other direct packet and interaction hooks are also
+	 * paused below. Built-in client-side helpers remain available.
+	 */
+	private boolean isPacketAffectingHack(Hack hack)
+	{
+		if(hack == null)
+			return false;
+			
+		// These helpers react to client actions but do not spoof or delay
+		// packets. Suppressing them breaks normal client-side conveniences such
+		// as automatic tool selection and custom totem rendering.
+		if(isBuiltInAllowedHack(hack))
+			return false;
+		
+		if(hack.getCategory() == Category.MOVEMENT || isExtendedReachHack(hack))
+			return true;
+			
+		// Flight changes the client movement vector directly, so it must be
+		// paused in vanilla-only mode even though it does not send packets
+		// itself.
+		if(hack == WURST.getHax().flightHack)
+			return true;
+		
+		return hack instanceof PacketOutputListener
+			|| hack instanceof ConnectionPacketOutputListener
+			|| hack instanceof KnockbackListener
+			|| hack instanceof PlayerAttacksEntityListener
+			|| hack instanceof BlockBreakingProgressListener
+			|| hack instanceof RightClickListener;
+	}
+	
+	private boolean isExtendedReachHack(Hack hack)
+	{
+		String name = hack.getName();
+		return name.equals("Reach") || name.equals("InfiniteReach")
+			|| name.equals("Outreach");
+	}
+	
+	private boolean isBuiltInAllowedHack(Hack hack)
+	{
+		String name = hack.getName();
+		if(name.equals("AutoBuild") || name.equals("ElytraPitch")
+			|| name.equals("AutoTool") || name.equals("AutoArmor")
+			|| name.equals("AutoSword") || name.equals("AutoTotem")
+			|| name.equals("AutoSwitch") || name.equals("CustomTotem")
+			|| name.equals("XCarry"))
+			return true;
+			
+		// Render hacks only display client-side information. ESP/HUD/statistics
+		// hacks can listen to packets, but do not change server-facing actions.
+		return hack.getCategory() == Category.RENDER || name.endsWith("ESP")
+			|| name.endsWith("HUD") || name.equals("GameStats")
+			|| name.equals("OppStats");
+	}
+	
+	/**
+	 * Returns whether PacketFirewall normally allows this hack without a user
+	 * override. This is exposed to the selector so its initial ticks reflect
+	 * the firewall's actual policy.
+	 */
+	public boolean isAllowedByDefault(Hack hack)
+	{
+		return hack != null
+			&& (isBuiltInAllowedHack(hack) || !isPacketAffectingHack(hack));
+	}
+	
+	public boolean isAllowedHack(Hack hack)
+	{
+		return hack != null && (additionalAllowedHacks.contains(hack.getName())
+			|| isAllowedByDefault(hack)
+				&& !disabledDefaultHacks.contains(hack.getName()));
+	}
+	
+	/** Toggles an allowed-hack entry and persists the user override. */
+	public void toggleAllowedHack(Hack hack)
+	{
+		if(hack == null)
+			return;
+		
+		String name = hack.getName();
+		if(isAllowedByDefault(hack))
+		{
+			if(!disabledDefaultHacks.add(name))
+				disabledDefaultHacks.remove(name);
+		}else if(!additionalAllowedHacks.add(name))
+			additionalAllowedHacks.remove(name);
+		
+		if(isAllowedHack(hack) && temporarilyDisabledHacks.remove(hack))
+		{
+			suppressedReasons.remove(hack);
+			vanillaOnlyPausedHacks.remove(hack);
+			if(!hack.isEnabled())
+				hack.setEnabled(true);
+		}
+		
+		WurstClient.INSTANCE.saveSettings();
+	}
+	
+	private boolean suppressHackTemporarily(Hack hack, String reason)
+	{
+		if(hack == null || !hack.isEnabled())
+			return false;
+		
+		if(isAllowedHack(hack))
+		{
+			if(debugLoggingSetting.isChecked())
+				LOGGER.info("[PacketFirewall] allowed hack skipped {} ({})",
+					hack.getName(), reason);
+			return false;
+		}
+		
+		temporarilyDisabledHacks.add(hack);
+		suppressedReasons.put(hack, reason);
+		hack.setEnabled(false);
+		ChatUtils.message("[PacketFirewall] Temporarily disabled "
+			+ hack.getName() + " (" + reason + ").");
+		return true;
+	}
+	
+	private final class HackSelectionSetting extends Setting
+	{
+		private HackSelectionSetting()
+		{
+			super("Allowed hacks", WText.literal(
+				"Hacks that PacketFirewall will allow. Built-in allowances are "
+					+ "ticked by default; your changes are saved. Untouchable, FastBreak, "
+					+ "and SpeedNuker stay paused while the firewall is enabled."));
+		}
+		
+		@Override
+		public Component getComponent()
+		{
+			HackSelectionComponent component = new HackSelectionComponent();
+			component.refreshSize();
+			return component;
+		}
+		
+		@Override
+		public void resetToDefault()
+		{
+			additionalAllowedHacks.clear();
+			disabledDefaultHacks.clear();
+			WurstClient.INSTANCE.saveSettings();
+		}
+		
+		@Override
+		public void fromJson(JsonElement json)
+		{
+			additionalAllowedHacks.clear();
+			disabledDefaultHacks.clear();
+			
+			// Accept the original flat array as a migration path.
+			if(json.isJsonArray())
+			{
+				readHackNames(json, additionalAllowedHacks);
+				return;
+			}
+			
+			if(!json.isJsonObject())
+				return;
+			JsonObject object = json.getAsJsonObject();
+			readHackNames(object.get("additional"), additionalAllowedHacks);
+			readHackNames(object.get("disabledDefaults"), disabledDefaultHacks);
+		}
+		
+		@Override
+		public JsonElement toJson()
+		{
+			JsonObject json = new JsonObject();
+			json.add("additional", toJsonArray(additionalAllowedHacks));
+			json.add("disabledDefaults", toJsonArray(disabledDefaultHacks));
+			return json;
+		}
+		
+		@Override
+		public JsonObject exportWikiData()
+		{
+			JsonObject json = new JsonObject();
+			json.addProperty("name", getName());
+			json.addProperty("description", getDescription());
+			json.addProperty("type", "Custom");
+			return json;
+		}
+		
+		@Override
+		public java.util.Set<PossibleKeybind> getPossibleKeybinds(
+			String featureName)
+		{
+			return Collections.emptySet();
+		}
+	}
+	
+	private void readHackNames(JsonElement json, LinkedHashSet<String> names)
+	{
+		if(json == null || !json.isJsonArray())
+			return;
+		for(JsonElement element : json.getAsJsonArray())
+			if(element.isJsonPrimitive()
+				&& element.getAsJsonPrimitive().isString())
+				names.add(element.getAsString());
+	}
+	
+	private JsonArray toJsonArray(LinkedHashSet<String> names)
+	{
+		JsonArray json = new JsonArray();
+		names.forEach(json::add);
+		return json;
+	}
+	
+	private final class HackSelectionComponent extends Component
+	{
+		private static final int ROW_HEIGHT = 11;
+		private static final int BOX_SIZE = 11;
+		
+		private List<Hack> getSortedHacks()
+		{
+			return WURST.getHax().getAllHax().stream()
+				.sorted(Comparator.comparing(h -> h.getName().toLowerCase()))
+				.toList();
+		}
+		
+		private void refreshSize()
+		{
+			setHeight(
+				Math.max(ROW_HEIGHT * getSortedHacks().size(), ROW_HEIGHT));
+		}
+		
+		@Override
+		public void handleMouseClick(double mouseX, double mouseY,
+			int mouseButton, MouseButtonEvent context)
+		{
+			if(mouseButton != InputConstants.MOUSE_BUTTON_LEFT
+				|| !isHovering((int)mouseX, (int)mouseY))
+				return;
+			List<Hack> hacks = getSortedHacks();
+			int index = ((int)mouseY - getY()) / ROW_HEIGHT;
+			if(index < 0 || index >= hacks.size())
+				return;
+			Hack hack = hacks.get(index);
+			toggleAllowedHack(hack);
+		}
+		
+		@Override
+		public void render(GuiGraphicsExtractor context, int mouseX, int mouseY,
+			float partialTicks)
+		{
+			List<Hack> hacks = getSortedHacks();
+			refreshSize();
+			ClickGui gui = WURST.getGui();
+			for(int i = 0; i < hacks.size(); i++)
+			{
+				Hack hack = hacks.get(i);
+				int y = getY() + i * ROW_HEIGHT;
+				boolean selected = isAllowedHack(hack);
+				boolean hover = isHovering(mouseX, mouseY) && mouseY >= y
+					&& mouseY < y + ROW_HEIGHT;
+				float[] bg = gui.getBgColor();
+				context.fill(getX(), y, getX() + getWidth(), y + ROW_HEIGHT,
+					RenderUtils.toIntColor(bg,
+						gui.getOpacity() * (hover ? 1.2F : 1F)));
+				int boxX = getX() + BOX_SIZE;
+				RenderUtils.drawBorder2D(context, getX(), y, boxX,
+					y + ROW_HEIGHT,
+					RenderUtils.toIntColor(gui.getAcColor(), 0.5F));
+				if(selected)
+					ClickGuiIcons.drawCheck(context, getX(), y, boxX,
+						y + ROW_HEIGHT, hover, false);
+				context.text(MC.font, hack.getName(), boxX + 2, y + 2,
+					hack.isEnabled() ? 0xFF55FF55 : gui.getTxtColor(), false);
+			}
+		}
+		
+		@Override
+		public int getDefaultWidth()
+		{
+			return Math.max(130,
+				getSortedHacks().stream()
+					.mapToInt(h -> MC.font.width(h.getName())).max().orElse(0)
+					+ BOX_SIZE + 4);
+		}
+		
+		@Override
+		public int getDefaultHeight()
+		{
+			return 110;
+		}
+	}
+	
+	private void handleMovePlayer(PacketOutputEvent event,
+		ServerboundMovePlayerPacket packet, boolean allowDedup)
+	{
+		MovementSnapshot original = snapshot(packet);
+		MovementSnapshot sanitized = sanitizeSnapshot(original, packet);
+		
+		if(sanitized.dropPacket)
+		{
+			event.cancel();
+			logDrop("invalid position values", packet, original, sanitized);
+			return;
+		}
+		
+		ServerboundMovePlayerPacket newPacket =
+			applySanitized(packet, sanitized);
+		
+		if(sanitized.sanitizedRot)
+			sanitizedRot++;
+		if(sanitized.sanitizedPos)
+			sanitizedPos++;
+		if(sanitized.sanitizedOnGround)
+			sanitizedOnGround++;
+		
+		if(sanitized.hasChanges())
+			logSanitize(packet, original, sanitized);
+		
+		long tick = getClientTick();
+		if(allowDedup && queueForDedup(event, newPacket, sanitized, tick))
+			return;
+		
+		if(newPacket != packet)
+			event.setPacket(newPacket);
+		
+		updateLastGoodFromMovePlayer(newPacket, sanitized);
+	}
+	
+	private void handleMoveVehicle(PacketOutputEvent event,
+		ServerboundMoveVehiclePacket packet, boolean allowDedup)
+	{
+		VehicleSnapshot original = snapshot(packet);
+		VehicleSnapshot sanitized = sanitizeSnapshot(original);
+		
+		if(sanitized.dropPacket)
+		{
+			event.cancel();
+			logDrop("invalid vehicle position values", packet, original,
+				sanitized);
+			return;
+		}
+		
+		ServerboundMoveVehiclePacket newPacket =
+			applySanitized(packet, sanitized);
+		
+		if(sanitized.sanitizedRot)
+			sanitizedRot++;
+		if(sanitized.sanitizedPos)
+			sanitizedPos++;
+		
+		if(sanitized.hasChanges())
+			logSanitize(packet, original, sanitized);
+		
+		long tick = getClientTick();
+		if(allowDedup && queueForDedup(event, newPacket, sanitized, tick))
+			return;
+		
+		if(newPacket != packet)
+			event.setPacket(newPacket);
+		
+		updateLastGoodFromVehicle(sanitized);
+	}
+	
+	private boolean queueForDedup(PacketOutputEvent event, Packet<?> packet,
+		Snapshot snapshot, long tick)
+	{
+		if(!dedupMovementSetting.isChecked())
+			return false;
+		
+		boolean replacedSameTick =
+			pendingMovement != null && pendingMovement.packet.tick == tick;
+		if(pendingMovement != null && pendingMovement.packet.tick != tick)
+			sendPendingMovement("dedup-tick-boundary");
+		
+		MovementPacket pending = new MovementPacket(packet, snapshot, tick);
+		pendingMovement = new PendingMovement(pending);
+		event.cancel();
+		if(replacedSameTick)
+		{
+			dedupedMoves++;
+			logDedup(packet);
+		}
+		return true;
+	}
+	
+	private void sendPendingMovement(String reason)
+	{
+		if(pendingMovement == null || MC.getConnection() == null)
+			return;
+		
+		MovementPacket packet = pendingMovement.packet;
+		pendingMovement = null;
+		
+		try
+		{
+			sendingPending = true;
+			MC.getConnection().send(packet.packet);
+			
+		}finally
+		{
+			sendingPending = false;
+		}
+		
+		if(debugLoggingSetting.isChecked())
+			LOGGER.info("[PacketFirewall] sent deduped {} ({})",
+				packet.packet.getClass().getSimpleName(), reason);
+	}
+	
+	private void clearPendingMovement(String reason)
+	{
+		if(pendingMovement == null)
+			return;
+		
+		Packet<?> packet = pendingMovement.packet.packet;
+		pendingMovement = null;
+		
+		if(debugLoggingSetting.isChecked())
+			LOGGER.info("[PacketFirewall] cleared pending {} ({})",
+				packet.getClass().getSimpleName(), reason);
+	}
+	
+	private MovementSnapshot snapshot(ServerboundMovePlayerPacket packet)
+	{
+		boolean hasPos = packet instanceof Pos || packet instanceof PosRot;
+		boolean hasRot = packet instanceof Rot || packet instanceof PosRot;
+		
+		double x = hasPos ? packet.getX(0) : 0;
+		double y = hasPos ? packet.getY(0) : 0;
+		double z = hasPos ? packet.getZ(0) : 0;
+		float yaw = hasRot ? packet.getYRot(0) : 0;
+		float pitch = hasRot ? packet.getXRot(0) : 0;
+		
+		return new MovementSnapshot(hasPos, hasRot, x, y, z, yaw, pitch,
+			packet.isOnGround(), packet.horizontalCollision());
+	}
+	
+	private MovementSnapshot sanitizeSnapshot(MovementSnapshot original,
+		ServerboundMovePlayerPacket packet)
+	{
+		MovementSnapshot sanitized = original.copy();
+		
+		if(original.hasPos && !isFinitePosition(original))
+		{
+			droppedNaN++;
+			if(dropInvalidSetting.isChecked())
+			{
+				sanitized.dropPacket = true;
+				return sanitized;
+			}
+			
+			Vec3 fallback = getFallbackPos();
+			sanitized.x = fallback.x;
+			sanitized.y = fallback.y;
+			sanitized.z = fallback.z;
+			sanitized.sanitizedPos = true;
+		}
+		
+		if(original.hasRot)
+		{
+			float yaw = original.yaw;
+			float pitch = original.pitch;
+			
+			if(!Float.isFinite(yaw))
+			{
+				yaw = getFallbackYaw();
+				sanitized.sanitizedRot = true;
+			}
+			
+			if(wrapYawSetting.isChecked())
+			{
+				float wrapped = Mth.wrapDegrees(yaw);
+				if(wrapped != yaw)
+					sanitized.sanitizedRot = true;
+				yaw = wrapped;
+			}
+			
+			if(!Float.isFinite(pitch))
+			{
+				pitch = getFallbackPitch();
+				sanitized.sanitizedRot = true;
+			}
+			
+			if(clampPitchSetting.isChecked())
+			{
+				float clamped = Mth.clamp(pitch, -90.0F, 90.0F);
+				if(clamped != pitch)
+					sanitized.sanitizedRot = true;
+				pitch = clamped;
+			}
+			
+			sanitized.yaw = yaw;
+			sanitized.pitch = pitch;
+		}
+		
+		if(packet instanceof StatusOnly && !lastGoodValid)
+		{
+			sanitized.onGround = lastGoodOnGround;
+			sanitized.sanitizedOnGround = true;
+		}
+		
+		return sanitized;
+	}
+	
+	private ServerboundMovePlayerPacket applySanitized(
+		ServerboundMovePlayerPacket packet, MovementSnapshot sanitized)
+	{
+		ServerboundMovePlayerPacket updated = packet;
+		
+		if(sanitized.hasPos && sanitized.sanitizedPos)
+			updated = PacketUtils.modifyPosition(updated, sanitized.x,
+				sanitized.y, sanitized.z);
+		
+		if(sanitized.hasRot && sanitized.sanitizedRot)
+			updated = PacketUtils.modifyRotation(updated, sanitized.yaw,
+				sanitized.pitch);
+		
+		if(sanitized.sanitizedOnGround)
+			updated = PacketUtils.modifyOnGround(updated, sanitized.onGround);
+		
+		return updated;
+	}
+	
+	private VehicleSnapshot snapshot(ServerboundMoveVehiclePacket packet)
+	{
+		Vec3 position = packet.position();
+		return new VehicleSnapshot(position.x, position.y, position.z,
+			packet.yRot(), packet.xRot(), packet.onGround());
+	}
+	
+	private VehicleSnapshot sanitizeSnapshot(VehicleSnapshot original)
+	{
+		VehicleSnapshot sanitized = original.copy();
+		
+		if(!isFinitePosition(original))
+		{
+			droppedNaN++;
+			if(dropInvalidSetting.isChecked())
+			{
+				sanitized.dropPacket = true;
+				return sanitized;
+			}
+			
+			Vec3 fallback = getFallbackPos();
+			sanitized.x = fallback.x;
+			sanitized.y = fallback.y;
+			sanitized.z = fallback.z;
+			sanitized.sanitizedPos = true;
+		}
+		
+		float yaw = original.yaw;
+		float pitch = original.pitch;
+		
+		if(!Float.isFinite(yaw))
+		{
+			yaw = getFallbackYaw();
+			sanitized.sanitizedRot = true;
+		}
+		
+		if(wrapYawSetting.isChecked())
+		{
+			float wrapped = Mth.wrapDegrees(yaw);
+			if(wrapped != yaw)
+				sanitized.sanitizedRot = true;
+			yaw = wrapped;
+		}
+		
+		if(!Float.isFinite(pitch))
+		{
+			pitch = getFallbackPitch();
+			sanitized.sanitizedRot = true;
+		}
+		
+		if(clampPitchSetting.isChecked())
+		{
+			float clamped = Mth.clamp(pitch, -90.0F, 90.0F);
+			if(clamped != pitch)
+				sanitized.sanitizedRot = true;
+			pitch = clamped;
+		}
+		
+		sanitized.yaw = yaw;
+		sanitized.pitch = pitch;
+		
+		return sanitized;
+	}
+	
+	private ServerboundMoveVehiclePacket applySanitized(
+		ServerboundMoveVehiclePacket packet, VehicleSnapshot sanitized)
+	{
+		if(!sanitized.hasChanges())
+			return packet;
+		
+		return new ServerboundMoveVehiclePacket(
+			new Vec3(sanitized.x, sanitized.y, sanitized.z), sanitized.yaw,
+			sanitized.pitch, sanitized.onGround);
+	}
+	
+	private void updateLastGoodFromMovePlayer(
+		ServerboundMovePlayerPacket packet, MovementSnapshot sanitized)
+	{
+		if(sanitized.hasPos && !sanitized.dropPacket)
+			lastGoodPos = new Vec3(sanitized.x, sanitized.y, sanitized.z);
+		
+		if(sanitized.hasRot && !sanitized.dropPacket)
+		{
+			lastGoodYaw = sanitized.yaw;
+			lastGoodPitch = sanitized.pitch;
+		}
+		
+		if(!sanitized.dropPacket)
+		{
+			lastGoodOnGround = sanitized.onGround;
+			lastGoodTickTime = getClientTick();
+			lastGoodValid = true;
+		}
+	}
+	
+	private void updateLastGoodFromVehicle(VehicleSnapshot snapshot)
+	{
+		if(snapshot.dropPacket)
+			return;
+		
+		lastGoodPos = new Vec3(snapshot.x, snapshot.y, snapshot.z);
+		lastGoodYaw = snapshot.yaw;
+		lastGoodPitch = snapshot.pitch;
+		lastGoodOnGround = snapshot.onGround;
+		lastGoodTickTime = getClientTick();
+		lastGoodValid = true;
+	}
+	
+	private Vec3 getFallbackPos()
+	{
+		if(lastGoodValid && lastGoodPos != null)
+			return lastGoodPos;
+		if(MC.player != null)
+			return MC.player.position();
+		return Vec3.ZERO;
+	}
+	
+	private float getFallbackYaw()
+	{
+		if(lastGoodValid)
+			return lastGoodYaw;
+		if(MC.player != null)
+			return MC.player.getYRot();
+		return 0.0F;
+	}
+	
+	private float getFallbackPitch()
+	{
+		if(lastGoodValid)
+			return lastGoodPitch;
+		if(MC.player != null)
+			return MC.player.getXRot();
+		return 0.0F;
+	}
+	
+	private long getClientTick()
+	{
+		if(MC.level != null)
+			return MC.level.getGameTime();
+		if(MC.player != null)
+			return MC.player.tickCount;
+		return System.currentTimeMillis();
+	}
+	
+	private boolean isFinitePosition(MovementSnapshot snapshot)
+	{
+		return Double.isFinite(snapshot.x) && Double.isFinite(snapshot.y)
+			&& Double.isFinite(snapshot.z);
+	}
+	
+	private boolean isFinitePosition(VehicleSnapshot snapshot)
+	{
+		return Double.isFinite(snapshot.x) && Double.isFinite(snapshot.y)
+			&& Double.isFinite(snapshot.z);
+	}
+	
+	private void logDrop(String reason, Packet<?> packet, Snapshot original,
+		Snapshot sanitized)
+	{
+		String packetName = packet.getClass().getSimpleName();
+		if(debugLoggingSetting.isChecked())
+		{
+			LOGGER.warn(
+				"[PacketFirewall] dropped {}: {} | original={} sanitized={} sender={}",
+				packetName, reason, original.describe(), sanitized.describe(),
+				resolveSenderInfo());
+			return;
+		}
+		
+		LOGGER.warn("[PacketFirewall] dropped {}: {}", packetName, reason);
+	}
+	
+	private void logSanitize(Packet<?> packet, Snapshot original,
+		Snapshot sanitized)
+	{
+		String packetName = packet.getClass().getSimpleName();
+		if(debugLoggingSetting.isChecked())
+		{
+			LOGGER.info(
+				"[PacketFirewall] sanitized {} | original={} sanitized={} sender={}",
+				packetName, original.describe(), sanitized.describe(),
+				resolveSenderInfo());
+			return;
+		}
+		
+		LOGGER.info("[PacketFirewall] sanitized {}", packetName);
+	}
+	
+	private void logDedup(Packet<?> packet)
+	{
+		if(!debugLoggingSetting.isChecked())
+			return;
+		
+		LOGGER.info("[PacketFirewall] deduped {}", packet.getClass().getName());
+	}
+	
+	private String resolveSenderInfo()
+	{
+		SenderResolution sender = resolveSenderHackFromStack();
+		if(sender != null)
+			return "hack=" + sender.hack().getName() + " via "
+				+ sender.stackFrame();
+		
+		return "stack=" + shortStackTrace();
+	}
+	
+	public String resolveSenderHackNameForDebug()
+	{
+		SenderResolution sender = resolveSenderHackFromStack();
+		return sender != null && sender.hack() != null ? sender.hack().getName()
+			: null;
+	}
+	
+	private SenderResolution resolveSenderHackFromStack()
+	{
+		rebuildHackClassLookup();
+		
+		StackTraceElement[] trace = Thread.currentThread().getStackTrace();
+		for(StackTraceElement element : trace)
+		{
+			String className = element.getClassName();
+			if(!className.startsWith(HACK_PACKAGE_PREFIX))
+				continue;
+			
+			Hack hack = getHackFromClassName(className);
+			if(hack == null)
+				continue;
+			
+			if(!hack.isEnabled() || hack == WURST.getHax().panicHack)
+				continue;
+			
+			String frame = className + "." + element.getMethodName() + ":"
+				+ element.getLineNumber();
+			return new SenderResolution(hack, frame);
+		}
+		
+		return null;
+	}
+	
+	private void rebuildHackClassLookup()
+	{
+		if(hackClassLookup.size() == WURST.getHax().countHax())
+			return;
+		
+		hackClassLookup.clear();
+		for(Hack hack : WURST.getHax().getAllHax())
+			hackClassLookup.put(hack.getClass().getName(), hack);
+	}
+	
+	private Hack getHackFromClassName(String className)
+	{
+		Hack direct = hackClassLookup.get(className);
+		if(direct != null)
+			return direct;
+		
+		int index = className.indexOf('$');
+		if(index < 0)
+			return null;
+		
+		return hackClassLookup.get(className.substring(0, index));
+	}
+	
+	private String shortStackTrace()
+	{
+		StackTraceElement[] trace = Thread.currentThread().getStackTrace();
+		StringBuilder builder = new StringBuilder();
+		int added = 0;
+		for(StackTraceElement element : trace)
+		{
+			String className = element.getClassName();
+			if(className.contains(PacketFirewallOtf.class.getName()))
+				continue;
+			if(className.startsWith("net.wurstclient.event."))
+				continue;
+			if(className.startsWith("java.lang.Thread"))
+				continue;
+			
+			if(added > 0)
+				builder.append(" <- ");
+			builder.append(element.getClassName()).append(".")
+				.append(element.getMethodName()).append(":")
+				.append(element.getLineNumber());
+			added++;
+			if(added >= 3)
+				break;
+		}
+		return builder.toString();
+	}
+	
+	private enum GrimPacketSurface
+	{
+		PLAYER_FLYING("PacketType.Play.Client.PLAYER_*",
+			"checks/impl/{movement,flight,groundspoof,timer,badpackets,packetorder}"),
+		VEHICLE_MOVE("PacketType.Play.Client.VEHICLE_MOVE",
+			"checks/impl/{vehicle,movement/SetbackBlocker,badpackets/BadPacketsR}"),
+		INTERACT_ENTITY("PacketType.Play.Client.INTERACT_ENTITY",
+			"checks/impl/{combat/Reach,combat/MultiInteractA/B,movement/SetbackBlocker,badpackets/BadPacketsC/T}"),
+		ENTITY_ACTION("PacketType.Play.Client.ENTITY_ACTION",
+			"checks/impl/{elytra,sprint,badpackets,misc/Post}"),
+		PLAYER_DIGGING("PacketType.Play.Client.PLAYER_DIGGING",
+			"checks/impl/{breaking,multiactions,misc/Post,packetorder}"),
+		PLAYER_BLOCK_PLACEMENT(
+			"PacketType.Play.Client.PLAYER_BLOCK_PLACEMENT|USE_ITEM",
+			"checks/impl/{multiactions,packetorder,misc/Post,scaffolding,badpackets/exploit}"),
+		ANIMATION("PacketType.Play.Client.ANIMATION",
+			"checks/impl/{breaking/NoSwingBreak,misc/Post,multiactions,packetorder}"),
+		HELD_ITEM_CHANGE("PacketType.Play.Client.HELD_ITEM_CHANGE",
+			"checks/impl/{badpackets/BadPacketsA,misc/Post,packetorder}");
+		
+		private final String grimPacketType;
+		private final String debugPath;
+		
+		GrimPacketSurface(String grimPacketType, String debugPath)
+		{
+			this.grimPacketType = grimPacketType;
+			this.debugPath = debugPath;
+		}
+		
+		private String grimPacketType()
+		{
+			return grimPacketType;
+		}
+		
+		private String debugPath()
+		{
+			return debugPath;
+		}
+	}
+	
+	private record SenderResolution(Hack hack, String stackFrame)
+	{}
+	
+	private record GrimPacketEvidence(long timestampMs,
+		GrimPacketSurface surface, String packetName, String stackFrame)
+	{}
+	
+	private record CandidateSuppression(Hack hack, GrimPacketEvidence evidence)
+	{}
+	
+	private record MovementPacket(Packet<?> packet, Snapshot snapshot,
+		long tick)
+	{}
+	
+	private record PendingMovement(MovementPacket packet)
+	{}
+	
+	private interface Snapshot
+	{
+		String describe();
+	}
+	
+	private static final class MovementSnapshot implements Snapshot
+	{
+		private final boolean hasPos;
+		private final boolean hasRot;
+		private double x;
+		private double y;
+		private double z;
+		private float yaw;
+		private float pitch;
+		private boolean onGround;
+		private final boolean horizontalCollision;
+		private boolean dropPacket;
+		private boolean sanitizedPos;
+		private boolean sanitizedRot;
+		private boolean sanitizedOnGround;
+		
+		private MovementSnapshot(boolean hasPos, boolean hasRot, double x,
+			double y, double z, float yaw, float pitch, boolean onGround,
+			boolean horizontalCollision)
+		{
+			this.hasPos = hasPos;
+			this.hasRot = hasRot;
+			this.x = x;
+			this.y = y;
+			this.z = z;
+			this.yaw = yaw;
+			this.pitch = pitch;
+			this.onGround = onGround;
+			this.horizontalCollision = horizontalCollision;
+		}
+		
+		private MovementSnapshot copy()
+		{
+			return new MovementSnapshot(hasPos, hasRot, x, y, z, yaw, pitch,
+				onGround, horizontalCollision);
+		}
+		
+		private boolean hasChanges()
+		{
+			return sanitizedPos || sanitizedRot || sanitizedOnGround;
+		}
+		
+		@Override
+		public String describe()
+		{
+			StringBuilder builder = new StringBuilder();
+			builder.append("pos=");
+			if(hasPos)
+				builder.append(x).append(",").append(y).append(",").append(z);
+			else
+				builder.append("n/a");
+			builder.append(" rot=");
+			if(hasRot)
+				builder.append(yaw).append(",").append(pitch);
+			else
+				builder.append("n/a");
+			builder.append(" onGround=").append(onGround);
+			builder.append(" hCollision=").append(horizontalCollision);
+			return builder.toString();
+		}
+	}
+	
+	private static final class VehicleSnapshot implements Snapshot
+	{
+		private double x;
+		private double y;
+		private double z;
+		private float yaw;
+		private float pitch;
+		private boolean onGround;
+		private boolean dropPacket;
+		private boolean sanitizedPos;
+		private boolean sanitizedRot;
+		
+		private VehicleSnapshot(double x, double y, double z, float yaw,
+			float pitch, boolean onGround)
+		{
+			this.x = x;
+			this.y = y;
+			this.z = z;
+			this.yaw = yaw;
+			this.pitch = pitch;
+			this.onGround = onGround;
+		}
+		
+		private VehicleSnapshot copy()
+		{
+			return new VehicleSnapshot(x, y, z, yaw, pitch, onGround);
+		}
+		
+		private boolean hasChanges()
+		{
+			return sanitizedPos || sanitizedRot;
+		}
+		
+		@Override
+		public String describe()
+		{
+			return "pos=" + x + "," + y + "," + z + " rot=" + yaw + "," + pitch
+				+ " onGround=" + onGround;
+		}
+	}
+}

@@ -900,10 +900,35 @@ each built, smoke-tested and shipped. Rules that came out of it:
   CommandSpam, and CevAPI's Creative/Op kit except NBTEditor (AutoCommand's default macro deops everyone and ops you) (Airstrike,
   Boom, ExplosionAura, Voider, HandOfGod, ServerKill, MultiverseAnnihilator, UUIDBan,
   ForceTP, ForceOP book/sign, the advert text/title/display/name spawners).
-- Still open: StaffMonitor/SimulationSonar are in now (AutoClicker's pause checks still
-  return false - TODO), AutoFly (ClutchFall's flying check), Mapa (NewerNewChunks' map
-  mode), HideModMenu (needs ModMenu mixins), ClientChatOverlay (needs CevAPI's
-  ClientMessageOverlay).
+- Also left out: ForceAllowChats (overrides the account's Mojang/Microsoft chat, Realms and
+  multiplayer flags - on a child account those are the family settings), AltSwitch/AltBot
+  (park accounts as protocol bots), CevAPI's NBT preset pack (wide-range TNT/Wither
+  spawners, silverfish infestation, wands, OP kits - NBTEditor's built-in list is empty,
+  your own presets in `wurst/nbt-presets` still load), XPGUI's wallpaper downloads from
+  wallpaperaccess.com (its theme buttons use the bundled `background.png`; a URL you type
+  still loads).
+- Batch F (OTFs, commands, GUIs): AltGUI and XPGUI are extra screens next to Beast's
+  ClickGUI (CevAPI's "Favorites" = Beast's Important), ClientChatOverlay
+  (`hud/ClientMessageOverlay`, `ClientChatOverlayMixin` on `addClientSystemMessage`;
+  `ChatUtils.component` marks Beast's own lines), PerformanceOverlay (Update/Render/
+  GUIRender events time each hack only while it's on), CommandPrefix
+  (`CmdProcessor.getPrefix()`), PacketFirewall (in both send hooks; with vanilla-only off it
+  changes nothing; can pause hacks on an anticheat detection - `Hack.setEnabled`,
+  `EnabledHacksFile`, AntiCheatDetect), PacketTools (events only), Anti-Fingerprint
+  (`net.cevapi.*`, `AntiFingerprintPackMixin` after vanilla's thread check), ConnectionLog
+  overlay (log4j appender, drawn on the connect/disconnected screens), DiscordRPC (off by
+  default; still CevAPI's Discord application ID, so Discord shows their app name),
+  Presets (`presets/PresetManager`: one folder per preset holding Beast's own settings /
+  enabled-hacks / keybinds / TooManyHax profiles), `.panic restore` (what the last panic
+  turned off, this session), `.search <block>` (Beast's Search has no query mode),
+  `.autobuild "text" <height>` (a generated template that isn't a file), `.aboveground`.
+  Also wired: NbtFilter's packet hooks (`PacketDecoderMixin`, `ConnectionMixin.onSend` -
+  they were missing since it was ported), CustomTotem's `customtotem/` assets, AutoClicker's
+  StaffMonitor/SimulationSonar pauses.
+- Still open: HideModMenu (needs ModMenu mixins against modmenu 18.0.0-alpha.8 plus a
+  mixin plugin to skip them without ModMenu), the ClientChatOverlay extras that need more
+  ChatScreen/tab-list hooks (command colouring, tab-list colours), AutoFly's path
+  anti-hunger (an onGround rewrite at the connection level - not wired).
 
 ### MaceAssistHack (COMBAT)
 

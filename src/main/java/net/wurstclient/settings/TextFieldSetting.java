@@ -116,6 +116,18 @@ public final class TextFieldSetting extends Setting
 		return masked;
 	}
 	
+	/** The value as the GUI shows it: stars for a masked setting. */
+	public String getDisplayValue()
+	{
+		return masked ? "*".repeat(value.length()) : value;
+	}
+	
+	/** For text boxes editing this setting (no limit of its own). */
+	public int getMaxLength()
+	{
+		return 32767;
+	}
+	
 	/**
 	 * Sets this setting's value. Fails silently if the given value is invalid.
 	 */

@@ -11,6 +11,7 @@ import java.util.ArrayList;
 
 import net.wurstclient.event.Event;
 import net.wurstclient.event.Listener;
+import net.wurstclient.util.HackPerformanceTracker;
 
 public interface UpdateListener extends Listener
 {
@@ -23,8 +24,29 @@ public interface UpdateListener extends Listener
 		@Override
 		public void fire(ArrayList<UpdateListener> listeners)
 		{
+			// PerformanceOverlay (ported from the CevAPI fork): time each hack
+			// only while the overlay is on
+			if(!HackPerformanceTracker.shouldProfile())
+			{
+				for(UpdateListener listener : listeners)
+					listener.onUpdate();
+				return;
+			}
+			
 			for(UpdateListener listener : listeners)
-				listener.onUpdate();
+			{
+				long start = System.nanoTime();
+				try
+				{
+					listener.onUpdate();
+					
+				}finally
+				{
+					HackPerformanceTracker.record(listener,
+						HackPerformanceTracker.Phase.UPDATE,
+						System.nanoTime() - start);
+				}
+			}
 		}
 		
 		@Override

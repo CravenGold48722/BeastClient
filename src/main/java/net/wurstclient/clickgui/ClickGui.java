@@ -703,6 +703,11 @@ public final class ClickGui
 		popups.removeIf(Popup::isClosing);
 	}
 	
+	public boolean hasPopup(Popup popup)
+	{
+		return popups.contains(popup);
+	}
+	
 	public boolean handlePopupMouseClick(double mouseX, double mouseY,
 		int mouseButton)
 	{

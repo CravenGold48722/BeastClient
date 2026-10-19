@@ -9,8 +9,10 @@ package net.wurstclient.hacks;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -89,6 +91,8 @@ public final class AutoBuildHack extends Hack
 	
 	private Status status = Status.NO_TEMPLATE;
 	private AutoBuildTemplate template;
+	/** The file selected when a generated template replaced it. */
+	private Path generatedOver;
 	private LinkedHashMap<BlockPos, Item> remainingBlocks =
 		new LinkedHashMap<>();
 	
@@ -197,7 +201,9 @@ public final class AutoBuildHack extends Hack
 			break;
 			
 			case IDLE:
-			if(!template.isSelected(templateSetting))
+			if(generatedOver != null
+				? !generatedOver.equals(templateSetting.getSelectedFile())
+				: !template.isSelected(templateSetting))
 				loadSelectedTemplate();
 			break;
 			
@@ -292,8 +298,55 @@ public final class AutoBuildHack extends Hack
 		InventoryUtils.setCreativeStack(slot, stack);
 	}
 	
+	public List<String> getAvailableTemplateNames()
+	{
+		ArrayList<String> names = new ArrayList<>();
+		for(Path file : templateSetting.listFiles())
+			names.add(stem(file));
+		
+		return names;
+	}
+	
+	/** For .autobuild: selects a template file by its name (no extension). */
+	public boolean selectTemplateByName(String templateName)
+	{
+		if(templateName == null || templateName.isBlank())
+			return false;
+		
+		String wanted = templateName.trim().toLowerCase(Locale.ROOT);
+		for(Path file : templateSetting.listFiles())
+		{
+			if(!stem(file).toLowerCase(Locale.ROOT).equals(wanted))
+				continue;
+			
+			templateSetting.setSelectedFile("" + file.getFileName());
+			remainingBlocks.clear();
+			loadSelectedTemplate();
+			return status == Status.IDLE;
+		}
+		
+		return false;
+	}
+	
+	/** For .autobuild "text": builds a template that isn't a file. */
+	public void selectGeneratedTemplate(AutoBuildTemplate generatedTemplate)
+	{
+		template = generatedTemplate;
+		generatedOver = templateSetting.getSelectedFile();
+		remainingBlocks.clear();
+		status = Status.IDLE;
+	}
+	
+	private static String stem(Path file)
+	{
+		String fileName = "" + file.getFileName();
+		int dot = fileName.lastIndexOf('.');
+		return dot >= 0 ? fileName.substring(0, dot) : fileName;
+	}
+	
 	private void loadSelectedTemplate()
 	{
+		generatedOver = null;
 		status = Status.LOADING;
 		Path path = templateSetting.getSelectedFile();
 		

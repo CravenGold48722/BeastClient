@@ -655,5 +655,16 @@
   "description.wurst.hack.autofly": "Follows manual coordinates or SeedMapper waypoints, managing flight height, speed, crosshair status, and vehicle support so you can focus on travel.",
   "description.wurst.hack.lootrunner": "Uses Baritone to visit SeedMapper export coordinates, find nearby chests, loot selected items, and log results.",
   "description.wurst.hack.mapa": "Provides an integrated minimap and world map with optional ESP markers.",
-  "description.wurst.hack.nbteditor": "Sends a configurable NBT command for the selected target."
+  "description.wurst.hack.nbteditor": "Sends a configurable NBT command for the selected target.",
+  "description.wurst.hack.clientchatoverlay": "Splits client/mod/system messages into a separate overlay above chat. Supports drag-to-move, scroll-on-hover, fade-out timing, transparency, optional routing to the game console, and Wurst-only filtering.",
+  "description.wurst.setting.clientchatoverlay.chat_font_scale": "Extra multiplier for in-game chat text size. Affects vanilla chat and Client Chat Overlay.",
+  "description.wurst.hack.altgui": "Alternative list-based GUI for browsing hacks and client settings.",
+  "description.wurst.hack.xpgui": "Windows XP style taskbar/start-menu GUI for browsing hacks, search, and settings windows.",
+  "description.wurst.other_feature.connection_log_overlay": "Shows a lightweight console log in the top-left corner while you're connecting to a server.",
+  "description.wurst.other_feature.performance_overlay": "Shows a debug overlay with per-hack update/render timings so you can find lag spikes.",
+  "description.wurst.other_feature.command_prefix": "Changes the prefix used to trigger Wurst commands (e.g. '.' -> ';').",
+  "options.command_prefix.description": "Selects which prefix triggers Wurst commands.",
+  "description.wurst.other_feature.above_ground_filter": "Global toggle + Y level for ESP/search hacks that support the above-ground filter.",
+  "description.wurst.other_feature.packet_firewall": "Validates outbound movement packets (NaN/Infinity checks, pitch clamp, optional yaw wrapping) to keep packets protocol-safe. Can optionally drop invalid packets and deduplicate movement within a tick. Disabled by default.",
+  "description.wurst.other_feature.packet_tools": "Packet logger / filter toolbox. Lets you select packet types for logging, denying, and delaying independently for C2S and S2C."
 }

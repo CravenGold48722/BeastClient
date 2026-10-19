@@ -17,6 +17,7 @@ import net.minecraft.client.multiplayer.ClientCommonPacketListenerImpl;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.common.ClientCommonPacketListener;
+import net.wurstclient.WurstClient;
 import net.wurstclient.event.EventManager;
 import net.wurstclient.events.PacketOutputListener.PacketOutputEvent;
 
@@ -33,7 +34,11 @@ public abstract class ClientCommonPacketListenerImplMixin
 		PacketOutputEvent event = new PacketOutputEvent(packet);
 		EventManager.fire(event);
 		
-		if(!event.isCancelled())
-			original.call(connection, event.getPacket());
+		// PacketFirewall (ported from the CevAPI fork); with its vanilla-only
+		// mode off this is just "cancelled ? nothing : the event's packet"
+		Packet<?> toSend = WurstClient.INSTANCE.getOtfs().packetFirewallOtf
+			.enforceVanillaOnly(packet, event.getPacket(), event.isCancelled());
+		if(toSend != null)
+			original.call(connection, toSend);
 	}
 }

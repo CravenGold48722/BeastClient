@@ -1,0 +1,2423 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.hud;
+
+import net.wurstclient.util.SdlUtils;
+
+import com.mojang.blaze3d.platform.InputConstants;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.awt.Color;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import org.jetbrains.annotations.Nullable;
+
+import com.google.gson.JsonParser;
+import com.mojang.blaze3d.platform.Window;
+import net.minecraft.client.multiplayer.chat.GuiMessage;
+import net.minecraft.client.gui.components.ChatComponent;
+import net.minecraft.client.gui.components.ComponentRenderUtils;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.screens.ChatScreen;
+import net.minecraft.client.gui.screens.ConfirmLinkScreen;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.FormattedText;
+import net.minecraft.network.chat.FontDescription;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.MessageSignature;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextColor;
+import net.minecraft.network.chat.contents.PlainTextContents.LiteralContents;
+import net.minecraft.network.chat.contents.TranslatableContents;
+import net.minecraft.network.chat.contents.ObjectContents;
+import net.minecraft.network.chat.contents.objects.PlayerSprite;
+import net.minecraft.network.chat.contents.objects.ObjectInfo;
+import net.minecraft.world.item.component.ResolvableProfile;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.util.Mth;
+import net.minecraft.resources.Identifier;
+import net.wurstclient.WurstClient;
+import net.wurstclient.hacks.ClientChatOverlayHack;
+
+public final class ClientMessageOverlay
+{
+	private static final int MAX_STORED_MESSAGES = 128;
+	private static final int CHAT_BOTTOM_MARGIN = 40;
+	private static final int OVERLAY_GAP = 6;
+	private static final int LINE_SPACING = 1;
+	private static final int HORIZONTAL_PADDING = 2;
+	private static final int BACKGROUND_COLOR = 0x64000000;
+	private static final long DEFAULT_FADE_OUT_MS = 10000L;
+	private static final int VANILLA_CHAT_VISIBLE_TICKS = 200;
+	private static final Pattern PLAYER_CHAT_PATTERN =
+		Pattern.compile("^<[^>]{1,32}>\\s+.+$");
+	private static final String CHAT_PREFIX_PATTERN =
+		"(?:(?:\\[[^\\]]{1,32}\\]|‹[^›]{1,32}›)\\s*)*";
+	private static final Pattern DECORATED_PLAYER_CHAT_PATTERN =
+		Pattern.compile("^" + CHAT_PREFIX_PATTERN + "<[^>]{1,32}>\\s+.+$");
+	private static final String PLAYER_NAME_TOKEN = "[+A-Za-z0-9_\\-*.]{1,32}";
+	private static final Pattern PLAYER_NAME_TOKEN_PATTERN =
+		Pattern.compile(PLAYER_NAME_TOKEN);
+	private static final Pattern COLON_PLAYER_CHAT_PATTERN = Pattern
+		.compile("^" + CHAT_PREFIX_PATTERN + PLAYER_NAME_TOKEN + ":\\s+.+$");
+	private static final Pattern ARROW_PLAYER_CHAT_PATTERN = Pattern.compile(
+		"^" + CHAT_PREFIX_PATTERN + PLAYER_NAME_TOKEN + "\\s*[»>]\\s+.+$");
+	private static final Pattern BRACKETED_PLAYER_CHAT_PATTERN =
+		Pattern.compile("^\\[[^\\]]{1,32}\\]\\s+\\[[^\\]]{1,32}\\]\\s+.+$");
+	private static final Pattern USERNAME_PATTERN =
+		Pattern.compile("[A-Za-z0-9_]{1,16}");
+	private static final Pattern EMOJI_SHORTCODE_PATTERN =
+		Pattern.compile(":([a-z0-9_+\\-]+):");
+	private static final Identifier EMOJI_FONT =
+		Identifier.fromNamespaceAndPath("wurst", "emoji");
+	private static final FontDescription EMOJI_FONT_DESCRIPTION =
+		new FontDescription.Resource(EMOJI_FONT);
+	private static final Map<String, String> EMOJI_SHORTCODES =
+		loadEmojiShortcodes();
+	private static final Pattern DISCORD_PREFIX_PATTERN =
+		Pattern.compile("^\\[Discord\\]\\s+.+$", Pattern.CASE_INSENSITIVE);
+	private static final ClientMessageOverlay INSTANCE =
+		new ClientMessageOverlay();
+	
+	private final Deque<Entry> messages = new ArrayDeque<>(MAX_STORED_MESSAGES);
+	private final Deque<Entry> wurstMessages =
+		new ArrayDeque<>(MAX_STORED_MESSAGES);
+	private boolean dragging;
+	private double dragStartMouseX;
+	private double dragStartMouseY;
+	private int dragStartOffsetX;
+	private int dragStartOffsetY;
+	private int dragOffsetX;
+	private int dragOffsetY;
+	private boolean hoveredMainPanel;
+	private boolean hoveredWurstPanel;
+	private int scrollOffset;
+	private int wurstScrollOffset;
+	private int visibleLineCount;
+	private int totalLineCount;
+	private int wurstVisibleLineCount;
+	private int wurstTotalLineCount;
+	private int lastMainX1;
+	private int lastMainY1;
+	private int lastMainX2;
+	private int lastMainY2;
+	private int lastWurstX1;
+	private int lastWurstY1;
+	private int lastWurstX2;
+	private int lastWurstY2;
+	private int lastGuiWidth;
+	private int lastGuiHeight;
+	private boolean tabHeldForOverlay;
+	private List<LineClickTarget> lastMainClickTargets = List.of();
+	private List<LineClickTarget> lastWurstClickTargets = List.of();
+	private boolean lastLeftMouseDown;
+	private final Set<Component> wurstClientMessages =
+		Collections.newSetFromMap(new IdentityHashMap<>());
+	
+	private ClientMessageOverlay()
+	{}
+	
+	public static ClientMessageOverlay getInstance()
+	{
+		return INSTANCE;
+	}
+	
+	public void markWurstClientMessage(Component message)
+	{
+		if(message == null)
+			return;
+		
+		synchronized(wurstClientMessages)
+		{
+			wurstClientMessages.add(message);
+		}
+	}
+	
+	public boolean consumeWurstClientMessage(Component message)
+	{
+		if(message == null)
+			return false;
+		
+		synchronized(wurstClientMessages)
+		{
+			return wurstClientMessages.remove(message);
+		}
+	}
+	
+	public boolean captureWurstClientMessage(Component message)
+	{
+		if(!isEnabled() || message == null)
+			return false;
+		
+		addMessage(message, true);
+		logToConsoleIfEnabled(message);
+		return true;
+	}
+	
+	public boolean captureSingleArgMessage(Component message)
+	{
+		if(!isEnabled() || message == null)
+			return false;
+		
+		String plain = stripLegacyFormatting(message.getString()).trim();
+		if(isFriendPingTransportMessage(plain))
+			return true;
+		
+		if(isForcedToNormalChat(plain))
+			return false;
+		
+		if(isWurstMessage(plain))
+		{
+			addMessage(message, true);
+			logToConsoleIfEnabled(message);
+			return true;
+		}
+		
+		if(isForcedToClientChat(plain))
+		{
+			addMessage(message, false);
+			logToConsoleIfEnabled(message);
+			return true;
+		}
+		
+		if(shouldKeepInVanillaChat(plain, null))
+			return false;
+		
+		if(!shouldCaptureByFilter(message))
+			return false;
+		
+		addMessage(message, false);
+		logToConsoleIfEnabled(message);
+		return true;
+	}
+	
+	public boolean captureIfNonPlayerMessage(Component message,
+		@Nullable MessageSignature signature)
+	{
+		if(!isEnabled() || message == null)
+			return false;
+		
+		String plain = stripLegacyFormatting(message.getString()).trim();
+		if(isFriendPingTransportMessage(plain))
+			return true;
+		
+		if(isForcedToNormalChat(plain))
+			return false;
+		
+		if(isWurstMessage(plain))
+		{
+			addMessage(message, true);
+			logToConsoleIfEnabled(message);
+			return true;
+		}
+		
+		if(isForcedToClientChat(plain))
+		{
+			addMessage(message, false);
+			logToConsoleIfEnabled(message);
+			return true;
+		}
+		
+		if(shouldKeepInVanillaChat(plain, signature))
+			return false;
+		
+		if(!shouldCaptureByFilter(message))
+			return false;
+		
+		addMessage(message, false);
+		logToConsoleIfEnabled(message);
+		return true;
+	}
+	
+	public void onMouseScroll(double vertical)
+	{
+		if(!isEnabled())
+			return;
+		
+		boolean overMain =
+			isMouseOverPanelNow(lastMainX1, lastMainY1, lastMainX2, lastMainY2)
+				&& totalLineCount > visibleLineCount;
+		boolean overWurst =
+			isMouseOverPanelNow(lastWurstX1, lastWurstY1, lastWurstX2,
+				lastWurstY2) && wurstTotalLineCount > wurstVisibleLineCount;
+		if(!overMain && !overWurst)
+			return;
+		
+		if(vertical > 0)
+		{
+			if(overWurst)
+				wurstScrollOffset += 2;
+			else
+				scrollOffset += 2;
+		}else if(vertical < 0)
+		{
+			if(overWurst)
+				wurstScrollOffset -= 2;
+			else
+				scrollOffset -= 2;
+		}
+		
+		if(overWurst)
+		{
+			int maxScroll =
+				Math.max(0, wurstTotalLineCount - wurstVisibleLineCount);
+			wurstScrollOffset = Mth.clamp(wurstScrollOffset, 0, maxScroll);
+		}else
+		{
+			int maxScroll = Math.max(0, totalLineCount - visibleLineCount);
+			scrollOffset = Mth.clamp(scrollOffset, 0, maxScroll);
+		}
+	}
+	
+	public boolean isControllingScrollEvents()
+	{
+		return isEnabled() && ((isMouseOverPanelNow(lastMainX1, lastMainY1,
+			lastMainX2, lastMainY2) && totalLineCount > visibleLineCount)
+			|| (isMouseOverPanelNow(lastWurstX1, lastWurstY1, lastWurstX2,
+				lastWurstY2) && wurstTotalLineCount > wurstVisibleLineCount));
+	}
+	
+	public void notifyVanillaChatMessage(Component message)
+	{
+		// No-op. Kept for ChatHudMixin compatibility.
+	}
+	
+	public void render(GuiGraphicsExtractor context)
+	{
+		// Hover state is only valid for the panel rendered during this frame.
+		// Clear it first so an expired/hidden overlay cannot keep consuming the
+		// mouse wheel and prevent vanilla hotbar selection.
+		clearHoverState();
+		
+		if(!WurstClient.INSTANCE.isEnabled())
+			return;
+		
+		ClientChatOverlayHack hack = getSettings();
+		if(hack == null || !hack.isEnabled())
+			return;
+		
+		handleHoldTabOpensChat(hack);
+		
+		boolean splitWurstPanel = hack.isExtraPanelForWurstMessages();
+		boolean hasVanillaMessages =
+			tabHeldForOverlay && hasVanillaChatMessages();
+		if(messages.isEmpty() && (!splitWurstPanel || wurstMessages.isEmpty())
+			&& !hasVanillaMessages)
+			return;
+		
+		float chatScale = WurstClient.MC.options.chatScale().get().floatValue();
+		if(chatScale <= 0)
+			return;
+		
+		boolean chatOpen =
+			WurstClient.MC.screen instanceof ChatScreen || tabHeldForOverlay;
+		int maxLines = hack.getMaxLines();
+		int maxWidth = Mth.floor(
+			ChatComponent.getWidth(WurstClient.MC.options.chatWidth().get())
+				/ chatScale);
+		if(maxWidth <= 0)
+			return;
+		
+		List<RenderLine> allLines;
+		if(tabHeldForOverlay)
+			allLines = buildCombinedLines(messages, maxWidth);
+		else
+			allLines =
+				buildAllLines(messages, maxWidth, chatOpen || hoveredMainPanel);
+		totalLineCount = allLines.size();
+		int maxScroll = Math.max(0, totalLineCount - maxLines);
+		scrollOffset = Mth.clamp(scrollOffset, 0, maxScroll);
+		List<RenderLine> lines =
+			getVisibleLines(allLines, maxLines, scrollOffset);
+		visibleLineCount = lines.size();
+		
+		List<RenderLine> wurstLines = List.of();
+		if(splitWurstPanel)
+		{
+			List<RenderLine> allWurstLines = buildAllLines(wurstMessages,
+				maxWidth, chatOpen || hoveredWurstPanel);
+			wurstTotalLineCount = allWurstLines.size();
+			int maxWurstScroll = Math.max(0, wurstTotalLineCount - maxLines);
+			wurstScrollOffset = Mth.clamp(wurstScrollOffset, 0, maxWurstScroll);
+			wurstLines =
+				getVisibleLines(allWurstLines, maxLines, wurstScrollOffset);
+			wurstVisibleLineCount = wurstLines.size();
+		}else
+		{
+			wurstTotalLineCount = 0;
+			wurstVisibleLineCount = 0;
+			wurstScrollOffset = 0;
+		}
+		
+		if(lines.isEmpty() && wurstLines.isEmpty())
+			return;
+		
+		int chatHeight = ChatComponent.getHeight(
+			chatOpen ? WurstClient.MC.options.chatHeightFocused().get()
+				: WurstClient.MC.options.chatHeightUnfocused().get());
+		int baseY = context.guiHeight() - CHAT_BOTTOM_MARGIN;
+		int visibleVanillaLines =
+			getVisibleVanillaLineCount(chatHeight, chatOpen);
+		
+		float mainBoxWidth = getBoxWidth(lines);
+		float mainBoxHeight = getBoxHeight(lines);
+		float wurstBoxWidth = getBoxWidth(wurstLines);
+		float wurstBoxHeight = getBoxHeight(wurstLines);
+		
+		int drawX = 4 + getCurrentOffsetX();
+		int drawY = baseY + getCurrentOffsetY();
+		
+		if(visibleVanillaLines > 0)
+		{
+			int nudgeUp = visibleVanillaLines
+				* (WurstClient.MC.font.lineHeight + LINE_SPACING) + OVERLAY_GAP;
+			drawY -= Math.round(nudgeUp * chatScale);
+		}
+		
+		int mainDrawY = drawY;
+		int wurstDrawY = drawY;
+		if(!lines.isEmpty() && !wurstLines.isEmpty())
+			wurstDrawY =
+				drawY - Math.round(mainBoxHeight * chatScale) - OVERLAY_GAP;
+		else if(lines.isEmpty())
+			mainDrawY = Integer.MIN_VALUE;
+		
+		handleDrag(context, drawX, mainDrawY, mainBoxWidth * chatScale,
+			mainBoxHeight * chatScale, wurstDrawY, wurstBoxWidth * chatScale,
+			wurstBoxHeight * chatScale, !wurstLines.isEmpty(), chatScale);
+		
+		updateHoverBounds(context, drawX, mainDrawY, mainBoxWidth * chatScale,
+			mainBoxHeight * chatScale, wurstDrawY, wurstBoxWidth * chatScale,
+			wurstBoxHeight * chatScale, !wurstLines.isEmpty());
+		
+		if(!lines.isEmpty())
+			drawPanel(context, lines, drawX, mainDrawY, chatScale);
+		
+		if(!wurstLines.isEmpty())
+			drawPanel(context, wurstLines, drawX, wurstDrawY, chatScale);
+		
+		updateClickTargets(lines, drawX, mainDrawY, chatScale, false);
+		updateClickTargets(wurstLines, drawX, wurstDrawY, chatScale, true);
+		handleLinkClicks(context, chatScale);
+	}
+	
+	private void handleDrag(GuiGraphicsExtractor context, int drawX, int drawY,
+		float width, float height, int wurstDrawY, float wurstWidth,
+		float wurstHeight, boolean hasWurstPanel, float chatScale)
+	{
+		boolean overMain = isMouseOverPanel(context, lastMainX1, lastMainY1,
+			lastMainX2, lastMainY2);
+		boolean overWurst = hasWurstPanel && isMouseOverPanel(context,
+			lastWurstX1, lastWurstY1, lastWurstX2, lastWurstY2);
+		
+		if(WurstClient.MC.screen == null)
+		{
+			if(dragging)
+				commitDraggedOffset();
+			dragging = false;
+			return;
+		}
+		
+		Window window = WurstClient.MC.getWindow();
+		if(window == null)
+		{
+			if(dragging)
+				commitDraggedOffset();
+			dragging = false;
+			return;
+		}
+		
+		double mouseX = getScaledMouseX(context);
+		double mouseY = getScaledMouseY(context);
+		boolean leftDown = SdlUtils.getMouseButtonState(
+			InputConstants.MOUSE_BUTTON_LEFT) == InputConstants.PRESS;
+		
+		float x1 = drawX;
+		float y1 = drawY - height;
+		float x2 = drawX + width;
+		float y2 = drawY;
+		if(hasWurstPanel)
+		{
+			float wx1 = drawX;
+			float wy1 = wurstDrawY - wurstHeight;
+			float wx2 = drawX + wurstWidth;
+			float wy2 = wurstDrawY;
+			x1 = Math.min(x1, wx1);
+			y1 = Math.min(y1, wy1);
+			x2 = Math.max(x2, wx2);
+			y2 = Math.max(y2, wy2);
+		}
+		
+		boolean overHud = (overMain || overWurst)
+			|| mouseX >= x1 && mouseX <= x2 && mouseY >= y1 && mouseY <= y2;
+		
+		if(leftDown && overHud && !hasClickableAt(context, chatScale))
+		{
+			if(!dragging)
+			{
+				dragging = true;
+				dragStartMouseX = mouseX;
+				dragStartMouseY = mouseY;
+				dragStartOffsetX = getSettings().getHudOffsetX();
+				dragStartOffsetY = getSettings().getHudOffsetY();
+				dragOffsetX = dragStartOffsetX;
+				dragOffsetY = dragStartOffsetY;
+			}
+			
+			dragOffsetX = Mth.clamp(
+				dragStartOffsetX + (int)Math.round(mouseX - dragStartMouseX),
+				-320, 320);
+			dragOffsetY = Mth.clamp(
+				dragStartOffsetY + (int)Math.round(mouseY - dragStartMouseY),
+				-240, 240);
+			return;
+		}
+		
+		if(!leftDown)
+		{
+			if(dragging)
+				commitDraggedOffset();
+			dragging = false;
+		}
+	}
+	
+	private int getCurrentOffsetX()
+	{
+		ClientChatOverlayHack hack = getSettings();
+		return dragging ? dragOffsetX
+			: (hack == null ? 0 : hack.getHudOffsetX());
+	}
+	
+	private int getCurrentOffsetY()
+	{
+		ClientChatOverlayHack hack = getSettings();
+		return dragging ? dragOffsetY
+			: (hack == null ? 0 : hack.getHudOffsetY());
+	}
+	
+	private void commitDraggedOffset()
+	{
+		ClientChatOverlayHack hack = getSettings();
+		if(hack != null)
+			hack.setHudOffsets(dragOffsetX, dragOffsetY);
+	}
+	
+	private ClientChatOverlayHack getSettings()
+	{
+		if(WurstClient.INSTANCE == null
+			|| WurstClient.INSTANCE.getHax() == null)
+			return null;
+		
+		return WurstClient.INSTANCE.getHax().clientChatOverlayHack;
+	}
+	
+	private boolean isEnabled()
+	{
+		ClientChatOverlayHack hack = getSettings();
+		return hack != null && hack.isEnabled();
+	}
+	
+	private void addMessage(Component message, boolean wurstOnlyPanel)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		boolean splitWurstPanel =
+			hack != null && hack.isExtraPanelForWurstMessages();
+		Deque<Entry> target =
+			splitWurstPanel && wurstOnlyPanel ? wurstMessages : messages;
+		synchronized(target)
+		{
+			if(target.size() >= MAX_STORED_MESSAGES)
+				target.removeFirst();
+			
+			Component stored = prepareStoredMessage(message, wurstOnlyPanel);
+			target.addLast(new Entry(stored, System.currentTimeMillis()));
+		}
+		
+		if(splitWurstPanel && wurstOnlyPanel)
+			wurstScrollOffset = 0;
+		else
+			scrollOffset = 0;
+	}
+	
+	private Component prepareStoredMessage(Component message,
+		boolean wurstOnlyPanel)
+	{
+		Component prepared;
+		if(wurstOnlyPanel)
+			prepared = applyDefaultTextColorIfEnabled(message);
+		else
+		{
+			Component directPlayerChat =
+				buildUsernameColoredPlayerChat(message);
+			if(directPlayerChat != null)
+				return convertEmojiShortcodesIfEnabled(directPlayerChat);
+			Component normalized = normalizePlayerChatForDisplay(message);
+			prepared = normalized != null ? normalized
+				: shouldColorStoredUsername(message, false)
+					? prepareMessageForDisplay(message)
+					: applyDefaultTextColorIfEnabled(message);
+		}
+		
+		return convertEmojiShortcodesIfEnabled(prepared);
+	}
+	
+	private Component buildUsernameColoredPlayerChat(Component message)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		if(hack == null || !hack.isEnabled() || !hack.shouldColorUsernames()
+			|| message == null)
+			return null;
+		// Rebuilding from getString() turns an existing head sprite into its
+		// literal "[Name head]" fallback text. Messages that already contain a
+		// sprite must keep their component tree intact, so fall through to
+		// normalizePlayerChatForDisplay()/addChatHeadIfEnabled() which guard
+		// against adding a second head.
+		if(containsPlayerSprite(message))
+			return null;
+		String plain = stripLegacyFormatting(message.getString()).trim();
+		SenderSpan sender = extractSenderSpan(plain);
+		if(sender == null || !isPlayerChatSender(sender))
+			return null;
+		int defaultRgb = hack.getDefaultTextColorI();
+		int usernameRgb = getUsernameColor(sender.name(), hack);
+		MutableComponent result = Component.empty();
+		int clanRgb = getServerTeamColor(sender.name());
+		if(clanRgb < 0)
+		{
+			Integer explicitColor = findExplicitComponentColor(message);
+			clanRgb = explicitColor == null ? defaultRgb : explicitColor;
+		}
+		final int clanColor = clanRgb;
+		int clanStart = plain.indexOf('[');
+		int clanEnd = clanStart < 0 ? -1 : plain.indexOf(']', clanStart);
+		if(clanStart < 0 || clanEnd < clanStart || clanEnd >= sender.start())
+		{
+			clanStart = -1;
+			clanEnd = -1;
+		}
+		if(clanStart >= 0)
+		{
+			result.append(Component.literal(plain.substring(0, clanStart))
+				.withStyle(style -> style.withColor(defaultRgb)));
+			result.append(
+				Component.literal(plain.substring(clanStart, clanEnd + 1))
+					.withStyle(style -> style.withColor(clanColor)));
+			result.append(
+				Component.literal(plain.substring(clanEnd + 1, sender.start()))
+					.withStyle(style -> style.withColor(defaultRgb)));
+		}else
+			result.append(Component.literal(plain.substring(0, sender.start()))
+				.withStyle(style -> style.withColor(defaultRgb)));
+		result.append(Component.literal(sender.name())
+			.withStyle(style -> style.withColor(usernameRgb)));
+		result.append(Component.literal(plain.substring(sender.end()))
+			.withStyle(style -> style.withColor(defaultRgb)));
+		if(hack.shouldShowChatHeads())
+		{
+			net.minecraft.client.multiplayer.PlayerInfo info =
+				findOnlinePlayer(sender.name());
+			if(info != null)
+				return Component.empty()
+					.append(Component.object(new PlayerSprite(
+						ResolvableProfile.createResolved(info.getProfile()),
+						info.showHat())))
+					.append(result);
+		}
+		return result;
+	}
+	
+	private Component convertEmojiShortcodesIfEnabled(Component message)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		if(hack == null || !hack.isEnabled() || !hack.shouldConvertEmojis()
+			|| message == null)
+			return message;
+		
+		return convertEmojiShortcodes(message);
+	}
+	
+	private static MutableComponent convertEmojiShortcodes(Component component)
+	{
+		MutableComponent result;
+		if(component.getContents() instanceof LiteralContents literal)
+			result = convertLiteralEmojiShortcodes(literal.text(),
+				component.getStyle());
+		else if(component
+			.getContents() instanceof TranslatableContents translatable)
+		{
+			Object[] args = translatable.getArgs();
+			Object[] converted = args == null ? new Object[0] : args.clone();
+			for(int i = 0; i < converted.length; i++)
+			{
+				if(converted[i] instanceof Component argument)
+					converted[i] = convertEmojiShortcodes(argument);
+				else if(converted[i] instanceof String text
+					&& EMOJI_SHORTCODE_PATTERN.matcher(text).find())
+					converted[i] = convertLiteralEmojiShortcodes(text,
+						component.getStyle());
+			}
+			result = Component.translatable(translatable.getKey(), converted);
+		}else
+			result = MutableComponent.create(component.getContents());
+		
+		result.setStyle(component.getStyle());
+		for(Component sibling : component.getSiblings())
+			result.append(convertEmojiShortcodes(sibling));
+		return result;
+	}
+	
+	private static MutableComponent convertLiteralEmojiShortcodes(String text,
+		Style style)
+	{
+		MutableComponent result = Component.empty().withStyle(style);
+		Matcher matcher = EMOJI_SHORTCODE_PATTERN.matcher(text);
+		int start = 0;
+		while(matcher.find())
+		{
+			if(matcher.start() > start)
+				appendTextWithEmojiFont(result,
+					text.substring(start, matcher.start()), style);
+			String emoji = EMOJI_SHORTCODES.get(matcher.group());
+			if(emoji == null)
+				appendTextWithEmojiFont(result, matcher.group(), style);
+			else
+				result.append(Component.literal(emoji).withStyle(style)
+					.withStyle(shortcodeStyle -> shortcodeStyle
+						.withFont(EMOJI_FONT_DESCRIPTION)));
+			start = matcher.end();
+		}
+		if(start < text.length())
+			appendTextWithEmojiFont(result, text.substring(start), style);
+		return result;
+	}
+	
+	private static void appendTextWithEmojiFont(MutableComponent result,
+		String text, Style style)
+	{
+		int plainStart = 0;
+		for(int offset = 0; offset < text.length();)
+		{
+			int codePoint = text.codePointAt(offset);
+			int next = offset + Character.charCount(codePoint);
+			if(isEmojiCodePoint(codePoint))
+			{
+				if(offset > plainStart)
+					result.append(
+						Component.literal(text.substring(plainStart, offset))
+							.withStyle(style));
+				result.append(Component.literal(text.substring(offset, next))
+					.withStyle(style).withStyle(shortcodeStyle -> shortcodeStyle
+						.withFont(EMOJI_FONT_DESCRIPTION)));
+				plainStart = next;
+			}
+			offset = next;
+		}
+		if(plainStart < text.length())
+			result.append(
+				Component.literal(text.substring(plainStart)).withStyle(style));
+	}
+	
+	private static boolean isEmojiCodePoint(int codePoint)
+	{
+		return codePoint >= 0x1F000 && codePoint <= 0x1FAFF
+			|| codePoint >= 0x2600 && codePoint <= 0x27BF
+			|| codePoint >= 0x2300 && codePoint <= 0x23FF || codePoint == 0x00A9
+			|| codePoint == 0x00AE || codePoint == 0x203C || codePoint == 0x2049
+			|| codePoint == 0x2122;
+	}
+	
+	private static Map<String, String> loadEmojiShortcodes()
+	{
+		try(InputStream stream = ClientMessageOverlay.class
+			.getResourceAsStream("/assets/wurst/lang/en_us.json"))
+		{
+			if(stream == null)
+				return Map.of();
+			var root = JsonParser
+				.parseReader(
+					new InputStreamReader(stream, StandardCharsets.UTF_8))
+				.getAsJsonObject();
+			Map<String, String> result = new HashMap<>();
+			for(var entry : root.entrySet())
+				if(EMOJI_SHORTCODE_PATTERN.matcher(entry.getKey()).matches())
+					result.put(entry.getKey(), entry.getValue().getAsString());
+			return Map.copyOf(result);
+		}catch(IOException | RuntimeException e)
+		{
+			return Map.of();
+		}
+	}
+	
+	private Component normalizePlayerChatForDisplay(Component message)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		if(hack == null || !hack.isEnabled() || message == null)
+			return null;
+		if(isWurstMessage(stripLegacyFormatting(message.getString()).trim()))
+			return null;
+			
+		// PlayerSprite.getString() is represented as "[Name head]". Keep the
+		// component tree intact when another chat-head implementation already
+		// added one; parsing that synthetic text is what used to cut names.
+		if(containsPlayerSprite(message))
+			return message.copy();
+		
+		NormalizedPlayerChat chat =
+			extractNormalizedPlayerChat(message.getString());
+		if(chat == null || chat.name().isBlank() || chat.message().isBlank())
+			return null;
+		
+		if(!isOnlinePlayerName(chat.name())
+			&& !PLAYER_NAME_TOKEN_PATTERN.matcher(chat.name()).matches())
+			return null;
+		
+		int defaultRgb = hack.getDefaultTextColorI();
+		int usernameRgb = hack.shouldColorUsernames()
+			? getUsernameColor(chat.name(), hack) : defaultRgb;
+		
+		MutableComponent normalized = Component.literal("<")
+			.withStyle(style -> style.withColor(defaultRgb))
+			.append(Component.literal(chat.name())
+				.withStyle(style -> style.withColor(usernameRgb)))
+			.append(Component.literal("> " + chat.message())
+				.withStyle(style -> style.withColor(defaultRgb)));
+		
+		if(hack.shouldShowChatHeads())
+		{
+			net.minecraft.client.multiplayer.PlayerInfo info =
+				findOnlinePlayer(chat.name());
+			if(info != null)
+				normalized = Component.empty()
+					.append(Component.object(new PlayerSprite(
+						ResolvableProfile.createResolved(info.getProfile()),
+						info.showHat())))
+					.append(normalized);
+		}
+		
+		return normalized;
+	}
+	
+	public static boolean containsPlayerSprite(Component component)
+	{
+		if(component
+			.getContents() instanceof ObjectContents(ObjectInfo objectInfo, java.util.Optional<?> ignored)
+			&& objectInfo instanceof PlayerSprite)
+			return true;
+		
+		for(Component sibling : component.getSiblings())
+			if(containsPlayerSprite(sibling))
+				return true;
+			
+		if(component.getContents() instanceof TranslatableContents translatable)
+			for(Object arg : translatable.getArgs())
+				if(arg instanceof Component argument
+					&& containsPlayerSprite(argument))
+					return true;
+				
+		return false;
+	}
+	
+	private static boolean shouldColorStoredUsername(Component message,
+		boolean wurstOnlyPanel)
+	{
+		if(wurstOnlyPanel || message == null)
+			return false;
+		
+		String plain = stripLegacyFormatting(message.getString()).trim();
+		if(plain.isEmpty() || isWurstMessage(plain))
+			return false;
+		
+		SenderSpan sender = extractSenderSpan(plain);
+		return sender != null && (sender.trustedChatDelimiter()
+			|| isOnlinePlayerName(sender.name()));
+	}
+	
+	public Component colorizeChatUsernameIfEnabled(Component message)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		if(hack == null || !hack.isEnabled() || !hack.shouldColorUsernames()
+			|| message == null)
+			return message.copy();
+		
+		String plain = stripLegacyFormatting(message.getString());
+		if(isWurstMessage(plain.trim()))
+			return message.copy();
+		
+		SenderSpan sender = extractSenderSpan(plain);
+		if(sender == null || sender.name().isBlank())
+			return message.copy();
+		if(!sender.trustedChatDelimiter() && !isOnlinePlayerName(sender.name()))
+			return message.copy();
+		
+		int usernameRgb = getUsernameColor(sender.name(), hack);
+		int defaultRgb = hack.getDefaultTextColorI();
+		int messageLength = plain.length();
+		
+		// Normalize every part of the chat line first. Server/team formatting
+		// is often stored on the parent component and otherwise leaks into
+		// the prefix and message. Reapply the username color only to the
+		// actual username span.
+		Component defaultColored = colorizeComponentRange(message, 0,
+			messageLength, defaultRgb, new int[]{0});
+		return colorizeComponentRange(defaultColored, sender.start(),
+			sender.end(), usernameRgb, new int[]{0});
+	}
+	
+	public static int getUsernameColorForTabList(String name)
+	{
+		ClientChatOverlayHack hack = INSTANCE.getSettings();
+		if(hack == null || !hack.isEnabled() || !hack.shouldColorUsernames())
+			return -1;
+		
+		return getUsernameColor(name, hack);
+	}
+	
+	public Component prepareMessageForDisplay(Component message)
+	{
+		Component directPlayerChat = buildUsernameColoredPlayerChat(message);
+		if(directPlayerChat != null)
+			return convertEmojiShortcodesIfEnabled(directPlayerChat);
+		Component normalized = normalizePlayerChatForDisplay(message);
+		Component prepared;
+		if(normalized != null)
+			prepared = normalized;
+		else
+		{
+			prepared = applyDefaultTextColorIfEnabled(
+				colorizeChatUsernameIfEnabled(message));
+			prepared = addChatHeadIfEnabled(prepared);
+		}
+		return convertEmojiShortcodesIfEnabled(prepared);
+	}
+	
+	private Component addChatHeadIfEnabled(Component message)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		if(hack == null || !hack.isEnabled() || !hack.shouldShowChatHeads()
+			|| message == null || containsPlayerSprite(message))
+			return message;
+		
+		String plain = stripLegacyFormatting(message.getString()).trim();
+		SenderSpan sender = extractSenderSpan(plain);
+		if(sender == null || !isPlayerChatSender(sender))
+			return message;
+		
+		net.minecraft.client.multiplayer.PlayerInfo info =
+			findOnlinePlayer(sender.name());
+		if(info == null)
+			return message;
+		
+		return Component.empty()
+			.append(Component.object(new PlayerSprite(
+				ResolvableProfile.createResolved(info.getProfile()),
+				info.showHat())))
+			.append(message);
+	}
+	
+	public Component prepareClientSystemMessageForDisplay(Component message)
+	{
+		return convertEmojiShortcodesIfEnabled(applyDefaultTextColorIfEnabled(
+			colorizeChatUsernameIfEnabled(message)));
+	}
+	
+	public Component applyDefaultTextColorIfEnabled(Component message)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		if(message == null)
+			return Component.empty();
+		if(hack == null || !hack.isEnabled())
+			return message.copy();
+		
+		int rgb = hack.getDefaultTextColorI();
+		String plain = stripLegacyFormatting(message.getString());
+		SenderSpan sender = extractSenderSpan(plain);
+		if(sender == null || !isPlayerChatSender(sender))
+			return message.copy();
+		
+		Component result = colorizeComponentRange(message, 0, plain.length(),
+			rgb, new int[]{0});
+		if(hack.shouldColorUsernames())
+			
+			result =
+				colorizeComponentRange(result, sender.start(), sender.end(),
+					getUsernameColor(sender.name(), hack), new int[]{0});
+		return result;
+	}
+	
+	private static Component colorizeTranslatableSender(Component message,
+		String senderName, int rgb)
+	{
+		if(!(message.getContents() instanceof TranslatableContents tr))
+			return null;
+		
+		Object[] args = tr.getArgs();
+		if(args == null || args.length < 1)
+			return null;
+		
+		Object senderArg = args[0];
+		Object coloredSender;
+		if(senderArg instanceof Component senderComponent)
+		{
+			boolean[] changed = {false};
+			Component deepColored =
+				colorizeSenderToken(senderComponent, senderName, rgb, changed);
+			coloredSender = changed[0] ? deepColored
+				: colorizeComponentRange(senderComponent, 0,
+					senderComponent.getString().length(), rgb, new int[]{0});
+		}else if(senderArg instanceof String senderText)
+		{
+			coloredSender = Component.literal(senderText)
+				.withStyle(style -> style.withColor(rgb));
+		}else
+			return null;
+		
+		Object[] newArgs = args.clone();
+		newArgs[0] = coloredSender;
+		
+		MutableComponent recolored =
+			Component.translatable(tr.getKey(), newArgs);
+		recolored.setStyle(message.getStyle());
+		for(Component sibling : message.getSiblings())
+			recolored.append(sibling.copy());
+		
+		return recolored;
+	}
+	
+	private static MutableComponent colorizeSenderToken(Component component,
+		String senderName, int rgb, boolean[] changed)
+	{
+		MutableComponent result;
+		if(component.getContents() instanceof TranslatableContents tr)
+		{
+			Object[] args = tr.getArgs();
+			Object[] newArgs = args == null ? new Object[0] : args.clone();
+			for(int i = 0; i < newArgs.length; i++)
+			{
+				if(newArgs[i] instanceof Component argComponent)
+					newArgs[i] = colorizeSenderToken(argComponent, senderName,
+						rgb, changed);
+				else if(newArgs[i] instanceof String argString)
+					newArgs[i] = colorizeTextOccurrences(argString,
+						component.getStyle(), senderName, rgb, changed);
+			}
+			
+			result = Component.translatable(tr.getKey(), newArgs);
+			
+		}else if(component.getContents() instanceof LiteralContents literal)
+			result = colorizeTextOccurrences(literal.text(),
+				component.getStyle(), senderName, rgb, changed);
+		else
+			result = MutableComponent.create(component.getContents());
+		
+		if(!(component.getContents() instanceof LiteralContents))
+			result.setStyle(component.getStyle());
+		
+		for(Component sibling : component.getSiblings())
+			result
+				.append(colorizeSenderToken(sibling, senderName, rgb, changed));
+		
+		return result;
+	}
+	
+	private static MutableComponent colorizeTextOccurrences(String text,
+		net.minecraft.network.chat.Style style, String senderName, int rgb,
+		boolean[] changed)
+	{
+		Pattern pattern = Pattern.compile("(?i)(?<![A-Za-z0-9_])"
+			+ Pattern.quote(senderName) + "(?![A-Za-z0-9_])");
+		Matcher matcher = pattern.matcher(text);
+		MutableComponent result = Component.literal("");
+		int lastEnd = 0;
+		while(matcher.find())
+		{
+			if(matcher.start() > lastEnd)
+				result.append(
+					Component.literal(text.substring(lastEnd, matcher.start()))
+						.withStyle(style));
+			
+			result.append(Component
+				.literal(text.substring(matcher.start(), matcher.end()))
+				.withStyle(style.withColor(rgb)));
+			lastEnd = matcher.end();
+			changed[0] = true;
+		}
+		
+		if(lastEnd == 0)
+			return Component.literal(text).withStyle(style);
+		
+		if(lastEnd < text.length())
+			result.append(
+				Component.literal(text.substring(lastEnd)).withStyle(style));
+		
+		return result;
+	}
+	
+	public static MutableComponent colorizeWholeComponent(Component component,
+		int rgb)
+	{
+		MutableComponent result;
+		if(component.getContents() instanceof TranslatableContents tr)
+		{
+			Object[] args = tr.getArgs();
+			Object[] newArgs = args == null ? new Object[0] : args.clone();
+			for(int i = 0; i < newArgs.length; i++)
+			{
+				if(newArgs[i] instanceof Component argComponent)
+					newArgs[i] = colorizeWholeComponent(argComponent, rgb);
+				else if(newArgs[i] instanceof String argString)
+					newArgs[i] = Component.literal(argString)
+						.withStyle(style -> style.withColor(rgb));
+			}
+			
+			result = Component.translatable(tr.getKey(), newArgs);
+			
+		}else
+			result = MutableComponent.create(component.getContents());
+		
+		result.setStyle(component.getStyle().withColor(rgb));
+		for(Component sibling : component.getSiblings())
+			result.append(colorizeWholeComponent(sibling, rgb));
+		
+		return result;
+	}
+	
+	public static Component colorizeComponentRangeForDisplay(
+		Component component, int start, int end, int rgb)
+	{
+		if(component == null)
+			return null;
+		
+		if(start < 0 || end <= start)
+			return component.copy();
+		
+		return colorizeComponentRange(component, start, end, rgb, new int[]{0});
+	}
+	
+	private static MutableComponent colorizeComponentRange(Component component,
+		int start, int end, int rgb, int[] offset)
+	{
+		MutableComponent result;
+		if(component.getContents() instanceof LiteralContents literal)
+		{
+			String text = literal.text();
+			result = Component.literal("");
+			int textStart = offset[0];
+			int textEnd = textStart + text.length();
+			if(start < textEnd && end > textStart)
+			{
+				int localStart = Math.max(0, start - textStart);
+				int localEnd = Math.min(text.length(), end - textStart);
+				if(localStart > 0)
+					result
+						.append(Component.literal(text.substring(0, localStart))
+							.withStyle(component.getStyle()));
+				result.append(
+					Component.literal(text.substring(localStart, localEnd))
+						.withStyle(component.getStyle().withColor(rgb)));
+				if(localEnd < text.length())
+					result.append(Component.literal(text.substring(localEnd))
+						.withStyle(component.getStyle()));
+			}else
+				result.append(
+					Component.literal(text).withStyle(component.getStyle()));
+			offset[0] = textEnd;
+		}else
+		{
+			result = MutableComponent.create(component.getContents());
+			result.setStyle(component.getStyle());
+			offset[0] += getOwnTextLength(component);
+		}
+		
+		for(Component sibling : component.getSiblings())
+			result.append(
+				colorizeComponentRange(sibling, start, end, rgb, offset));
+		
+		return result;
+	}
+	
+	private static int getOwnTextLength(Component component)
+	{
+		int ownLength = component.getString().length();
+		for(Component sibling : component.getSiblings())
+			ownLength -= sibling.getString().length();
+		
+		return Math.max(0, ownLength);
+	}
+	
+	private static int getUsernameColor(String name, ClientChatOverlayHack hack)
+	{
+		if(hack.shouldUseServerColors())
+		{
+			int serverColor = getServerPlayerColor(findOnlinePlayer(name));
+			if(serverColor >= 0)
+				return serverColor;
+		}
+		
+		String ownName = getOwnPlayerName();
+		boolean ownNameMatches = name.equalsIgnoreCase(ownName);
+		if(ownNameMatches && !hack.shouldRandomizeOwnUsernameColor())
+			return hack.getOwnUsernameColorI();
+		
+		int rgb = getGeneratedUsernameColor(name, 0);
+		if(ownNameMatches)
+			return rgb;
+		
+		for(int attempt = 1; isReservedUsernameColor(rgb, ownName, hack)
+			&& attempt < 16; attempt++)
+			rgb = getGeneratedUsernameColor(name, attempt);
+		
+		return rgb;
+	}
+	
+	private static int getServerTeamColor(String name)
+	{
+		var info = INSTANCE.findOnlinePlayer(name);
+		if(info != null && info.getTeam() != null
+			&& info.getTeam().getColor().getColor() != null)
+			return info.getTeam().getColor().getColor();
+		return -1;
+	}
+	
+	public static int getServerPlayerColor(
+		net.minecraft.client.multiplayer.PlayerInfo info)
+	{
+		if(info == null)
+			return -1;
+		
+		Integer displayColor =
+			findExplicitComponentColor(info.getTabListDisplayName());
+		if(displayColor != null)
+			return displayColor;
+		
+		if(info.getTeam() != null
+			&& info.getTeam().getColor().getColor() != null)
+			return info.getTeam().getColor().getColor();
+		
+		return -1;
+	}
+	
+	private static Integer findExplicitComponentColor(Component component)
+	{
+		if(component == null)
+			return null;
+		
+		TextColor color = component.getStyle().getColor();
+		if(color != null)
+			return color.getValue();
+		
+		for(Component sibling : component.getSiblings())
+		{
+			Integer siblingColor = findExplicitComponentColor(sibling);
+			if(siblingColor != null)
+				return siblingColor;
+		}
+		
+		if(component.getContents() instanceof TranslatableContents translatable)
+			for(Object arg : translatable.getArgs())
+				if(arg instanceof Component argument)
+				{
+					Integer argumentColor =
+						findExplicitComponentColor(argument);
+					if(argumentColor != null)
+						return argumentColor;
+				}
+			
+		return null;
+	}
+	
+	private static int getGeneratedUsernameColor(String name, int attempt)
+	{
+		int hash = name.toLowerCase().hashCode() + attempt * 0x9E3779B9;
+		float hue = (hash & 0xFFFF) / 65535.0F;
+		return Color.HSBtoRGB(hue, 0.65F, 1.0F) & 0x00FFFFFF;
+	}
+	
+	private static boolean isReservedUsernameColor(int rgb, String ownName,
+		ClientChatOverlayHack hack)
+	{
+		int ownColor = ownName == null || ownName.isBlank()
+			|| !hack.shouldRandomizeOwnUsernameColor()
+				? hack.getOwnUsernameColorI()
+				: getGeneratedUsernameColor(ownName, 0);
+		if(isSimilarColor(rgb, ownColor))
+			return true;
+		
+		if(WurstClient.INSTANCE != null && WurstClient.INSTANCE.getHax() != null
+			&& isSimilarColor(rgb,
+				WurstClient.INSTANCE.getHax().mentionHack.getMentionColorI()))
+			return true;
+		
+		return false;
+	}
+	
+	private static boolean isSimilarColor(int a, int b)
+	{
+		int dr = ((a >> 16) & 0xFF) - ((b >> 16) & 0xFF);
+		int dg = ((a >> 8) & 0xFF) - ((b >> 8) & 0xFF);
+		int db = (a & 0xFF) - (b & 0xFF);
+		return dr * dr + dg * dg + db * db < 80 * 80;
+	}
+	
+	private static SenderSpan extractSenderSpan(String plain)
+	{
+		if(plain == null || plain.isBlank())
+			return null;
+		
+		String trimmed = plain.trim();
+		int trimOffset = plain.indexOf(trimmed);
+		if(trimmed.startsWith("<"))
+		{
+			int end = trimmed.indexOf('>');
+			if(end > 1)
+			{
+				String senderText = trimmed.substring(1, end);
+				Matcher matcher = USERNAME_PATTERN.matcher(senderText);
+				if(matcher.find())
+				{
+					int start = matcher.start();
+					int matchEnd = matcher.end();
+					while(matcher.find())
+					{
+						start = matcher.start();
+						matchEnd = matcher.end();
+					}
+					return new SenderSpan(trimOffset + 1 + start,
+						trimOffset + 1 + matchEnd,
+						senderText.substring(start, matchEnd), true);
+				}
+			}
+		}
+		
+		ChatDelimiter delimiter = findChatDelimiter(trimmed);
+		if(delimiter == null || delimiter.index() <= 0)
+			return null;
+		
+		String senderPart = trimmed.substring(0, delimiter.index());
+		var matcher = USERNAME_PATTERN.matcher(senderPart);
+		int start = -1;
+		int end = -1;
+		String name = "";
+		while(matcher.find())
+		{
+			start = matcher.start();
+			end = matcher.end();
+			name = matcher.group();
+		}
+		
+		if(name.isEmpty())
+			return null;
+		
+		return new SenderSpan(trimOffset + start, trimOffset + end, name,
+			delimiter.trusted());
+	}
+	
+	private static boolean isPlayerChatSender(SenderSpan sender)
+	{
+		return sender.trustedChatDelimiter()
+			|| isOnlinePlayerName(sender.name());
+	}
+	
+	private static NormalizedPlayerChat extractNormalizedPlayerChat(String raw)
+	{
+		if(raw == null || raw.isBlank())
+			return null;
+		
+		String rawTrimmed = raw.trim();
+		String text = stripLegacyFormatting(raw).trim();
+		boolean hadLegacyFormatting = !text.equals(rawTrimmed);
+		if(text.isBlank())
+			return null;
+		
+		text = stripLeakedLegacyPrefix(text);
+		if(text.isBlank())
+			return null;
+		
+		if(!hadLegacyFormatting)
+			return null;
+		
+		NormalizedPlayerChat angleChat = extractAngleBracketChat(text);
+		if(angleChat != null)
+			return angleChat;
+		
+		return null;
+	}
+	
+	private static NormalizedPlayerChat extractAngleBracketChat(String text)
+	{
+		int start = firstChatBracketIndex(text);
+		if(start < 0)
+			return null;
+		
+		int end = firstChatBracketCloseIndex(text, start + 1);
+		if(end <= start + 1)
+			return null;
+		
+		String name = normalizeSenderToken(text.substring(start + 1, end));
+		if(name.isBlank())
+			return null;
+		
+		String message = text.substring(end + 1).trim();
+		if(message.isBlank())
+			return null;
+		
+		return new NormalizedPlayerChat(name, stripLeakedLegacyPrefix(message));
+	}
+	
+	private static String stripDisplayedLegacyFormatting(String text)
+	{
+		if(text == null || text.isEmpty())
+			return "";
+		
+		String result = text.trim();
+		result = result
+			.replaceAll("(?i)(?<=<)[0-9a-fklmnor]+(?=[+A-Za-z0-9_*.\\-])", "");
+		result = result
+			.replaceAll("(?i)(?<=[+A-Za-z0-9_*.\\-])[0-9a-fklmnor]+(?=>)", "");
+		result = result.replaceAll("(?i)^[0-9a-fklmnor]+(?=[<{])", "");
+		return result.trim();
+	}
+	
+	private static int firstChatBracketCloseIndex(String text, int from)
+	{
+		int angle = text.indexOf('>', from);
+		int brace = text.indexOf('}', from);
+		
+		if(angle < 0)
+			return brace;
+		if(brace < 0)
+			return angle;
+		
+		return Math.min(angle, brace);
+	}
+	
+	private static int firstChatBracketIndex(String text)
+	{
+		for(int i = 0; i < text.length(); i++)
+		{
+			char c = text.charAt(i);
+			if(c == '<' || c == '{')
+				return i;
+			
+			if(!isLeakedLegacyCodeChar(c) && !Character.isWhitespace(c))
+				return -1;
+		}
+		
+		return -1;
+	}
+	
+	private static String stripLeakedLegacyPrefix(String text)
+	{
+		String result = text == null ? "" : text.trim();
+		while(result.length() >= 2 && isLeakedLegacyCodeChar(result.charAt(0))
+			&& (result.charAt(1) == '<' || result.charAt(1) == '{'))
+			result = result.substring(1).trim();
+		
+		return result;
+	}
+	
+	private static boolean isLeakedLegacyCodeChar(char c)
+	{
+		return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+			|| (c >= 'A' && c <= 'F') || "klmnorKLMNOR".indexOf(c) >= 0;
+	}
+	
+	private static ChatDelimiter findChatDelimiter(String text)
+	{
+		ChatDelimiter best = null;
+		for(String delimiter : new String[]{" » ", " > ", ": "})
+		{
+			int index = text.indexOf(delimiter);
+			if(index > 0 && (best == null || index < best.index()))
+				best = new ChatDelimiter(index, !delimiter.equals(": "));
+		}
+		
+		return best;
+	}
+	
+	private static boolean looksLikePlayerChat(String plain)
+	{
+		if(plain == null || plain.isEmpty())
+			return false;
+		
+		if(PLAYER_CHAT_PATTERN.matcher(plain).matches())
+			return true;
+		
+		if(DECORATED_PLAYER_CHAT_PATTERN.matcher(plain).matches())
+			return true;
+		
+		if(COLON_PLAYER_CHAT_PATTERN.matcher(plain).matches())
+			return true;
+		
+		if(ARROW_PLAYER_CHAT_PATTERN.matcher(plain).matches())
+			return true;
+		
+		if(BRACKETED_PLAYER_CHAT_PATTERN.matcher(plain).matches())
+			return true;
+		
+		if(DISCORD_PREFIX_PATTERN.matcher(plain).matches())
+			return true;
+		
+		if(matchesOnlinePlayerSender(plain))
+			return true;
+		
+		String lower = plain.toLowerCase();
+		return lower.contains(" whispers to you:")
+			|| lower.startsWith("to ") && plain.contains(": ");
+	}
+	
+	private static boolean shouldKeepInVanillaChat(String plain,
+		@Nullable MessageSignature signature)
+	{
+		// Signed messages are usually player chat. Keep them in vanilla chat
+		// unless explicitly forced into client chat via keyword.
+		if(signature != null)
+			return true;
+			
+		// Primary signal: sender token resolves to someone in the online player
+		// list (tab list), including decorated sender formats.
+		if(matchesOnlinePlayerSender(plain))
+			return true;
+		
+		// Explicit bridge format handling.
+		if(DISCORD_PREFIX_PATTERN.matcher(plain).matches())
+			return true;
+		
+		// Fallback: structural chat patterns.
+		return looksLikePlayerChat(plain);
+	}
+	
+	private static boolean matchesOnlinePlayerSender(String plain)
+	{
+		String sender = extractSenderToken(plain);
+		if(sender == null || sender.isEmpty())
+			return false;
+		
+		String normalizedSender = normalizeSenderToken(sender);
+		if(normalizedSender.isEmpty())
+			return false;
+		
+		var connection = WurstClient.MC.getConnection();
+		if(connection == null)
+			return false;
+		
+		for(var info : getOnlinePlayersSafe(connection))
+		{
+			if(info == null || info.getProfile() == null)
+				continue;
+			
+			String name = getProfileNameSafe(info.getProfile());
+			if(name == null || name.isEmpty())
+				continue;
+			
+			if(normalizedSender.equalsIgnoreCase(name))
+				return true;
+		}
+		
+		return false;
+	}
+	
+	private static boolean isOnlinePlayerName(String name)
+	{
+		if(name == null || name.isEmpty())
+			return false;
+		
+		var connection = WurstClient.MC.getConnection();
+		if(connection == null)
+			return false;
+		
+		return findOnlinePlayer(name) != null;
+	}
+	
+	@Nullable
+	private static net.minecraft.client.multiplayer.PlayerInfo findOnlinePlayer(
+		String name)
+	{
+		if(name == null || name.isEmpty())
+			return null;
+		
+		var connection = WurstClient.MC.getConnection();
+		if(connection == null)
+			return null;
+		
+		for(var info : getOnlinePlayersSafe(connection))
+		{
+			if(info == null || info.getProfile() == null)
+				continue;
+			
+			String onlineName = getProfileNameSafe(info.getProfile());
+			if(onlineName != null && name.equalsIgnoreCase(onlineName))
+				return info;
+		}
+		
+		return null;
+	}
+	
+	/**
+	 * Safely gets the online player list, falling back to reflection if
+	 * the mapped method name changes across MC versions.
+	 */
+	@SuppressWarnings("unchecked")
+	private static Iterable<net.minecraft.client.multiplayer.PlayerInfo> getOnlinePlayersSafe(
+		net.minecraft.client.multiplayer.ClientPacketListener connection)
+	{
+		try
+		{
+			return connection.getOnlinePlayers();
+		}catch(Throwable t)
+		{
+			// Fallback: try to access the listedPlayers field directly
+			try
+			{
+				java.lang.reflect.Field field =
+					net.minecraft.client.multiplayer.ClientPacketListener.class
+						.getDeclaredField("listedPlayers");
+				field.setAccessible(true);
+				return (Iterable<net.minecraft.client.multiplayer.PlayerInfo>)field
+					.get(connection);
+			}catch(Throwable t2)
+			{
+				return java.util.Collections.emptyList();
+			}
+		}
+	}
+	
+	/**
+	 * Safely gets the name from a GameProfile, handling both record-style
+	 * {@code name()} and legacy {@code getName()} accessors.
+	 */
+	private static String getProfileNameSafe(
+		com.mojang.authlib.GameProfile profile)
+	{
+		try
+		{
+			return profile.name();
+		}catch(Throwable t1)
+		{
+			try
+			{
+				// Fallback for legacy getName() accessor
+				java.lang.reflect.Method method =
+					com.mojang.authlib.GameProfile.class
+						.getDeclaredMethod("getName");
+				return (String)method.invoke(profile);
+			}catch(Throwable t2)
+			{
+				return null;
+			}
+		}
+	}
+	
+	/**
+	 * Gets the local player's name.
+	 * Uses multiple fallbacks since authlib changes across MC versions.
+	 */
+	private static String getOwnPlayerName()
+	{
+		// 1. Entity display name (plain text, always works in-game)
+		if(WurstClient.MC.player != null)
+		{
+			try
+			{
+				String name = WurstClient.MC.player.getName().getString();
+				if(name != null && !name.isBlank())
+					return name;
+			}catch(Throwable ignored)
+			{}
+		}
+		
+		// 2. User session object
+		try
+		{
+			net.minecraft.client.User user = WurstClient.MC.getUser();
+			if(user != null)
+			{
+				String name = user.getName();
+				if(name != null && !name.isBlank())
+					return name;
+			}
+		}catch(Throwable ignored)
+		{}
+		
+		// 3. Reflection on User.name
+		try
+		{
+			java.lang.reflect.Field field =
+				net.minecraft.client.User.class.getDeclaredField("name");
+			field.setAccessible(true);
+			net.minecraft.client.User user = WurstClient.MC.getUser();
+			if(user != null)
+			{
+				String name = (String)field.get(user);
+				if(name != null && !name.isBlank())
+					return name;
+			}
+		}catch(Throwable ignored)
+		{}
+		
+		return "";
+	}
+	
+	private static String extractSenderToken(String plain)
+	{
+		if(plain == null || plain.isEmpty())
+			return null;
+		
+		String trimmed = plain.trim();
+		if(trimmed.isEmpty())
+			return null;
+		
+		if(trimmed.startsWith("<"))
+		{
+			int end = trimmed.indexOf('>');
+			if(end > 1)
+				return trimmed.substring(1, end);
+		}
+		
+		int colon = trimmed.indexOf(": ");
+		if(colon > 0)
+			return trimmed.substring(0, colon);
+		
+		int arrow = trimmed.indexOf(" > ");
+		if(arrow > 0)
+			return trimmed.substring(0, arrow);
+		
+		int fancyArrow = trimmed.indexOf(" » ");
+		if(fancyArrow > 0)
+			return trimmed.substring(0, fancyArrow);
+		
+		return null;
+	}
+	
+	private static String normalizeSenderToken(String sender)
+	{
+		String s = sender.trim();
+		if(s.isEmpty())
+			return "";
+		
+		s = s.replaceFirst("^" + CHAT_PREFIX_PATTERN, "");
+		s = s.replaceFirst("^[^A-Za-z0-9_]+", "");
+		s = s.replaceFirst("[^A-Za-z0-9_]+$", "");
+		
+		int space = s.lastIndexOf(' ');
+		if(space >= 0 && space + 1 < s.length())
+			s = s.substring(space + 1);
+			
+		// Fallback for decorated sender tokens (e.g. head-chat prefixes):
+		// extract the last username-like token so we can still identify online
+		// player chat and let vanilla chat render things like head icons.
+		String username = extractLastUsernameToken(s);
+		if(!username.isEmpty())
+			return username;
+		
+		return s;
+	}
+	
+	private static String extractLastUsernameToken(String text)
+	{
+		if(text == null || text.isEmpty())
+			return "";
+		
+		String last = "";
+		var matcher = USERNAME_PATTERN.matcher(text);
+		while(matcher.find())
+			last = matcher.group();
+		
+		return last;
+	}
+	
+	private boolean hasVanillaChatMessages()
+	{
+		List<GuiMessage.Line> vanillaLines =
+			WurstClient.MC.gui.getChat().trimmedMessages;
+		return vanillaLines != null && !vanillaLines.isEmpty();
+	}
+	
+	private List<RenderLine> buildCombinedLines(Deque<Entry> overlayMessages,
+		int maxWidth)
+	{
+		List<TimedRenderLine> timed = new ArrayList<>();
+		long nowMs = System.currentTimeMillis();
+		int guiTicks = WurstClient.MC.gui.getGuiTicks();
+		
+		// Overlay entries (system/Wurst messages)
+		synchronized(overlayMessages)
+		{
+			for(Entry entry : overlayMessages)
+			{
+				Component renderComponent =
+					applyDefaultTextColorIfEnabled(entry.component());
+				List<WrappedLine> wrapped =
+					wrapComponent(renderComponent, maxWidth);
+				for(int i = wrapped.size() - 1; i >= 0; i--)
+					timed.add(new TimedRenderLine(
+						new RenderLine(wrapped.get(i).sequence(), 255,
+							wrapped.get(i).text()),
+						entry.timestamp()));
+			}
+		}
+		
+		// Vanilla chat entries (player chat messages)
+		List<GuiMessage.Line> vanillaLines =
+			WurstClient.MC.gui.getChat().trimmedMessages;
+		if(vanillaLines != null)
+			for(GuiMessage.Line line : vanillaLines)
+			{
+				int tickAge = guiTicks - line.addedTime();
+				if(tickAge >= 0)
+					timed.add(new TimedRenderLine(
+						new RenderLine(line.content(), 255, null),
+						nowMs - tickAge * 50L));
+			}
+		
+		// Sort newest first (matching buildAllLines order)
+		timed.sort((a, b) -> Long.compare(b.sortKey, a.sortKey));
+		
+		List<RenderLine> result = new ArrayList<>(timed.size());
+		for(TimedRenderLine t : timed)
+			result.add(t.line);
+		return result;
+	}
+	
+	private record TimedRenderLine(RenderLine line, long sortKey)
+	{}
+	
+	private List<RenderLine> buildAllLines(Deque<Entry> source, int maxWidth,
+		boolean fullOpacity)
+	{
+		synchronized(source)
+		{
+			if(source.isEmpty())
+				return List.of();
+			
+			List<RenderLine> lines = new ArrayList<>();
+			long now = System.currentTimeMillis();
+			for(Entry message : source.reversed())
+			{
+				Component renderComponent =
+					applyDefaultTextColorIfEnabled(message.component());
+				List<WrappedLine> wrapped =
+					wrapComponent(renderComponent, maxWidth);
+				int alpha =
+					fullOpacity ? 255 : getLineAlpha(now - message.timestamp());
+				if(alpha <= 3)
+					continue;
+				
+				for(int i = wrapped.size() - 1; i >= 0; i--)
+					lines.add(new RenderLine(wrapped.get(i).sequence(), alpha,
+						wrapped.get(i).text()));
+			}
+			
+			return lines;
+		}
+	}
+	
+	private static MutableComponent applyDefaultColorToUncoloredStyles(
+		Component component, int rgb)
+	{
+		MutableComponent result;
+		if(component.getContents() instanceof TranslatableContents tr)
+		{
+			Object[] args = tr.getArgs();
+			Object[] newArgs = args == null ? new Object[0] : args.clone();
+			for(int i = 0; i < newArgs.length; i++)
+			{
+				if(newArgs[i] instanceof Component argComponent)
+					newArgs[i] =
+						applyDefaultColorToUncoloredStyles(argComponent, rgb);
+				else if(newArgs[i] instanceof String argString)
+					newArgs[i] = Component.literal(argString)
+						.withStyle(style -> style.withColor(rgb));
+			}
+			
+			result = Component.translatable(tr.getKey(), newArgs);
+		}else
+			result = MutableComponent.create(component.getContents());
+		
+		net.minecraft.network.chat.Style style = component.getStyle();
+		var textColor = style.getColor();
+		if(textColor == null || isNeutralGray(textColor.getValue()))
+			style = style.withColor(rgb);
+		result.setStyle(style);
+		for(Component sibling : component.getSiblings())
+			result.append(applyDefaultColorToUncoloredStyles(sibling, rgb));
+		
+		return result;
+	}
+	
+	private static MutableComponent applyDefaultColorToUncoloredStylesInRange(
+		Component component, int rgb, int start, int end, int[] offset)
+	{
+		MutableComponent result;
+		if(component.getContents() instanceof TranslatableContents tr)
+		{
+			Object[] args = tr.getArgs();
+			Object[] newArgs = args == null ? new Object[0] : args.clone();
+			for(int i = 0; i < newArgs.length; i++)
+			{
+				if(newArgs[i] instanceof Component argComponent)
+					newArgs[i] = applyDefaultColorToUncoloredStylesInRange(
+						argComponent, rgb, start, end, offset);
+				else if(newArgs[i] instanceof String argString)
+					newArgs[i] = applyDefaultColorToUncoloredStylesInRange(
+						Component.literal(argString), rgb, start, end, offset);
+			}
+			
+			result = Component.translatable(tr.getKey(), newArgs);
+			result.setStyle(component.getStyle());
+			offset[0] += getOwnTextLength(component);
+		}else if(component.getContents() instanceof LiteralContents literal)
+		{
+			String text = literal.text();
+			result = Component.literal("");
+			int textStart = offset[0];
+			int textEnd = textStart + text.length();
+			if(start < textEnd && end > textStart)
+			{
+				int localStart = Math.max(0, start - textStart);
+				int localEnd = Math.min(text.length(), end - textStart);
+				if(localStart > 0)
+					result
+						.append(Component.literal(text.substring(0, localStart))
+							.withStyle(component.getStyle()));
+				result.append(Component
+					.literal(text.substring(localStart, localEnd))
+					.withStyle(defaultColoredStyle(component.getStyle(), rgb)));
+				if(localEnd < text.length())
+					result.append(Component.literal(text.substring(localEnd))
+						.withStyle(component.getStyle()));
+			}else
+				result.append(
+					Component.literal(text).withStyle(component.getStyle()));
+			offset[0] = textEnd;
+		}else
+		{
+			result = MutableComponent.create(component.getContents());
+			result.setStyle(component.getStyle());
+			offset[0] += getOwnTextLength(component);
+		}
+		
+		for(Component sibling : component.getSiblings())
+			result.append(applyDefaultColorToUncoloredStylesInRange(sibling,
+				rgb, start, end, offset));
+		
+		return result;
+	}
+	
+	private static net.minecraft.network.chat.Style defaultColoredStyle(
+		net.minecraft.network.chat.Style style, int rgb)
+	{
+		var textColor = style.getColor();
+		if(textColor == null || isNeutralGray(textColor.getValue()))
+			return style.withColor(rgb);
+		
+		return style;
+	}
+	
+	private static boolean isNeutralGray(int rgb)
+	{
+		int c = rgb & 0x00FFFFFF;
+		int r = (c >> 16) & 0xFF;
+		int g = (c >> 8) & 0xFF;
+		int b = c & 0xFF;
+		// Only treat mid-range grays as "neutral" (no explicit color).
+		// Exclude pure white (§f / 0xFFFFFF) and near-white so that
+		// legitimate formatting codes (like DonutSMP's §f) are preserved.
+		return r == g && g == b && r > 0x10 && r < 0xF0;
+	}
+	
+	private static List<RenderLine> getVisibleLines(List<RenderLine> allLines,
+		int maxLines, int startOffset)
+	{
+		if(allLines.isEmpty() || maxLines <= 0)
+			return List.of();
+		
+		ArrayList<RenderLine> visible = new ArrayList<>(maxLines);
+		int start = Math.min(startOffset, Math.max(0, allLines.size() - 1));
+		for(int i = start; i < allLines.size()
+			&& visible.size() < maxLines; i++)
+			visible.add(allLines.get(i));
+		
+		return visible;
+	}
+	
+	private int getLineAlpha(long ageMs)
+	{
+		long fadeMs = Math.max(1000L, getFadeOutMs());
+		double fade = 1.0 - (double)Math.max(0L, ageMs) / fadeMs;
+		fade = Mth.clamp(fade, 0.0, 1.0);
+		fade *= fade;
+		
+		double chatOpacity = WurstClient.MC.options.chatOpacity().get();
+		ClientChatOverlayHack hack = getSettings();
+		double transparency = Math.max(0.0,
+			Math.min(100.0, hack == null ? 35 : hack.getTransparencyPercent()))
+			/ 100.0;
+		double baseOpacity = (chatOpacity * 0.9 + 0.1) * (1.0 - transparency);
+		return Mth.clamp((int)Math.round(255 * fade * baseOpacity), 0, 255);
+	}
+	
+	private long getFadeOutMs()
+	{
+		ClientChatOverlayHack hack = getSettings();
+		return hack == null ? DEFAULT_FADE_OUT_MS : hack.getFadeOutTimeMs();
+	}
+	
+	private boolean shouldCaptureByFilter(Component message)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		if(hack == null || !hack.isOnlyWurstMessages())
+			return true;
+		
+		String plain = stripLegacyFormatting(message.getString()).trim();
+		return isWurstMessage(plain);
+	}
+	
+	private boolean isForcedToClientChat(String plain)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		return hack != null && hack.matchesForceClientKeyword(plain);
+	}
+	
+	private boolean isForcedToNormalChat(String plain)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		return hack != null && hack.matchesForceNormalKeyword(plain);
+	}
+	
+	private static boolean isWurstMessage(String plain)
+	{
+		return plain.regionMatches(true, 0, "[Wurst]", 0, 7);
+	}
+	
+	private static boolean isFriendPingTransportMessage(String plain)
+	{
+		if(plain == null || plain.isBlank())
+			return false;
+		
+		String upper = plain.toUpperCase();
+		return upper.contains("FPNG") || upper.contains("FPNA");
+	}
+	
+	private int getVisibleVanillaLineCount(int chatHeight, boolean chatOpen)
+	{
+		List<GuiMessage.Line> lines =
+			WurstClient.MC.gui.getChat().trimmedMessages;
+		if(lines == null || lines.isEmpty())
+			return 0;
+		
+		int lineHeightWithSpacing =
+			WurstClient.MC.font.lineHeight + LINE_SPACING;
+		int maxVisibleLines = Math.max(1, chatHeight / lineHeightWithSpacing);
+		if(chatOpen)
+			return Math.min(lines.size(), maxVisibleLines);
+		
+		int guiTicks = WurstClient.MC.gui.getGuiTicks();
+		int visibleLines = 0;
+		for(GuiMessage.Line line : lines)
+		{
+			if(guiTicks - line.addedTime() < VANILLA_CHAT_VISIBLE_TICKS)
+			{
+				visibleLines++;
+				if(visibleLines >= maxVisibleLines)
+					break;
+			}
+		}
+		
+		return Math.min(visibleLines, maxVisibleLines);
+	}
+	
+	private void logToConsoleIfEnabled(Component message)
+	{
+		ClientChatOverlayHack hack = getSettings();
+		if(hack == null || !hack.isRoutingToConsole())
+			return;
+		
+		String plain = stripLegacyFormatting(message.getString()).trim();
+		if(plain.isEmpty())
+			return;
+		
+		System.out.println("[ClientChatOverlay] " + plain);
+	}
+	
+	private static String stripLegacyFormatting(String text)
+	{
+		if(text == null || text.isEmpty())
+			return "";
+		
+		StringBuilder sb = new StringBuilder(text.length());
+		for(int i = 0; i < text.length(); i++)
+		{
+			char c = text.charAt(i);
+			if(c == '\u00a7' && i + 1 < text.length())
+			{
+				i++;
+				continue;
+			}
+			
+			sb.append(c);
+		}
+		
+		return sb.toString();
+	}
+	
+	private static double getScaledMouseX(GuiGraphicsExtractor context)
+	{
+		Window window = WurstClient.MC.getWindow();
+		if(window == null)
+			return 0;
+		
+		return WurstClient.MC.mouseHandler.xpos() * context.guiWidth()
+			/ window.getScreenWidth();
+	}
+	
+	private static double getScaledMouseY(GuiGraphicsExtractor context)
+	{
+		Window window = WurstClient.MC.getWindow();
+		if(window == null)
+			return 0;
+		
+		return WurstClient.MC.mouseHandler.ypos() * context.guiHeight()
+			/ window.getScreenHeight();
+	}
+	
+	private static float getBoxWidth(List<RenderLine> lines)
+	{
+		float boxWidth = 0;
+		for(RenderLine line : lines)
+			boxWidth = Math.max(boxWidth, WurstClient.MC.font.width(line.text())
+				+ HORIZONTAL_PADDING * 2F);
+		return boxWidth;
+	}
+	
+	private static float getBoxHeight(List<RenderLine> lines)
+	{
+		if(lines.isEmpty())
+			return 0;
+		
+		return lines.size() * WurstClient.MC.font.lineHeight
+			+ Math.max(0, lines.size() - 1) * LINE_SPACING;
+	}
+	
+	private void drawPanel(GuiGraphicsExtractor context, List<RenderLine> lines,
+		int drawX, int drawY, float chatScale)
+	{
+		context.pose().pushMatrix();
+		context.pose().translate(drawX, drawY);
+		context.pose().scale(chatScale, chatScale);
+		
+		int y = -WurstClient.MC.font.lineHeight;
+		for(RenderLine line : lines)
+		{
+			int width = WurstClient.MC.font.width(line.text());
+			int alpha = Mth.clamp(line.alpha(), 0, 255);
+			int bgColor = (alpha / 2 << 24) | (BACKGROUND_COLOR & 0x00FFFFFF);
+			// Use white as the base so the FormattedCharSequence's own
+			// per-character colors (from § codes) are preserved.
+			// The default text color is already applied at message-prep time.
+			int textColor = (alpha << 24) | 0xFFFFFF;
+			context.fill(0, y - 1, width + HORIZONTAL_PADDING * 2,
+				y + WurstClient.MC.font.lineHeight, bgColor);
+			context.text(WurstClient.MC.font, line.text(), HORIZONTAL_PADDING,
+				y, textColor, false);
+			y -= WurstClient.MC.font.lineHeight + LINE_SPACING;
+		}
+		
+		context.pose().popMatrix();
+	}
+	
+	private static List<WrappedLine> wrapComponent(Component component,
+		int maxWidth)
+	{
+		if(component == null)
+			return List.of();
+		
+		List<FormattedCharSequence> sequences = ComponentRenderUtils
+			.wrapComponents(component, maxWidth, WurstClient.MC.font);
+		ArrayList<FormattedText> textLines = new ArrayList<>();
+		WurstClient.MC.font.getSplitter().splitLines(component, maxWidth,
+			Style.EMPTY, (text, ignored) -> textLines.add(text));
+		
+		ArrayList<WrappedLine> result = new ArrayList<>();
+		for(int i = 0; i < sequences.size(); i++)
+		{
+			FormattedText text = i < textLines.size() ? textLines.get(i) : null;
+			result.add(new WrappedLine(sequences.get(i), text));
+		}
+		return result;
+	}
+	
+	private void updateClickTargets(List<RenderLine> lines, int drawX,
+		int drawY, float chatScale, boolean wurstPanel)
+	{
+		ArrayList<LineClickTarget> targets = new ArrayList<>();
+		int y = -WurstClient.MC.font.lineHeight;
+		for(RenderLine line : lines)
+		{
+			if(line.textSource() != null)
+			{
+				targets.add(new LineClickTarget(line.textSource(),
+					drawX + HORIZONTAL_PADDING * chatScale,
+					drawY + y * chatScale, chatScale));
+			}
+			y -= WurstClient.MC.font.lineHeight + LINE_SPACING;
+		}
+		
+		if(wurstPanel)
+			lastWurstClickTargets = targets;
+		else
+			lastMainClickTargets = targets;
+	}
+	
+	private void handleLinkClicks(GuiGraphicsExtractor context, float chatScale)
+	{
+		Window window = WurstClient.MC.getWindow();
+		if(window == null)
+			return;
+		
+		boolean leftDown = SdlUtils.getMouseButtonState(
+			InputConstants.MOUSE_BUTTON_LEFT) == InputConstants.PRESS;
+		if(!leftDown)
+		{
+			lastLeftMouseDown = false;
+			return;
+		}
+		
+		if(lastLeftMouseDown || dragging)
+			return;
+		
+		lastLeftMouseDown = true;
+		Style style = getClickableStyleAt(context, chatScale);
+		if(style == null || style.getClickEvent() == null)
+			return;
+		
+		handleClickEvent(style.getClickEvent());
+	}
+	
+	private void handleClickEvent(ClickEvent clickEvent)
+	{
+		if(clickEvent instanceof ClickEvent.OpenUrl openUrl
+			&& WurstClient.MC.screen != null)
+		{
+			ConfirmLinkScreen.confirmLinkNow(WurstClient.MC.screen,
+				openUrl.uri(), false);
+			return;
+		}
+		
+		if(clickEvent instanceof ClickEvent.RunCommand runCommand)
+		{
+			runClickedCommand(runCommand.command());
+		}
+	}
+	
+	private void runClickedCommand(String command)
+	{
+		if(command == null || command.isBlank())
+			return;
+		
+		String trimmed = command.trim();
+		if(trimmed.startsWith("."))
+		{
+			WurstClient.INSTANCE.getCmdProcessor()
+				.process(trimmed.substring(1));
+			return;
+		}
+		
+		if(WurstClient.MC.getConnection() != null)
+			WurstClient.MC.getConnection().sendCommand(trimmed);
+	}
+	
+	private boolean hasClickableAt(GuiGraphicsExtractor context,
+		float chatScale)
+	{
+		Style style = getClickableStyleAt(context, chatScale);
+		return style != null && style.getClickEvent() != null;
+	}
+	
+	private Style getClickableStyleAt(GuiGraphicsExtractor context,
+		float chatScale)
+	{
+		if(!(WurstClient.MC.screen instanceof ChatScreen) && !tabHeldForOverlay)
+			return null;
+		
+		double mouseX = getScaledMouseX(context);
+		double mouseY = getScaledMouseY(context);
+		Style main = getClickableStyleAt(lastMainClickTargets, mouseX, mouseY);
+		if(main != null && main.getClickEvent() != null)
+			return main;
+		
+		return getClickableStyleAt(lastWurstClickTargets, mouseX, mouseY);
+	}
+	
+	private Style getClickableStyleAt(List<LineClickTarget> targets,
+		double mouseX, double mouseY)
+	{
+		for(LineClickTarget target : targets)
+		{
+			double lineHeight = WurstClient.MC.font.lineHeight * target.scale();
+			if(mouseY < target.y() || mouseY > target.y() + lineHeight)
+				continue;
+			
+			int localX =
+				(int)Math.floor((mouseX - target.x()) / target.scale());
+			if(localX < 0)
+				continue;
+			
+			return styleAtWidth(target.text(), localX);
+		}
+		
+		return null;
+	}
+	
+	private Style styleAtWidth(FormattedText text, int x)
+	{
+		if(text == null)
+			return null;
+		
+		Style[] result = {null};
+		int[] width = {0};
+		text.visit((style, string) -> {
+			if(result[0] != null || string == null || string.isEmpty())
+				return java.util.Optional.empty();
+			
+			for(int i = 1; i <= string.length(); i++)
+			{
+				int nextWidth =
+					WurstClient.MC.font.width(string.substring(0, i));
+				if(width[0] + nextWidth > x)
+				{
+					result[0] = style;
+					break;
+				}
+			}
+			
+			width[0] += WurstClient.MC.font.width(string);
+			return java.util.Optional.empty();
+		}, Style.EMPTY);
+		return result[0];
+	}
+	
+	private void updateHoverBounds(GuiGraphicsExtractor context, int x, int y,
+		float width, float height, int wurstY, float wurstWidth,
+		float wurstHeight, boolean hasWurstPanel)
+	{
+		lastGuiWidth = context.guiWidth();
+		lastGuiHeight = context.guiHeight();
+		
+		if(height > 0 && y != Integer.MIN_VALUE)
+		{
+			lastMainX1 = x;
+			lastMainY1 = (int)(y - height);
+			lastMainX2 = (int)(x + width);
+			lastMainY2 = y;
+		}
+		hoveredMainPanel = isMouseOverPanel(context, lastMainX1, lastMainY1,
+			lastMainX2, lastMainY2);
+		
+		if(hasWurstPanel && wurstHeight > 0)
+		{
+			lastWurstX1 = x;
+			lastWurstY1 = (int)(wurstY - wurstHeight);
+			lastWurstX2 = (int)(x + wurstWidth);
+			lastWurstY2 = wurstY;
+		}
+		hoveredWurstPanel = hasWurstPanel && isMouseOverPanel(context,
+			lastWurstX1, lastWurstY1, lastWurstX2, lastWurstY2);
+	}
+	
+	private void clearHoverState()
+	{
+		hoveredMainPanel = false;
+		hoveredWurstPanel = false;
+	}
+	
+	private boolean isMouseOverPanelNow(int x1, int y1, int x2, int y2)
+	{
+		Window window = WurstClient.MC.getWindow();
+		if(window == null || lastGuiWidth <= 0 || lastGuiHeight <= 0)
+			return false;
+		
+		double mouseX = WurstClient.MC.mouseHandler.xpos() * lastGuiWidth
+			/ window.getScreenWidth();
+		double mouseY = WurstClient.MC.mouseHandler.ypos() * lastGuiHeight
+			/ window.getScreenHeight();
+		return mouseX >= x1 && mouseX <= x2 && mouseY >= y1 && mouseY <= y2;
+	}
+	
+	private static boolean isMouseOverPanel(GuiGraphicsExtractor context,
+		int x1, int y1, int x2, int y2)
+	{
+		double mouseX = getScaledMouseX(context);
+		double mouseY = getScaledMouseY(context);
+		return mouseX >= x1 && mouseX <= x2 && mouseY >= y1 && mouseY <= y2;
+	}
+	
+	private void handleHoldTabOpensChat(ClientChatOverlayHack hack)
+	{
+		if(WurstClient.MC == null)
+			return;
+		
+		if(!hack.shouldHoldTabOpenChat())
+		{
+			tabHeldForOverlay = false;
+			return;
+		}
+		
+		Window window = WurstClient.MC.getWindow();
+		if(window == null)
+			return;
+		
+		boolean tabDown = SdlUtils
+			.getKeyState(InputConstants.KEY_TAB) == InputConstants.PRESS;
+		
+		tabHeldForOverlay = tabDown;
+	}
+	
+	public boolean isTabHeldForOverlay()
+	{
+		return tabHeldForOverlay;
+	}
+	
+	private record Entry(Component component, long timestamp)
+	{}
+	
+	private record WrappedLine(FormattedCharSequence sequence,
+		FormattedText text)
+	{}
+	
+	private record RenderLine(FormattedCharSequence text, int alpha,
+		FormattedText textSource)
+	{}
+	
+	private record LineClickTarget(FormattedText text, double x, double y,
+		float scale)
+	{}
+	
+	private record ChatDelimiter(int index, boolean trusted)
+	{}
+	
+	private record SenderSpan(int start, int end, String name,
+		boolean trustedChatDelimiter)
+	{}
+	
+	private record NormalizedPlayerChat(String name, String message)
+	{}
+}

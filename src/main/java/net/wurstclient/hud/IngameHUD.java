@@ -18,6 +18,7 @@ import net.wurstclient.events.GUIRenderListener;
 import net.wurstclient.hack.HackList;
 import net.wurstclient.hacks.itemhandler.ItemHandlerHud;
 import net.wurstclient.other_features.RecordingModeOtf;
+import net.wurstclient.util.HackPerformanceOverlay;
 
 public final class IngameHUD implements GUIRenderListener
 {
@@ -82,6 +83,8 @@ public final class IngameHUD implements GUIRenderListener
 		elytraInfoHud.renderElytraPitchStatus(context);
 		gameStatsHud.render(context);
 		itemHandlerHud.render(context, partialTicks);
+		ClientMessageOverlay.getInstance().render(context);
+		HackPerformanceOverlay.getInstance().render(context);
 		
 		Screen screen = WurstClient.MC.screen;
 		if(!(screen instanceof ChatScreen)

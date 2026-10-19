@@ -17,9 +17,11 @@ import net.wurstclient.commands.*;
 
 public final class CmdList
 {
+	public final AboveGroundCmd aboveGroundCmd = new AboveGroundCmd();
 	public final AddAltCmd addAltCmd = new AddAltCmd();
 	public final AnnoyCmd annoyCmd = new AnnoyCmd();
 	public final AuthorCmd authorCmd = new AuthorCmd();
+	public final AutoBuildCmd autoBuildCmd = new AutoBuildCmd();
 	public final AutoFlyCmd autoFlyCmd = new AutoFlyCmd();
 	public final BindCmd bindCmd = new BindCmd();
 	public final BindsCmd bindsCmd = new BindsCmd();
@@ -57,14 +59,18 @@ public final class CmdList
 	public final MobSearchCmd mobSearchCmd = new MobSearchCmd();
 	public final ModifyCmd modifyCmd = new ModifyCmd();
 	public final NBTEditorCmd nBTEditorCmd = new NBTEditorCmd();
+	public final NecoCmd necoCmd = new NecoCmd();
 	public final NoGoZoneCmd noGoZoneCmd = new NoGoZoneCmd();
+	public final PanicCmd panicCmd = new PanicCmd();
 	public final PathCmd pathCmd = new PathCmd();
 	public final PlayerMuteCmd playerMuteCmd = new PlayerMuteCmd();
 	public final PotionCmd potionCmd = new PotionCmd();
+	public final PresetCmd presetCmd = new PresetCmd();
 	public final ProtectCmd protectCmd = new ProtectCmd();
 	public final RenameCmd renameCmd = new RenameCmd();
 	public final RepairCmd repairCmd = new RepairCmd();
 	public final RvCmd rvCmd = new RvCmd();
+	public final SearchCmd searchCmd = new SearchCmd();
 	public final SignHistoryCmd signHistoryCmd = new SignHistoryCmd();
 	public final SvCmd svCmd = new SvCmd();
 	public final SayCmd sayCmd = new SayCmd();

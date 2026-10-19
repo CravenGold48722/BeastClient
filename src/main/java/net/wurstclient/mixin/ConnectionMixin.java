@@ -22,6 +22,7 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import net.minecraft.network.Connection;
 import net.minecraft.network.protocol.Packet;
 import net.wurstclient.WurstClient;
+import net.wurstclient.hacks.NbtFilterHack;
 import net.wurstclient.util.PacketOrder;
 import net.wurstclient.event.EventManager;
 import net.wurstclient.events.ConnectionPacketOutputListener.ConnectionPacketOutputEvent;
@@ -68,6 +69,23 @@ public abstract class ConnectionMixin
 		WurstClient wurst = WurstClient.INSTANCE;
 		if(!wurst.isEnabled() && wurst.getOtfs() != null)
 			wurst.getOtfs().vanillaSpoofOtf.onSentConnectionPacket(event);
+			
+		// PacketFirewall's vanilla-only mode (ported from the CevAPI fork);
+		// a no-op while it's off
+		if(wurst.getOtfs() != null)
+		{
+			Packet<?> allowed =
+				wurst.getOtfs().packetFirewallOtf.enforceVanillaOnly(packet,
+					event.getPacket(), event.isCancelled());
+			if(allowed == null)
+			{
+				event.cancel();
+				return event.getPacket();
+			}
+			
+			if(allowed != event.getPacket())
+				event.setPacket(allowed);
+		}
 		
 		// always, so slot changes stay in vanilla order (see PacketOrder)
 		PacketOrder.onSent(event.getPacket());
@@ -83,13 +101,18 @@ public abstract class ConnectionMixin
 		@Nullable ChannelFutureListener callback, CallbackInfo ci)
 	{
 		ConnectionPacketOutputEvent event = getEvent(packet);
-		if(event == null)
-			return;
+		if(event != null)
+		{
+			events.remove(event);
+			if(event.isCancelled())
+			{
+				ci.cancel();
+				return;
+			}
+		}
 		
-		if(event.isCancelled())
+		if(NbtFilterHack.shouldCancelOutgoingPacket(packet))
 			ci.cancel();
-		
-		events.remove(event);
 	}
 	
 	private ConnectionPacketOutputEvent getEvent(Packet<?> packet)

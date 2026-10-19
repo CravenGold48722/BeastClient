@@ -17,14 +17,27 @@ import net.wurstclient.other_features.*;
 
 public final class OtfList
 {
+	public final AboveGroundFilterOtf aboveGroundFilterOtf =
+		new AboveGroundFilterOtf();
+	public final AntiFingerprintOtf antiFingerprintOtf =
+		new AntiFingerprintOtf();
 	public final ChangelogOtf changelogOtf = new ChangelogOtf();
 	public final CleanUpOtf cleanUpOtf = new CleanUpOtf();
+	public final CommandPrefixOtf commandPrefixOtf = new CommandPrefixOtf();
+	public final ConnectionLogOverlayOtf connectionLogOverlayOtf =
+		new ConnectionLogOverlayOtf();
 	public final DisableOtf disableOtf = new DisableOtf();
+	public final DiscordRpcOtf discordRpcOtf = new DiscordRpcOtf();
 	public final HackListOtf hackListOtf = new HackListOtf();
 	public final KeybindManagerOtf keybindManagerOtf = new KeybindManagerOtf();
 	public final LastServerOtf lastServerOtf = new LastServerOtf();
 	public final NoChatReportsOtf noChatReportsOtf = new NoChatReportsOtf();
 	public final NoTelemetryOtf noTelemetryOtf = new NoTelemetryOtf();
+	public final PacketFirewallOtf packetFirewallOtf = new PacketFirewallOtf();
+	public final PacketToolsOtf packetToolsOtf = new PacketToolsOtf();
+	public final PerformanceOverlayOtf performanceOverlayOtf =
+		new PerformanceOverlayOtf();
+	public final PresetManagerOtf presetManagerOtf = new PresetManagerOtf();
 	public final RecordingModeOtf recordingModeOtf = new RecordingModeOtf();
 	public final ReconnectOtf reconnectOtf = new ReconnectOtf();
 	public final ServerFinderOtf serverFinderOtf = new ServerFinderOtf();

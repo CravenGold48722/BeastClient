@@ -44,6 +44,12 @@ import net.wurstclient.util.chunk.ChunkSearcherCoordinator;
 public final class SearchHack extends Hack
 	implements UpdateListener, RenderListener
 {
+	/** For .search: the block to look for. */
+	public void setBlock(net.minecraft.world.level.block.Block newBlock)
+	{
+		block.setBlock(newBlock);
+	}
+	
 	private final BlockSetting block = new BlockSetting("Block",
 		"The type of block to search for.", "minecraft:diamond_ore", false);
 	private Block lastBlock;

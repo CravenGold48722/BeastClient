@@ -35,6 +35,27 @@ public final class AutoBuildTemplate
 		this.blocks = blocks;
 	}
 	
+	private AutoBuildTemplate(String name, LinkedHashSet<BlockData> blocks)
+	{
+		path = null;
+		this.name = name;
+		this.blocks = blocks;
+	}
+	
+	/**
+	 * A template that isn't a file (.autobuild "text"): positions only, built
+	 * from whatever blocks are in the hotbar.
+	 */
+	public static AutoBuildTemplate createGenerated(String name,
+		LinkedHashSet<int[]> blocks)
+	{
+		LinkedHashSet<BlockData> generated = new LinkedHashSet<>();
+		for(int[] pos : blocks)
+			generated.add(new BlockData(pos.clone(), ""));
+		
+		return new AutoBuildTemplate(name, generated);
+	}
+	
 	public static AutoBuildTemplate load(Path path)
 		throws IOException, JsonException
 	{
@@ -127,7 +148,7 @@ public final class AutoBuildTemplate
 	
 	public boolean isSelected(FileSetting setting)
 	{
-		return path.equals(setting.getSelectedFile());
+		return path != null && path.equals(setting.getSelectedFile());
 	}
 	
 	public String getName()

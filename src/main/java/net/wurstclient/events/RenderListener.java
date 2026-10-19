@@ -13,6 +13,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 
 import net.wurstclient.event.Event;
 import net.wurstclient.event.Listener;
+import net.wurstclient.util.HackPerformanceTracker;
 
 public interface RenderListener extends Listener
 {
@@ -32,8 +33,29 @@ public interface RenderListener extends Listener
 		@Override
 		public void fire(ArrayList<RenderListener> listeners)
 		{
+			// PerformanceOverlay (ported from the CevAPI fork): time each hack
+			// only while the overlay is on
+			if(!HackPerformanceTracker.shouldProfile())
+			{
+				for(RenderListener listener : listeners)
+					listener.onRender(matrixStack, partialTicks);
+				return;
+			}
+			
 			for(RenderListener listener : listeners)
-				listener.onRender(matrixStack, partialTicks);
+			{
+				long start = System.nanoTime();
+				try
+				{
+					listener.onRender(matrixStack, partialTicks);
+					
+				}finally
+				{
+					HackPerformanceTracker.record(listener,
+						HackPerformanceTracker.Phase.RENDER,
+						System.nanoTime() - start);
+				}
+			}
 		}
 		
 		@Override

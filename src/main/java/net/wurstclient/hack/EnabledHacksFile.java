@@ -116,12 +116,21 @@ public final class EnabledHacksFile
 	
 	private JsonArray createJson(HackList hax)
 	{
+		// hacks PacketFirewall paused for now still count as on
 		Stream<Hack> enabledHax = hax.getAllHax().stream()
-			.filter(Hack::isEnabled).filter(Hack::isStateSaved);
+			.filter(hack -> hack.isEnabled() || isPausedByFirewall(hack))
+			.filter(Hack::isStateSaved);
 		
 		JsonArray json = new JsonArray();
 		enabledHax.map(Hack::getName).forEach(name -> json.add(name));
 		
 		return json;
+	}
+	
+	private static boolean isPausedByFirewall(Hack hack)
+	{
+		var otfs = net.wurstclient.WurstClient.INSTANCE.getOtfs();
+		return otfs != null
+			&& otfs.packetFirewallOtf.isTemporarilySuppressed(hack);
 	}
 }

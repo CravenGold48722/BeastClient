@@ -1,0 +1,1401 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.other_features;
+
+import java.io.IOException;
+import java.io.Writer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.UUID;
+import java.util.Base64;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.mojang.authlib.minecraft.report.AbuseReport;
+import com.mojang.logging.LogUtils;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.User;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ServerboundChatAckPacket;
+import net.minecraft.network.protocol.game.ServerboundChatSessionUpdatePacket;
+import net.minecraft.network.protocol.game.ServerboundContainerButtonClickPacket;
+import net.minecraft.network.protocol.game.ServerboundContainerClickPacket;
+import net.minecraft.network.protocol.game.ServerboundContainerClosePacket;
+import net.minecraft.network.protocol.game.ServerboundEditBookPacket;
+import net.minecraft.network.protocol.game.ServerboundSignUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundMapItemDataPacket;
+import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
+import net.wurstclient.Category;
+import net.wurstclient.events.ConnectionPacketOutputListener;
+import net.wurstclient.events.ConnectionPacketOutputListener.ConnectionPacketOutputEvent;
+import net.wurstclient.events.PacketInputListener;
+import net.wurstclient.events.PacketOutputListener;
+import net.wurstclient.events.UpdateListener;
+import net.wurstclient.other_feature.OtherFeature;
+import net.wurstclient.other_features.packettools.EntityLifecycleTracker;
+import net.wurstclient.other_features.packettools.PacketDecodeCoverage;
+import net.wurstclient.other_features.packettools.PacketDumper;
+import net.wurstclient.other_features.packettools.PacketFilter;
+import net.minecraft.client.multiplayer.chat.report.ReportType;
+import net.wurstclient.settings.ButtonSetting;
+import net.wurstclient.settings.CheckboxSetting;
+import net.wurstclient.settings.SliderSetting;
+import net.wurstclient.settings.SliderSetting.ValueDisplay;
+import net.wurstclient.util.ChatUtils;
+import net.wurstclient.util.json.JsonUtils;
+import org.slf4j.Logger;
+
+public final class PacketToolsOtf extends OtherFeature
+	implements PacketInputListener, PacketOutputListener,
+	ConnectionPacketOutputListener, UpdateListener
+{
+	private static final Logger LOGGER = LogUtils.getLogger();
+	private static final Gson VERBOSE_GSON = new GsonBuilder()
+		.disableHtmlEscaping().serializeSpecialFloatingPointValues().create();
+	private static final DateTimeFormatter ISO_FORMAT =
+		DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS");
+	private static final DateTimeFormatter TIME_FORMAT =
+		DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+	private static final DateTimeFormatter FILE_TIME_FORMAT =
+		DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
+	private static final Path CONFIG_FILE = FabricLoader.getInstance()
+		.getConfigDir().resolve("wurst-packet-tools.json");
+	private static final Path LOG_DIR =
+		FabricLoader.getInstance().getConfigDir().resolve("packet-logger");
+	
+	private final CheckboxSetting loggingEnabled =
+		new CheckboxSetting("Logging enabled", false);
+	private final CheckboxSetting denyEnabled =
+		new CheckboxSetting("Deny enabled", false);
+	private final CheckboxSetting delayEnabled =
+		new CheckboxSetting("Delay enabled", false);
+	private final CheckboxSetting fileOutput =
+		new CheckboxSetting("Log to file", false);
+	private final CheckboxSetting showUnknownPackets =
+		new CheckboxSetting("Show unknown packets", false);
+	private final SliderSetting delayTicks = new SliderSetting("Delay ticks",
+		"How many ticks to hold packets selected for delay.", 5, 0, 9999, 1,
+		ValueDisplay.INTEGER);
+	private final ButtonSetting openUiButton =
+		new ButtonSetting("Open Packet Tools UI", this::openScreen);
+	
+	// ---- Verbose mode ----
+	private final CheckboxSetting verboseEnabled = new CheckboxSetting(
+		"Verbose logging",
+		"When enabled, packets selected for logging are dumped with\n"
+			+ "full per-field detail (JSONL + optional human-readable)\n"
+			+ "instead of a simple one-line toString().\n"
+			+ "Honors the same per-packet Log selections in the UI.",
+		false);
+	private final CheckboxSetting monitorUdp =
+		new CheckboxSetting("Monitor UDP",
+			"Monitor UDP traffic observed through optional client protocol\n"
+				+ "integrations and write it to a separate UDP JSONL log.",
+			false);
+	private final CheckboxSetting verboseOutsideGamePackets =
+		new CheckboxSetting("Monitor outside game",
+			"Also dump packets while the client is still connecting or\n"
+				+ "before the world loads, and log chat report submissions.\n"
+				+ "This logs every outside-game packet verbosely, even if it\n"
+				+ "isn't selected in the UI.",
+			false);
+	private final CheckboxSetting verboseHumanReadable =
+		new CheckboxSetting("Verbose human-readable",
+			"Also write human-readable logs alongside JSONL.", false);
+	private final SliderSetting verboseFlushInterval =
+		new SliderSetting("Verbose flush ticks",
+			"How often to flush the verbose buffer to disk (in ticks).\n"
+				+ "Higher values reduce disk I/O but use more memory.",
+			20, 1, 200, 1, ValueDisplay.INTEGER);
+	private final ButtonSetting showCoverageReport =
+		new ButtonSetting("Show coverage report", this::printCoverageReport);
+	private final ButtonSetting showEntitySummary =
+		new ButtonSetting("Show entity summary", this::printEntitySummary);
+	
+	private final PacketDecodeCoverage decodeCoverage =
+		new PacketDecodeCoverage();
+	private final EntityLifecycleTracker lifecycleTracker =
+		new EntityLifecycleTracker();
+	private final PacketFilter packetFilter = new PacketFilter();
+	private PacketDumper packetDumper;
+	
+	private Path currentVerboseJsonlFile;
+	private Path currentVerboseHumanFile;
+	private Path currentUdpJsonlFile;
+	
+	// Batched write buffers – flushed in onUpdate() to avoid per-packet disk
+	// I/O
+	private final ArrayList<String> verboseJsonlBuffer = new ArrayList<>(512);
+	private final ArrayList<String> verboseHumanBuffer = new ArrayList<>(512);
+	private int verboseFlushTickCounter;
+	private final ArrayList<String> udpJsonlBuffer = new ArrayList<>(512);
+	private static final int MAX_UDP_BUFFERED_RECORDS = 4096;
+	private boolean lastUdpMonitoringState;
+	private boolean udpBufferOverflowReported;
+	
+	private final Set<String> logS2C = new LinkedHashSet<>();
+	private final Set<String> logC2S = new LinkedHashSet<>();
+	private final Set<String> denyS2C = new LinkedHashSet<>();
+	private final Set<String> denyC2S = new LinkedHashSet<>();
+	private final Set<String> delayS2C = new LinkedHashSet<>();
+	private final Set<String> delayC2S = new LinkedHashSet<>();
+	
+	private final ArrayDeque<QueuedPacket> delayedIncoming = new ArrayDeque<>();
+	private final ArrayDeque<QueuedPacket> delayedOutgoing = new ArrayDeque<>();
+	private final Set<Packet<?>> bypassOutput =
+		Collections.newSetFromMap(new IdentityHashMap<>());
+	
+	private final TreeSet<String> discoveredS2C =
+		new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+	private final TreeSet<String> discoveredC2S =
+		new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+	private final TreeSet<String> discoveredUnknownS2C =
+		new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+	private final TreeSet<String> discoveredUnknownC2S =
+		new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+	
+	private boolean lastDelayEnabledState;
+	private boolean lastLoggingState;
+	private boolean lastDenyEnabledState;
+	private Path currentLogFile;
+	
+	public PacketToolsOtf()
+	{
+		super("AdvancedPacketTool",
+			"description.wurst.other_feature.packet_tools");
+		
+		addSetting(loggingEnabled);
+		addSetting(denyEnabled);
+		addSetting(delayEnabled);
+		addSetting(fileOutput);
+		addSetting(showUnknownPackets);
+		addSetting(delayTicks);
+		addSetting(openUiButton);
+		addSetting(verboseEnabled);
+		addSetting(monitorUdp);
+		addSetting(verboseOutsideGamePackets);
+		addSetting(verboseHumanReadable);
+		addSetting(verboseFlushInterval);
+		addSetting(showCoverageReport);
+		addSetting(showEntitySummary);
+		
+		loadSelectionConfig();
+		
+		lastDelayEnabledState = delayEnabled.isChecked();
+		lastLoggingState = loggingEnabled.isChecked();
+		lastDenyEnabledState = denyEnabled.isChecked();
+		lastUdpMonitoringState = monitorUdp.isChecked();
+		
+		EVENTS.add(PacketInputListener.class, this);
+		EVENTS.add(PacketOutputListener.class, this);
+		EVENTS.add(ConnectionPacketOutputListener.class, this);
+		EVENTS.add(UpdateListener.class, this);
+	}
+	
+	public String getHackListName()
+	{
+		ArrayList<String> modes = new ArrayList<>(3);
+		if(loggingEnabled.isChecked())
+			modes.add("Logging");
+		if(denyEnabled.isChecked())
+			modes.add("Deny");
+		if(delayEnabled.isChecked())
+			modes.add("Delay");
+		if(modes.isEmpty())
+			return getName();
+		return getName() + " [" + String.join(", ", modes) + "]";
+	}
+	
+	public boolean hasHackListStatus()
+	{
+		return loggingEnabled.isChecked() || denyEnabled.isChecked()
+			|| delayEnabled.isChecked();
+	}
+	
+	@Override
+	public Category getCategory()
+	{
+		return Category.OTHER;
+	}
+	
+	@Override
+	public void onReceivedPacket(PacketInputEvent event)
+	{
+		Packet<?> packet = event.getPacket();
+		String name = net.wurstclient.other_features.packettools.PacketCatalog
+			.formatPacketName(packet);
+		discoveredS2C.add(name);
+		recordUnknown(packet.getClass().getSimpleName(), PacketDirection.S2C);
+		
+		if(shouldVerboseOutsideGame())
+		{
+			logVerbose(packet, "OUTSIDE-S2C");
+			flushVerboseBuffers();
+		}else if(loggingEnabled.isChecked() && logS2C.contains(name))
+			logPacket(name, "S2C", packet);
+		
+		if(denyEnabled.isChecked() && denyS2C.contains(name))
+		{
+			event.cancel();
+			return;
+		}
+		
+		if(delayEnabled.isChecked() && delayTicks.getValueI() > 0
+			&& delayS2C.contains(name))
+		{
+			event.cancel();
+			delayedIncoming.addLast(new QueuedPacket(packet,
+				getCurrentTick() + delayTicks.getValueI()));
+		}
+	}
+	
+	@Override
+	public void onSentPacket(PacketOutputEvent event)
+	{
+		Packet<?> packet = event.getPacket();
+		if(bypassOutput.remove(packet))
+			return;
+		
+		String name = net.wurstclient.other_features.packettools.PacketCatalog
+			.formatPacketName(packet);
+		discoveredC2S.add(name);
+		recordUnknown(packet.getClass().getSimpleName(), PacketDirection.C2S);
+		
+		if(verboseEnabled.isChecked() && shouldAlwaysVerbose(packet))
+		{
+			logVerbose(packet, "C2S", java.util.List.of());
+			return;
+		}
+		
+		if(shouldVerboseOutsideGame())
+		{
+			logVerbose(packet, "OUTSIDE-C2S", java.util.List.of());
+			flushVerboseBuffers();
+		}else if(loggingEnabled.isChecked() && logC2S.contains(name))
+			logPacket(name, "C2S", packet);
+		
+		if(denyEnabled.isChecked() && denyC2S.contains(name))
+		{
+			event.cancel();
+			return;
+		}
+		
+		if(delayEnabled.isChecked() && delayTicks.getValueI() > 0
+			&& delayC2S.contains(name))
+		{
+			event.cancel();
+			delayedOutgoing.addLast(new QueuedPacket(packet,
+				getCurrentTick() + delayTicks.getValueI()));
+		}
+	}
+	
+	@Override
+	public void onSentConnectionPacket(ConnectionPacketOutputEvent event)
+	{
+		if(!shouldVerboseExternalMonitoring())
+			return;
+		
+		Packet<?> packet = event.getPacket();
+		String name = net.wurstclient.other_features.packettools.PacketCatalog
+			.formatPacketName(packet);
+		discoveredC2S.add(name);
+		recordUnknown(packet.getClass().getSimpleName(), PacketDirection.C2S);
+		logVerbose(packet, "OUTSIDE-C2S", java.util.List.of());
+		if(isOutsideGame())
+			flushVerboseBuffers();
+	}
+	
+	@Override
+	public void onUpdate()
+	{
+		boolean loggingState = loggingEnabled.isChecked();
+		boolean denyState = denyEnabled.isChecked();
+		boolean delayState = delayEnabled.isChecked();
+		boolean previousLoggingState = lastLoggingState;
+		boolean previousDelayState = lastDelayEnabledState;
+		boolean previousUdpMonitoringState = lastUdpMonitoringState;
+		boolean udpMonitoringState = monitorUdp.isChecked();
+		announceToggleChange("Logging", loggingState, previousLoggingState);
+		announceToggleChange("Blocking", denyState, lastDenyEnabledState);
+		announceToggleChange("Delaying", delayState, previousDelayState);
+		lastLoggingState = loggingState;
+		lastDenyEnabledState = denyState;
+		lastDelayEnabledState = delayState;
+		lastUdpMonitoringState = udpMonitoringState;
+		
+		boolean delayActive = delayState && delayTicks.getValueI() > 0;
+		if(!delayActive && previousDelayState)
+			flushQueues(true);
+		else if(delayActive)
+			flushQueues(false);
+		
+		if(previousLoggingState && !loggingState)
+		{
+			currentLogFile = null;
+			discardVerboseBuffers();
+			currentVerboseJsonlFile = null;
+			currentVerboseHumanFile = null;
+		}
+		if(previousUdpMonitoringState && !udpMonitoringState)
+		{
+			flushUdpBuffer();
+			currentUdpJsonlFile = null;
+			udpBufferOverflowReported = false;
+		}
+		if(udpMonitoringState)
+			flushUdpBuffer();
+		
+		// Tick entity lifecycle tracker
+		if(verboseEnabled.isChecked() && loggingState)
+		{
+			lifecycleTracker.tick();
+			
+			// Flush verbose buffers periodically
+			int flushInterval = Math.max(1, verboseFlushInterval.getValueI());
+			verboseFlushTickCounter++;
+			if(verboseFlushTickCounter >= flushInterval)
+			{
+				verboseFlushTickCounter = 0;
+				flushVerboseBuffers();
+			}
+		}else if(!verboseEnabled.isChecked() && lastVerboseState
+			&& loggingState)
+		{
+			// Verbose just turned off — flush remaining and clear refs
+			flushVerboseBuffers();
+			currentVerboseJsonlFile = null;
+			currentVerboseHumanFile = null;
+		}
+		lastVerboseState = verboseEnabled.isChecked();
+	}
+	
+	private void announceToggleChange(String name, boolean current,
+		boolean previous)
+	{
+		if(current == previous)
+			return;
+		
+		ChatUtils.message(
+			"[PacketTools] " + name + (current ? " activated." : " disabled."));
+	}
+	
+	private boolean lastVerboseState;
+	
+	public void openScreen()
+	{
+		if(MC == null || MC.gui == null)
+			return;
+		
+		MC.setScreen(
+			new net.wurstclient.other_features.packettools.PacketToolsScreen(
+				MC.screen, this));
+	}
+	
+	public synchronized void saveSelectionConfig()
+	{
+		JsonObject root = new JsonObject();
+		root.add("logS2C", toJsonArray(logS2C));
+		root.add("logC2S", toJsonArray(logC2S));
+		root.add("denyS2C", toJsonArray(denyS2C));
+		root.add("denyC2S", toJsonArray(denyC2S));
+		root.add("delayS2C", toJsonArray(delayS2C));
+		root.add("delayC2S", toJsonArray(delayC2S));
+		
+		try
+		{
+			Files.createDirectories(CONFIG_FILE.getParent());
+			try(Writer writer = Files.newBufferedWriter(CONFIG_FILE))
+			{
+				JsonUtils.PRETTY_GSON.toJson(root, writer);
+			}
+			
+		}catch(IOException e)
+		{
+			LOGGER.warn("Failed to save packet tool config", e);
+		}
+	}
+	
+	private synchronized void loadSelectionConfig()
+	{
+		if(!Files.exists(CONFIG_FILE))
+			return;
+		
+		try
+		{
+			JsonObject root =
+				JsonParser.parseReader(Files.newBufferedReader(CONFIG_FILE))
+					.getAsJsonObject();
+			loadSet(root, "logS2C", logS2C);
+			loadSet(root, "logC2S", logC2S);
+			loadSet(root, "denyS2C", denyS2C);
+			loadSet(root, "denyC2S", denyC2S);
+			loadSet(root, "delayS2C", delayS2C);
+			loadSet(root, "delayC2S", delayC2S);
+			
+		}catch(Exception e)
+		{
+			LOGGER.warn("Failed to load packet tool config", e);
+		}
+	}
+	
+	private static void loadSet(JsonObject root, String key, Set<String> set)
+	{
+		set.clear();
+		if(!root.has(key) || !root.get(key).isJsonArray())
+			return;
+		
+		root.getAsJsonArray(key).forEach(e -> {
+			if(e.isJsonPrimitive() && e.getAsJsonPrimitive().isString())
+			{
+				String name = e.getAsString().trim();
+				if(!name.isEmpty())
+					set.add(name);
+			}
+		});
+	}
+	
+	private static JsonArray toJsonArray(Set<String> values)
+	{
+		JsonArray array = new JsonArray();
+		for(String value : values)
+			array.add(value);
+		return array;
+	}
+	
+	private static boolean isUsablePacketName(String name)
+	{
+		if(name == null || name.isBlank())
+			return false;
+		
+		String lower = name.toLowerCase();
+		return !lower.startsWith("class_");
+	}
+	
+	public Set<String> getLogSet(PacketDirection direction)
+	{
+		return direction == PacketDirection.S2C ? logS2C : logC2S;
+	}
+	
+	public Set<String> getDenySet(PacketDirection direction)
+	{
+		return direction == PacketDirection.S2C ? denyS2C : denyC2S;
+	}
+	
+	public Set<String> getDelaySet(PacketDirection direction)
+	{
+		return direction == PacketDirection.S2C ? delayS2C : delayC2S;
+	}
+	
+	public List<String> getAvailablePackets(PacketDirection direction)
+	{
+		boolean includeUnknown = showUnknownPackets.isChecked();
+		Set<String> merged = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+		if(direction == PacketDirection.S2C)
+		{
+			merged
+				.addAll(net.wurstclient.other_features.packettools.PacketCatalog
+					.getS2CNames());
+			merged.addAll(discoveredS2C);
+			merged.addAll(logS2C);
+			merged.addAll(denyS2C);
+			merged.addAll(delayS2C);
+			if(includeUnknown)
+				merged.addAll(discoveredUnknownS2C);
+		}else
+		{
+			merged
+				.addAll(net.wurstclient.other_features.packettools.PacketCatalog
+					.getC2SNames());
+			merged.addAll(discoveredC2S);
+			merged.addAll(logC2S);
+			merged.addAll(denyC2S);
+			merged.addAll(delayC2S);
+			if(includeUnknown)
+				merged.addAll(discoveredUnknownC2S);
+		}
+		
+		ArrayList<String> list = new ArrayList<>();
+		for(String name : merged)
+		{
+			if(includeUnknown || isUsablePacketName(name))
+				list.add(name);
+		}
+		list.sort(Comparator.naturalOrder());
+		return list;
+	}
+	
+	private void recordUnknown(String className, PacketDirection direction)
+	{
+		if(!isUsablePacketName(className))
+		{
+			if(direction == PacketDirection.S2C)
+				discoveredUnknownS2C.add(className);
+			else
+				discoveredUnknownC2S.add(className);
+		}
+	}
+	
+	public CheckboxSetting getLoggingEnabledSetting()
+	{
+		return loggingEnabled;
+	}
+	
+	public CheckboxSetting getDenyEnabledSetting()
+	{
+		return denyEnabled;
+	}
+	
+	public CheckboxSetting getDelayEnabledSetting()
+	{
+		return delayEnabled;
+	}
+	
+	/**
+	 * Turns off packet delay and drops packets that were waiting for release
+	 * when the server connection ends.
+	 */
+	public void onDisconnected()
+	{
+		delayEnabled.setChecked(false);
+		lastDelayEnabledState = false;
+		delayedIncoming.clear();
+		delayedOutgoing.clear();
+		bypassOutput.clear();
+	}
+	
+	public CheckboxSetting getFileOutputSetting()
+	{
+		return fileOutput;
+	}
+	
+	public CheckboxSetting getShowUnknownPacketsSetting()
+	{
+		return showUnknownPackets;
+	}
+	
+	public SliderSetting getDelayTicksSetting()
+	{
+		return delayTicks;
+	}
+	
+	public void updateSelection(PacketMode mode, PacketDirection direction,
+		Set<String> selected)
+	{
+		Set<String> target = getSet(mode, direction);
+		target.clear();
+		target.addAll(selected);
+		saveSelectionConfig();
+	}
+	
+	public Set<String> getSelection(PacketMode mode, PacketDirection direction)
+	{
+		return new LinkedHashSet<>(getSet(mode, direction));
+	}
+	
+	private Set<String> getSet(PacketMode mode, PacketDirection direction)
+	{
+		Objects.requireNonNull(mode);
+		Objects.requireNonNull(direction);
+		
+		return switch(mode)
+		{
+			case LOG -> getLogSet(direction);
+			case DENY -> getDenySet(direction);
+			case DELAY -> getDelaySet(direction);
+		};
+	}
+	
+	private void flushQueues(boolean forceAll)
+	{
+		long now = getCurrentTick();
+		flushIncoming(now, forceAll);
+		flushOutgoing(now, forceAll);
+	}
+	
+	private void flushIncoming(long now, boolean forceAll)
+	{
+		if(delayedIncoming.isEmpty())
+			return;
+		
+		ClientPacketListener connection = MC.getConnection();
+		if(connection == null)
+		{
+			delayedIncoming.clear();
+			return;
+		}
+		
+		while(!delayedIncoming.isEmpty())
+		{
+			QueuedPacket queued = delayedIncoming.peekFirst();
+			if(!forceAll && queued.releaseTick > now)
+				break;
+			
+			delayedIncoming.removeFirst();
+			applyIncomingPacket(queued.packet);
+		}
+	}
+	
+	private void flushOutgoing(long now, boolean forceAll)
+	{
+		if(delayedOutgoing.isEmpty())
+			return;
+		
+		ClientPacketListener connection = MC.getConnection();
+		if(connection == null)
+		{
+			delayedOutgoing.clear();
+			return;
+		}
+		
+		while(!delayedOutgoing.isEmpty())
+		{
+			QueuedPacket queued = delayedOutgoing.peekFirst();
+			if(!forceAll && queued.releaseTick > now)
+				break;
+			
+			delayedOutgoing.removeFirst();
+			bypassOutput.add(queued.packet);
+			connection.send(queued.packet);
+		}
+	}
+	
+	private void applyIncomingPacket(Packet<?> packet)
+	{
+		ClientPacketListener connection = MC.getConnection();
+		if(connection == null)
+			return;
+		
+		@SuppressWarnings("unchecked")
+		Packet<ClientPacketListener> typed =
+			(Packet<ClientPacketListener>)packet;
+		typed.handle(connection);
+	}
+	
+	private void logPacket(String name, String direction, Packet<?> packet)
+	{
+		// If verbose is enabled, use the detailed JSONL dumper instead of
+		// the simple one-line toString() output.
+		if(verboseEnabled.isChecked())
+		{
+			logVerbose(packet, direction);
+			return;
+		}
+		
+		String data = String.valueOf(packet);
+		String timestamp = LocalDateTime.now().format(TIME_FORMAT);
+		String line =
+			"[" + timestamp + "] [" + direction + "] " + name + " " + data;
+		
+		if(fileOutput.isChecked())
+		{
+			appendToLogFile(line + System.lineSeparator());
+			return;
+		}
+		
+		if(MC.gui != null && MC.gui.getChat() != null)
+		{
+			MC.execute(() -> {
+				MutableComponent msg = Component.literal("[PacketTools] ")
+					.withColor(0x55FFFF).append(Component.literal(line));
+				MC.gui.getChat().addClientSystemMessage(msg);
+			});
+		}
+	}
+	
+	private void appendToLogFile(String line)
+	{
+		try
+		{
+			Path file = getCurrentLogFile();
+			Files.writeString(file, line, StandardOpenOption.CREATE,
+				StandardOpenOption.APPEND);
+			
+		}catch(IOException e)
+		{
+			ChatUtils.error("PacketTools: failed writing log file.");
+		}
+	}
+	
+	private Path getCurrentLogFile() throws IOException
+	{
+		if(currentLogFile != null)
+			return currentLogFile;
+		
+		Files.createDirectories(LOG_DIR);
+		String name =
+			"packets_" + LocalDateTime.now().format(FILE_TIME_FORMAT) + ".log";
+		currentLogFile = LOG_DIR.resolve(name);
+		return currentLogFile;
+	}
+	
+	// === UDP monitoring ===
+	
+	/**
+	 * Receives a passive UDP observation from an optional protocol integration.
+	 * This method is safe to call from a protocol's networking thread.
+	 */
+	public void logUdpDatagram(String direction, SocketAddress localAddress,
+		SocketAddress remoteAddress, int length, String socketClass,
+		String protocol, Boolean decoded, String payloadSha256)
+	{
+		if(!monitorUdp.isChecked())
+			return;
+		
+		Map<String, Object> record = new LinkedHashMap<>();
+		record.put("timestamp", LocalDateTime.now().format(ISO_FORMAT));
+		record.put("direction", direction);
+		record.put("transport", "UDP");
+		putSocketAddress(record, "local", localAddress);
+		putSocketAddress(record, "remote", remoteAddress);
+		record.put("length", length);
+		record.put("socketClass", socketClass);
+		record.put("thread", Thread.currentThread().getName());
+		record.put("protocol", protocol);
+		record.put("decoded", decoded);
+		if(payloadSha256 != null)
+			record.put("payloadSha256", payloadSha256);
+		enqueueUdpRecord(record);
+	}
+	
+	/**
+	 * Called only after Simple Voice Chat has decoded a UDP NetworkMessage. The
+	 * packet is inspected through its public 26.2 accessors; audio bytes are
+	 * deliberately never copied into the log.
+	 */
+	public void logSimpleVoiceChatPacket(Object packet,
+		SocketAddress localAddress, SocketAddress remoteAddress)
+	{
+		if(!monitorUdp.isChecked() || packet == null)
+			return;
+		
+		Map<String, Object> record = new LinkedHashMap<>();
+		record.put("timestamp", LocalDateTime.now().format(ISO_FORMAT));
+		record.put("direction", "S2C");
+		record.put("transport", "UDP");
+		record.put("protocol", "simple_voice_chat");
+		record.put("decoded", true);
+		record.put("class", packet.getClass().getName());
+		record.put("packetClass", packet.getClass().getSimpleName());
+		putSocketAddress(record, "local", localAddress);
+		putSocketAddress(record, "remote", remoteAddress);
+		record.put("thread", Thread.currentThread().getName());
+		
+		putAccessor(record, "senderUuid", packet, "getSender");
+		putAccessor(record, "channelUuid", packet, "getChannelId");
+		putAccessor(record, "sequenceNumber", packet, "getSequenceNumber");
+		putAccessor(record, "category", packet, "getCategory");
+		Object data = invokeAccessor(packet, "getData");
+		if(data instanceof byte[] bytes)
+			record.put("payloadLength", bytes.length);
+		
+		String simpleName = packet.getClass().getSimpleName();
+		if("PlayerSoundPacket".equals(simpleName))
+		{
+			putAccessor(record, "whispering", packet, "isWhispering");
+			putAccessor(record, "voiceDistance", packet, "getDistance");
+		}else if("LocationSoundPacket".equals(simpleName))
+		{
+			putAccessor(record, "voiceDistance", packet, "getDistance");
+			putLocation(record, invokeAccessor(packet, "getLocation"));
+		}
+		enqueueUdpRecord(record);
+	}
+	
+	private void enqueueUdpRecord(Map<String, Object> record)
+	{
+		String json = VERBOSE_GSON.toJson(record);
+		synchronized(udpJsonlBuffer)
+		{
+			if(udpJsonlBuffer.size() >= MAX_UDP_BUFFERED_RECORDS)
+			{
+				if(!udpBufferOverflowReported)
+				{
+					udpBufferOverflowReported = true;
+					LOGGER.warn(
+						"PacketTools UDP log buffer is full; dropping UDP records.");
+				}
+				return;
+			}
+			udpJsonlBuffer.add(json);
+		}
+	}
+	
+	private void flushUdpBuffer()
+	{
+		ArrayList<String> batch;
+		synchronized(udpJsonlBuffer)
+		{
+			if(udpJsonlBuffer.isEmpty())
+				return;
+			batch = new ArrayList<>(udpJsonlBuffer);
+			udpJsonlBuffer.clear();
+		}
+		try
+		{
+			Path file = getCurrentUdpJsonlFile();
+			Files.writeString(file, String.join("\n", batch) + "\n",
+				StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+		}catch(IOException e)
+		{
+			LOGGER.warn("PacketTools: failed writing UDP JSONL file.", e);
+		}
+	}
+	
+	private Path getCurrentUdpJsonlFile() throws IOException
+	{
+		if(currentUdpJsonlFile != null)
+			return currentUdpJsonlFile;
+		Files.createDirectories(LOG_DIR);
+		String name =
+			"udp_" + LocalDateTime.now().format(FILE_TIME_FORMAT) + ".jsonl";
+		currentUdpJsonlFile = LOG_DIR.resolve(name);
+		return currentUdpJsonlFile;
+	}
+	
+	private static void putSocketAddress(Map<String, Object> record,
+		String prefix, SocketAddress address)
+	{
+		if(address instanceof InetSocketAddress inet)
+		{
+			record.put(prefix + "Address", inet.getHostString());
+			record.put(prefix + "Port", inet.getPort());
+		}else if(address != null)
+			record.put(prefix + "Address", String.valueOf(address));
+	}
+	
+	private static void putAccessor(Map<String, Object> record, String key,
+		Object source, String accessor)
+	{
+		Object value = invokeAccessor(source, accessor);
+		if(value != null)
+			record
+				.put(key,
+					value instanceof Number || value instanceof Boolean
+						|| value instanceof String ? value
+							: String.valueOf(value));
+	}
+	
+	private static Object invokeAccessor(Object source, String accessor)
+	{
+		try
+		{
+			return source.getClass().getMethod(accessor).invoke(source);
+		}catch(ReflectiveOperationException ignored)
+		{
+			return null;
+		}
+	}
+	
+	private static void putLocation(Map<String, Object> record, Object location)
+	{
+		if(location == null)
+			return;
+		try
+		{
+			record.put("x", location.getClass().getField("x").get(location));
+			record.put("y", location.getClass().getField("y").get(location));
+			record.put("z", location.getClass().getField("z").get(location));
+		}catch(ReflectiveOperationException ignored)
+		{
+			// Coordinates are optional and must never be inferred.
+		}
+	}
+	
+	// === Verbose logging ===
+	
+	private void logVerbose(Packet<?> packet, String direction)
+	{
+		logVerbose(packet, direction, List.of());
+	}
+	
+	private void logVerbose(Packet<?> packet, String direction,
+		List<String> debugTrace)
+	{
+		if(!loggingEnabled.isChecked())
+			return;
+		
+		if(packetDumper == null)
+			packetDumper = new PacketDumper(decodeCoverage, packetFilter,
+				lifecycleTracker);
+		
+		List<String> lines =
+			packetDumper.dumpRecursive(packet, direction, null);
+		if(lines.isEmpty())
+			return;
+		
+		boolean human = verboseHumanReadable.isChecked();
+		synchronized(verboseJsonlBuffer)
+		{
+			for(String line : lines)
+			{
+				if(!debugTrace.isEmpty())
+				{
+					try
+					{
+						JsonObject json =
+							JsonParser.parseString(line).getAsJsonObject();
+						json.add("wurstDebug",
+							VERBOSE_GSON.toJsonTree(debugTrace));
+						line = VERBOSE_GSON.toJson(json);
+					}catch(RuntimeException ignored)
+					{
+						// Keep packet logging resilient for non-JSON dumper
+						// lines.
+					}
+				}
+				appendVerboseLineLocked(line, human);
+			}
+		}
+	}
+	
+	/**
+	 * Called after vanilla applies a map-data packet, when ClientLevel's map
+	 * cache contains the complete current map state rather than only the
+	 * packet's optional colour patch.
+	 */
+	public void logVerboseMapCache(ClientboundMapItemDataPacket packet,
+		MapItemSavedData mapData)
+	{
+		if(!verboseEnabled.isChecked() || !loggingEnabled.isChecked()
+			|| packet == null || mapData == null)
+			return;
+		
+		String name = net.wurstclient.other_features.packettools.PacketCatalog
+			.formatPacketName(packet);
+		if(!logS2C.contains(name))
+			return;
+		
+		Map<String, Object> root = new LinkedHashMap<>();
+		root.put("timestamp", LocalDateTime.now().format(ISO_FORMAT));
+		root.put("direction", "S2C-CACHE");
+		root.put("class", packet.getClass().getName());
+		root.put("simpleName", packet.getClass().getSimpleName());
+		root.put("packetId", name);
+		root.put("mapId", packet.mapId().id());
+		root.put("dataComponent", "minecraft:map_id");
+		root.put("centerX", mapData.centerX);
+		root.put("centerZ", mapData.centerZ);
+		root.put("dimension", String.valueOf(mapData.dimension));
+		root.put("scale", mapData.scale);
+		root.put("locked", mapData.locked);
+		Map<String, Object> colors = new LinkedHashMap<>();
+		colors.put("length", mapData.colors.length);
+		colors.put("base64",
+			Base64.getEncoder().encodeToString(mapData.colors));
+		root.put("colors", colors);
+		
+		String json = VERBOSE_GSON.toJson(root);
+		synchronized(verboseJsonlBuffer)
+		{
+			appendVerboseLineLocked(json, verboseHumanReadable.isChecked());
+		}
+	}
+	
+	public void logVerboseChatReport(UUID reportedProfileId,
+		ReportType reportType, AbuseReport abuseReport)
+	{
+		if(!shouldVerboseExternalMonitoring())
+			return;
+		
+		Map<String, Object> fields = new LinkedHashMap<>();
+		fields.put("reportedProfileId",
+			reportedProfileId != null ? reportedProfileId.toString() : null);
+		fields.put("reportType",
+			reportType != null ? String.valueOf(reportType) : null);
+		fields.put("report", abuseReport);
+		
+		Map<String, Object> root = new LinkedHashMap<>();
+		root.put("timestamp", LocalDateTime.now().format(ISO_FORMAT));
+		root.put("direction", "REPORT");
+		root.put("class",
+			abuseReport != null ? abuseReport.getClass().getName() : "unknown");
+		root.put("simpleName", "ChatReport");
+		root.put("fields", fields);
+		
+		enqueueVerboseExternalEvent(root);
+	}
+	
+	public void logVerboseExternalEvent(String eventType,
+		Map<String, Object> fields)
+	{
+		if(!shouldVerboseExternalMonitoring())
+			return;
+		enqueueVerboseEvent(eventType, "EXTERNAL", fields);
+	}
+	
+	private void enqueueVerboseEvent(String eventType, String direction,
+		Map<String, Object> fields)
+	{
+		if(!verboseEnabled.isChecked())
+			return;
+		
+		Map<String, Object> root = new LinkedHashMap<>();
+		root.put("timestamp", LocalDateTime.now().format(ISO_FORMAT));
+		root.put("direction", direction);
+		root.put("class", eventType);
+		root.put("simpleName", eventType);
+		root.put("fields", fields);
+		enqueueVerboseExternalEvent(root);
+	}
+	
+	public void logVerboseChatAction(String source, String message,
+		boolean command)
+	{
+		Map<String, Object> fields = new LinkedHashMap<>();
+		fields.put("source", source);
+		fields.put("message", message);
+		fields.put("isCommand", command);
+		enqueueVerboseEvent("ChatAction", "CHAT-C2S", fields);
+	}
+	
+	public void logVerboseChatOutput(String source, String message)
+	{
+		Map<String, Object> fields = new LinkedHashMap<>();
+		fields.put("source", source);
+		fields.put("message", message);
+		enqueueVerboseEvent("ChatMessage", "CHAT-S2C", fields);
+	}
+	
+	public void logVerboseChatInput(String source, String message, String kind)
+	{
+		Map<String, Object> fields = new LinkedHashMap<>();
+		fields.put("source", source);
+		fields.put("message", message);
+		fields.put("kind", kind);
+		fields.put("isCommand",
+			"command".equals(kind) || "uiutils_command".equals(kind));
+		enqueueVerboseEvent("ChatInput", "CHAT-C2S", fields);
+	}
+	
+	public void logVerboseJoinFlow(String source, ServerData serverData)
+	{
+		Map<String, Object> fields = new LinkedHashMap<>();
+		fields.put("source", source);
+		if(serverData != null)
+		{
+			fields.put("name", serverData.name);
+			fields.put("address", serverData.ip);
+		}
+		logVerboseExternalEvent("JoinFlow", fields);
+	}
+	
+	public void logVerboseSessionChange(String action, User user)
+	{
+		Map<String, Object> fields = new LinkedHashMap<>();
+		fields.put("action", action);
+		if(user != null)
+		{
+			fields.put("name", user.getName());
+			fields.put("profileId", String.valueOf(user.getProfileId()));
+		}
+		logVerboseExternalEvent("SessionChange", fields);
+	}
+	
+	public void logVerboseTelemetryEvent(String action, String details)
+	{
+		Map<String, Object> fields = new LinkedHashMap<>();
+		fields.put("action", action);
+		fields.put("details", details);
+		logVerboseExternalEvent("Telemetry", fields);
+	}
+	
+	public void logVerboseApiCall(String api, String details)
+	{
+		Map<String, Object> fields = new LinkedHashMap<>();
+		fields.put("api", api);
+		fields.put("details", details);
+		logVerboseExternalEvent("ApiCall", fields);
+	}
+	
+	private void appendVerboseLineLocked(String jsonLine, boolean human)
+	{
+		verboseJsonlBuffer.add(jsonLine);
+		if(human)
+			verboseHumanBuffer.add(buildHumanReadable(jsonLine));
+	}
+	
+	private boolean shouldVerboseExternalMonitoring()
+	{
+		return loggingEnabled.isChecked() && verboseEnabled.isChecked()
+			&& verboseOutsideGamePackets.isChecked();
+	}
+	
+	private void enqueueVerboseExternalEvent(Map<String, Object> root)
+	{
+		if(!loggingEnabled.isChecked())
+			return;
+		
+		String json = VERBOSE_GSON.toJson(root);
+		synchronized(verboseJsonlBuffer)
+		{
+			appendVerboseLineLocked(json, verboseHumanReadable.isChecked());
+		}
+	}
+	
+	private boolean shouldVerboseOutsideGame()
+	{
+		return shouldVerboseExternalMonitoring() && isOutsideGame();
+	}
+	
+	private static boolean shouldAlwaysVerbose(Packet<?> packet)
+	{
+		return packet instanceof ServerboundSignUpdatePacket
+			|| packet instanceof ServerboundEditBookPacket
+			|| packet instanceof ServerboundChatAckPacket
+			|| packet instanceof ServerboundChatSessionUpdatePacket
+			|| packet instanceof ServerboundContainerClickPacket
+			|| packet instanceof ServerboundContainerButtonClickPacket
+			|| packet instanceof ServerboundContainerClosePacket;
+	}
+	
+	private void flushVerboseBuffers()
+	{
+		if(!loggingEnabled.isChecked())
+		{
+			discardVerboseBuffers();
+			return;
+		}
+		
+		ArrayList<String> jsonlBatch;
+		ArrayList<String> humanBatch;
+		synchronized(verboseJsonlBuffer)
+		{
+			if(verboseJsonlBuffer.isEmpty())
+				return;
+			jsonlBatch = new ArrayList<>(verboseJsonlBuffer);
+			humanBatch = verboseHumanReadable.isChecked()
+				? new ArrayList<>(verboseHumanBuffer) : null;
+			verboseJsonlBuffer.clear();
+			verboseHumanBuffer.clear();
+		}
+		
+		try
+		{
+			Path jsonlFile = getCurrentVerboseJsonlFile();
+			StringBuilder sb = new StringBuilder();
+			for(String line : jsonlBatch)
+				sb.append(line).append('\n');
+			Files.writeString(jsonlFile, sb.toString(),
+				StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+		}catch(IOException e)
+		{
+			ChatUtils.error("PacketTools: failed writing verbose JSONL file.");
+		}
+		
+		if(humanBatch != null)
+		{
+			try
+			{
+				Path humanFile = getCurrentVerboseHumanFile();
+				StringBuilder sb = new StringBuilder();
+				for(String line : humanBatch)
+					sb.append(line);
+				Files.writeString(humanFile, sb.toString(),
+					StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+			}catch(IOException e)
+			{
+				ChatUtils.error(
+					"PacketTools: failed writing verbose human-readable file.");
+			}
+		}
+	}
+	
+	private void discardVerboseBuffers()
+	{
+		synchronized(verboseJsonlBuffer)
+		{
+			verboseJsonlBuffer.clear();
+			verboseHumanBuffer.clear();
+		}
+		verboseFlushTickCounter = 0;
+	}
+	
+	private String buildHumanReadable(String jsonLine)
+	{
+		try
+		{
+			JsonObject obj = JsonParser.parseString(jsonLine).getAsJsonObject();
+			StringBuilder sb = new StringBuilder();
+			sb.append("[").append(obj.get("timestamp").getAsString())
+				.append("] [").append(obj.get("direction").getAsString())
+				.append("] ").append(obj.get("simpleName").getAsString());
+			if(obj.has("bundlePath"))
+				sb.append(" @ ").append(obj.get("bundlePath").getAsString());
+			sb.append("\n");
+			
+			if(obj.has("fields"))
+			{
+				JsonObject fields = obj.getAsJsonObject("fields");
+				for(Map.Entry<String, com.google.gson.JsonElement> e : fields
+					.entrySet())
+				{
+					sb.append("  ").append(e.getKey()).append(" = ")
+						.append(e.getValue()).append("\n");
+				}
+			}
+			sb.append("\n");
+			return sb.toString();
+		}catch(Exception e)
+		{
+			return jsonLine + "\n";
+		}
+	}
+	
+	private Path getCurrentVerboseJsonlFile() throws IOException
+	{
+		if(currentVerboseJsonlFile != null)
+			return currentVerboseJsonlFile;
+		
+		Files.createDirectories(LOG_DIR);
+		String name = "verbose_" + LocalDateTime.now().format(FILE_TIME_FORMAT)
+			+ ".jsonl";
+		currentVerboseJsonlFile = LOG_DIR.resolve(name);
+		return currentVerboseJsonlFile;
+	}
+	
+	private Path getCurrentVerboseHumanFile() throws IOException
+	{
+		if(currentVerboseHumanFile != null)
+			return currentVerboseHumanFile;
+		
+		Files.createDirectories(LOG_DIR);
+		String name =
+			"verbose_" + LocalDateTime.now().format(FILE_TIME_FORMAT) + ".log";
+		currentVerboseHumanFile = LOG_DIR.resolve(name);
+		return currentVerboseHumanFile;
+	}
+	
+	private void printCoverageReport()
+	{
+		String report = decodeCoverage.buildReport();
+		ChatUtils.message(report);
+	}
+	
+	private void printEntitySummary()
+	{
+		String summary = lifecycleTracker.buildSummary();
+		ChatUtils.message(summary);
+	}
+	
+	// === Verbose mode settings accessors ===
+	
+	public CheckboxSetting getVerboseEnabledSetting()
+	{
+		return verboseEnabled;
+	}
+	
+	public CheckboxSetting getVerboseOutsideGamePacketsSetting()
+	{
+		return verboseOutsideGamePackets;
+	}
+	
+	public CheckboxSetting getVerboseHumanReadableSetting()
+	{
+		return verboseHumanReadable;
+	}
+	
+	public SliderSetting getVerboseFlushIntervalSetting()
+	{
+		return verboseFlushInterval;
+	}
+	
+	public PacketDecodeCoverage getDecodeCoverage()
+	{
+		return decodeCoverage;
+	}
+	
+	public EntityLifecycleTracker getLifecycleTracker()
+	{
+		return lifecycleTracker;
+	}
+	
+	public PacketFilter getPacketFilter()
+	{
+		return packetFilter;
+	}
+	
+	private boolean isOutsideGame()
+	{
+		return MC == null || MC.level == null || MC.player == null;
+	}
+	
+	private long getCurrentTick()
+	{
+		if(MC.level != null)
+			return MC.level.getGameTime();
+		if(MC.player != null)
+			return MC.player.tickCount;
+		return System.currentTimeMillis() / 50L;
+	}
+	
+	private static final class QueuedPacket
+	{
+		private final Packet<?> packet;
+		private final long releaseTick;
+		
+		private QueuedPacket(Packet<?> packet, long releaseTick)
+		{
+			this.packet = packet;
+			this.releaseTick = releaseTick;
+		}
+	}
+	
+	public enum PacketMode
+	{
+		LOG("Log"),
+		DENY("Deny"),
+		DELAY("Delay");
+		
+		private final String label;
+		
+		PacketMode(String label)
+		{
+			this.label = label;
+		}
+		
+		public String getLabel()
+		{
+			return label;
+		}
+		
+		public PacketMode next()
+		{
+			return values()[(ordinal() + 1) % values().length];
+		}
+	}
+	
+	public enum PacketDirection
+	{
+		S2C,
+		C2S
+	}
+}

@@ -34,11 +34,25 @@ public final class CmdProcessor implements ChatOutputListener
 			return;
 		
 		String message = event.getOriginalMessage().trim();
-		if(!message.startsWith("."))
+		String prefix = getPrefix();
+		if(!message.startsWith(prefix))
 			return;
 		
 		event.cancel();
-		process(message.substring(1));
+		process(message.substring(prefix.length()));
+	}
+	
+	/**
+	 * "." unless CommandPrefix (ported from the CevAPI fork) says otherwise.
+	 */
+	public static String getPrefix()
+	{
+		var otfs = WurstClient.INSTANCE.getOtfs();
+		if(otfs == null || otfs.commandPrefixOtf == null)
+			return ".";
+		
+		return otfs.commandPrefixOtf.getPrefixSetting().getSelected()
+			.toString();
 	}
 	
 	public void process(String input)

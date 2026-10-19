@@ -1,0 +1,274 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.util;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import net.wurstclient.WurstClient;
+import net.wurstclient.event.Listener;
+import net.wurstclient.hack.Hack;
+import net.wurstclient.other_features.PerformanceOverlayOtf.SortMode;
+
+public enum HackPerformanceTracker
+{
+	;
+	
+	private static final long WINDOW_NS = 1_000_000_000L;
+	private static final long STALE_NS = 30_000_000_000L;
+	
+	private static final Object LOCK = new Object();
+	private static final IdentityHashMap<Hack, Stats> STATS =
+		new IdentityHashMap<>();
+	
+	private static long windowStartNs = System.nanoTime();
+	private static boolean hasCompletedWindow;
+	private static int currentRenderFrames;
+	private static int lastRenderFrames;
+	private static long lastWindowNs = WINDOW_NS;
+	
+	public enum Phase
+	{
+		UPDATE,
+		RENDER,
+		GUI
+	}
+	
+	public static boolean shouldProfile()
+	{
+		WurstClient wurst = WurstClient.INSTANCE;
+		if(wurst == null || !wurst.isEnabled() || wurst.getOtfs() == null
+			|| wurst.getOtfs().performanceOverlayOtf == null)
+			return false;
+		
+		return wurst.getOtfs().performanceOverlayOtf.isEnabled();
+	}
+	
+	public static void beginRenderFrame()
+	{
+		if(!shouldProfile())
+			return;
+		synchronized(LOCK)
+		{
+			rollWindow(System.nanoTime());
+			currentRenderFrames++;
+		}
+	}
+	
+	public static void record(Listener listener, Phase phase, long durationNs)
+	{
+		if(!(listener instanceof Hack hack) || durationNs <= 0
+			|| !hack.isEnabled())
+			return;
+		
+		long nowNs = System.nanoTime();
+		synchronized(LOCK)
+		{
+			rollWindow(nowNs);
+			Stats stats = STATS.computeIfAbsent(hack, h -> new Stats());
+			stats.record(phase, durationNs, nowNs);
+		}
+	}
+	
+	public static void reset()
+	{
+		synchronized(LOCK)
+		{
+			STATS.clear();
+			windowStartNs = System.nanoTime();
+			hasCompletedWindow = false;
+			currentRenderFrames = 0;
+			lastRenderFrames = 0;
+			lastWindowNs = WINDOW_NS;
+		}
+	}
+	
+	public static ListSnapshot getTopRows(int maxRows, SortMode sortMode)
+	{
+		long nowNs = System.nanoTime();
+		synchronized(LOCK)
+		{
+			rollWindow(nowNs);
+			
+			Collection<Map.Entry<Hack, Stats>> entries = STATS.entrySet();
+			int frames =
+				hasCompletedWindow ? lastRenderFrames : currentRenderFrames;
+			long elapsed = hasCompletedWindow ? lastWindowNs
+				: Math.max(1, nowNs - windowStartNs);
+			ArrayList<Row> rows = new ArrayList<>(entries.size());
+			for(Map.Entry<Hack, Stats> e : entries)
+			{
+				Hack hack = e.getKey();
+				Stats stats = e.getValue();
+				if(hack == null || stats == null)
+					continue;
+				if(!hack.isEnabled() && nowNs - stats.lastSeenNs > STALE_NS)
+					continue;
+				
+				rows.add(
+					stats.toRow(hack.getName(), hasCompletedWindow, frames));
+			}
+			
+			if(sortMode == SortMode.PEAK_TIME)
+				rows.sort(Comparator.comparingDouble(Row::peakMs).reversed());
+			else
+				rows.sort(Comparator.comparingDouble(Row::totalMs).reversed());
+			
+			int limit = Math.max(1, maxRows);
+			double allUpdateMs = 0;
+			double allRenderMs = 0;
+			double allGuiMs = 0;
+			double allTotalMs = 0;
+			int allCallbacks = 0;
+			for(Row row : rows)
+			{
+				allUpdateMs += row.updateMs();
+				allRenderMs += row.renderMs();
+				allGuiMs += row.guiMs();
+				allTotalMs += row.totalMs();
+				allCallbacks +=
+					row.updateCalls() + row.renderCalls() + row.guiCalls();
+			}
+			
+			ArrayList<Row> visibleRows = rows;
+			if(visibleRows.size() > limit)
+				visibleRows = new ArrayList<>(visibleRows.subList(0, limit));
+			
+			double visibleTotalMs = 0;
+			for(Row row : visibleRows)
+				visibleTotalMs += row.totalMs();
+			
+			return new ListSnapshot(visibleRows, hasCompletedWindow,
+				allUpdateMs, allRenderMs, allGuiMs, allTotalMs,
+				allTotalMs - visibleTotalMs, frames,
+				frames * 1_000_000_000D / elapsed, allCallbacks);
+		}
+	}
+	
+	private static void rollWindow(long nowNs)
+	{
+		if(nowNs - windowStartNs < WINDOW_NS)
+			return;
+		
+		lastWindowNs = nowNs - windowStartNs;
+		windowStartNs = nowNs;
+		lastRenderFrames = currentRenderFrames;
+		currentRenderFrames = 0;
+		hasCompletedWindow = true;
+		
+		ArrayList<Hack> stale = new ArrayList<>();
+		for(Map.Entry<Hack, Stats> e : STATS.entrySet())
+		{
+			Stats stats = e.getValue();
+			stats.rollWindow();
+			
+			Hack hack = e.getKey();
+			if((hack == null || !hack.isEnabled())
+				&& nowNs - stats.lastSeenNs > STALE_NS)
+				stale.add(hack);
+		}
+		
+		for(Hack hack : stale)
+			STATS.remove(hack);
+	}
+	
+	private static final class Stats
+	{
+		private final long[] currentTotalNs = new long[Phase.values().length];
+		private final int[] currentCalls = new int[Phase.values().length];
+		private final long[] currentMaxNs = new long[Phase.values().length];
+		
+		private final long[] lastTotalNs = new long[Phase.values().length];
+		private final int[] lastCalls = new int[Phase.values().length];
+		private final long[] lastMaxNs = new long[Phase.values().length];
+		
+		private final long[] peakNs = new long[Phase.values().length];
+		private long lastSeenNs = System.nanoTime();
+		
+		private void record(Phase phase, long durationNs, long nowNs)
+		{
+			int idx = phase.ordinal();
+			currentTotalNs[idx] += durationNs;
+			currentCalls[idx]++;
+			if(durationNs > currentMaxNs[idx])
+				currentMaxNs[idx] = durationNs;
+			if(durationNs > peakNs[idx])
+				peakNs[idx] = durationNs;
+			lastSeenNs = nowNs;
+		}
+		
+		private void rollWindow()
+		{
+			for(int i = 0; i < currentTotalNs.length; i++)
+			{
+				lastTotalNs[i] = currentTotalNs[i];
+				lastCalls[i] = currentCalls[i];
+				lastMaxNs[i] = currentMaxNs[i];
+				currentTotalNs[i] = 0;
+				currentCalls[i] = 0;
+				currentMaxNs[i] = 0;
+			}
+		}
+		
+		private Row toRow(String name, boolean useLastWindow, int frames)
+		{
+			long[] totals = useLastWindow ? lastTotalNs : currentTotalNs;
+			int[] calls = useLastWindow ? lastCalls : currentCalls;
+			long[] maxes = useLastWindow ? lastMaxNs : currentMaxNs;
+			
+			double updateMs =
+				averageFrameMillis(totals[Phase.UPDATE.ordinal()], frames);
+			double renderMs =
+				averageFrameMillis(totals[Phase.RENDER.ordinal()], frames);
+			double guiMs =
+				averageFrameMillis(totals[Phase.GUI.ordinal()], frames);
+			double totalMs = updateMs + renderMs + guiMs;
+			
+			double windowPeakMs =
+				nanosToMillis(Math.max(maxes[Phase.UPDATE.ordinal()],
+					Math.max(maxes[Phase.RENDER.ordinal()],
+						maxes[Phase.GUI.ordinal()])));
+			double lifetimePeakMs =
+				nanosToMillis(Math.max(peakNs[Phase.UPDATE.ordinal()],
+					Math.max(peakNs[Phase.RENDER.ordinal()],
+						peakNs[Phase.GUI.ordinal()])));
+			
+			return new Row(name, updateMs, renderMs, guiMs, totalMs,
+				Math.max(windowPeakMs, lifetimePeakMs),
+				nanosToMillis(peakNs[Phase.UPDATE.ordinal()]),
+				nanosToMillis(peakNs[Phase.RENDER.ordinal()]),
+				nanosToMillis(peakNs[Phase.GUI.ordinal()]),
+				calls[Phase.UPDATE.ordinal()], calls[Phase.RENDER.ordinal()],
+				calls[Phase.GUI.ordinal()]);
+		}
+		
+		private double nanosToMillis(long ns)
+		{
+			return ns / 1_000_000D;
+		}
+	}
+	
+	public static double averageFrameMillis(long durationNs, int frames)
+	{
+		return frames <= 0 ? 0 : durationNs / (frames * 1_000_000D);
+	}
+	
+	public record Row(String name, double updateMs, double renderMs,
+		double guiMs, double totalMs, double peakMs, double updatePeakMs,
+		double renderPeakMs, double guiPeakMs, int updateCalls, int renderCalls,
+		int guiCalls)
+	{}
+	
+	public record ListSnapshot(ArrayList<Row> rows, boolean usingWindowData,
+		double allUpdateMs, double allRenderMs, double allGuiMs,
+		double allTotalMs, double hiddenRowsTotalMs, int renderedFrames,
+		double renderFramesPerSecond, int totalCallbacks)
+	{}
+}

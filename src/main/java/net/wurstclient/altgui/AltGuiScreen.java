@@ -1,0 +1,3576 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.altgui;
+
+import com.mojang.blaze3d.platform.InputConstants;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.CharacterEvent;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.network.chat.Component;
+import net.wurstclient.Category;
+import net.wurstclient.Feature;
+import net.wurstclient.WurstClient;
+import net.wurstclient.clickgui.screens.EditBlockListScreen;
+import net.wurstclient.clickgui.screens.EditBlockScreen;
+import net.wurstclient.clickgui.screens.EditBookOffersScreen;
+import net.wurstclient.clickgui.screens.EditColorScreen;
+import net.wurstclient.clickgui.screens.EditEntityTypeListScreen;
+import net.wurstclient.clickgui.screens.EditFriendListScreen;
+import net.wurstclient.clickgui.screens.EditItemListScreen;
+import net.wurstclient.clickgui.screens.SelectFileScreen;
+import net.wurstclient.clickgui.screens.WaypointsScreen;
+import net.wurstclient.hack.Hack;
+import net.wurstclient.hacks.AltGuiHack;
+import net.wurstclient.hacks.ClientChatOverlayHack;
+import net.wurstclient.hacks.ClickGuiHack;
+import net.wurstclient.hacks.NavigatorHack;
+import net.wurstclient.hacks.TooManyHaxHack;
+import net.wurstclient.hacks.XpGuiHack;
+import net.wurstclient.commands.NecoCmd;
+import net.wurstclient.keybinds.Keybind;
+import net.wurstclient.keybinds.PossibleKeybind;
+import net.wurstclient.other_feature.OtherFeature;
+import net.wurstclient.other_features.PacketFirewallOtf;
+import net.wurstclient.settings.BlockListSetting;
+import net.wurstclient.settings.BlockSetting;
+import net.wurstclient.settings.BookOffersSetting;
+import net.wurstclient.settings.ButtonSetting;
+import net.wurstclient.settings.CheckboxSetting;
+import net.wurstclient.settings.ColorSetting;
+import net.wurstclient.settings.EntityTypeListSetting;
+import net.wurstclient.settings.EnumSetting;
+import net.wurstclient.settings.FileSetting;
+import net.wurstclient.settings.FriendListSetting;
+import net.wurstclient.settings.ItemListSetting;
+import net.wurstclient.settings.MobWeaponRuleSetting;
+import net.wurstclient.settings.PlantTypeSetting;
+import net.wurstclient.settings.Setting;
+import net.wurstclient.settings.SettingGroup;
+import net.wurstclient.settings.SliderSetting;
+import net.wurstclient.settings.SpacerSetting;
+import net.wurstclient.settings.StringDropdownSetting;
+import net.wurstclient.settings.TextFieldSetting;
+import net.wurstclient.settings.ToggleAllPlantTypesSetting;
+import net.wurstclient.settings.WaypointsSetting;
+import net.wurstclient.util.ChatUtils;
+import net.wurstclient.util.ColorUtils;
+
+public final class AltGuiScreen extends Screen
+{
+	private static final int MAX_RECENTLY_DISABLED = 64;
+	private static final ArrayList<String> RECENTLY_DISABLED_HACKS =
+		new ArrayList<>();
+	private static String LAST_SELECTED_CATEGORY = "Important";
+	private static boolean LAST_ENABLED_CATEGORY_SELECTED;
+	private static boolean LAST_STYLE_CATEGORY_SELECTED;
+	private static int LAST_MODULE_SCROLL;
+	private static int LAST_SETTINGS_SCROLL;
+	private static String LAST_SELECTED_FEATURE = "";
+	private static final HashSet<String> LAST_EXPANDED_FEATURES =
+		new HashSet<>();
+	private static final HashSet<SettingGroup> LAST_EXPANDED_GROUPS =
+		new HashSet<>();
+	private static final Map<String, ViewState> LAST_VIEW_STATES =
+		new HashMap<>();
+	private static final Set<String> HIDDEN_OTHER_FEATURES =
+		Set.of("CleanUp", "LastServer", "Reconnect", "ServerFinder",
+			"WikiDataExport", "WurstCapes");
+	private static final Set<String> MOVE_TO_CLIENT_SETTINGS =
+		Set.of("DisableWurst", "CommandPrefix", "Changelog",
+			"ConnectionLogOverlay", "NoTelemetry", "NoChatReports",
+			"ForceAllowChats", "VanillaSpoof", "Translations");
+	private static final Set<String> KEYBINDS_HIDDEN_FOR =
+		Set.of("WurstOptions", "Translations", "WurstLogo", "CommandPrefix",
+			"ConnectionLogOverlay", "DisableWurst", "ForceAllowChats",
+			"HideModMenu", "NoTelemetry");
+	
+	private final Screen prevScreen;
+	
+	private EditBox searchBox;
+	private EditBox inlineTextField;
+	private TextFieldSetting editingTextField;
+	private String originalTextFieldValue;
+	private String searchText = "";
+	// Some 26.3 input paths deliver the physical key event without a
+	// CharacterEvent while no text field is focused. Keep the search usable in
+	// that case and discard the matching character callback when both are
+	// delivered.
+	private int searchSuppressedCodepoint = -1;
+	private String selectedCategory = "Important";
+	private Feature selectedFeature;
+	private boolean enabledCategorySelected;
+	private boolean styleCategorySelected;
+	
+	private int panelX;
+	private int panelY;
+	private int panelW;
+	private int panelH;
+	private int categoryW;
+	private int moduleX;
+	private int moduleY;
+	private int moduleW;
+	private int moduleH;
+	private int settingsX;
+	private int settingsW;
+	
+	private int moduleScroll;
+	private int maxModuleScroll;
+	private int settingsScroll;
+	private int maxSettingsScroll;
+	private int categoryScroll;
+	private int maxCategoryScroll;
+	
+	private int uiMenuX;
+	private int uiMenuY;
+	private int uiMenuW;
+	private int uiMenuH;
+	
+	private final HashSet<String> expandedFeatures = new HashSet<>();
+	private final HashSet<SettingGroup> expandedGroups = new HashSet<>();
+	private String hoverTooltip = "";
+	private int pendingScrollRestore = -1;
+	private boolean searchVisibleInLayout;
+	
+	private SliderDrag draggingSlider;
+	private final AltGuiFontManager fontManager =
+		AltGuiFontManager.getInstance();
+	private String appliedFontFamily = "";
+	private int appliedFontSmoothing = -1;
+	
+	public AltGuiScreen(Screen prevScreen)
+	{
+		super(Component.literal("Alt GUI"));
+		this.prevScreen = prevScreen;
+	}
+	
+	@Override
+	protected void init()
+	{
+		applyOpenBehavior();
+		rebuildLayout();
+		
+		Font font = minecraft.font;
+		int searchHeight = getSearchHeight();
+		searchBox = new EditBox(font, getSearchBoxX(), getSearchBoxY(),
+			getSearchBoxWidth(), searchHeight, Component.literal("Search"));
+		searchBox.setBordered(false);
+		searchBox.setMaxLength(128);
+		searchBox.setTextColor(cfg().getTextColor());
+		searchBox.setValue(searchText);
+		addRenderableWidget(searchBox);
+		inlineTextField =
+			new EditBox(font, 0, 0, 1, 12, Component.literal("Text input"));
+		inlineTextField.setBordered(false);
+		inlineTextField.setVisible(true);
+		addWidget(inlineTextField);
+		setFocused(null);
+		if(cfg().isSearchOnlyWhileTypingEnabled())
+		{
+			setFocused(null);
+			searchBox.setFocused(false);
+			searchBox.setVisible(false);
+		}else
+		{
+			setFocused(searchBox);
+			searchBox.setFocused(true);
+			searchBox.setVisible(true);
+		}
+		applyLiveLayout();
+	}
+	
+	private void applyOpenBehavior()
+	{
+		switch(cfg().getOpenBehavior())
+		{
+			case ENABLED ->
+			{
+				selectedCategory = "Important";
+				enabledCategorySelected = true;
+				styleCategorySelected = false;
+				moduleScroll = 0;
+				categoryScroll = 0;
+				pendingScrollRestore = -1;
+				expandedFeatures.clear();
+				expandedFeatures.addAll(LAST_EXPANDED_FEATURES);
+				expandedGroups.addAll(LAST_EXPANDED_GROUPS);
+			}
+			case LAST_POSITION ->
+			{
+				selectedCategory = LAST_SELECTED_CATEGORY;
+				enabledCategorySelected = LAST_ENABLED_CATEGORY_SELECTED;
+				styleCategorySelected = LAST_STYLE_CATEGORY_SELECTED;
+				moduleScroll = 0;
+				categoryScroll = 0;
+				pendingScrollRestore = Math.max(0, LAST_MODULE_SCROLL);
+				settingsScroll = Math.max(0, LAST_SETTINGS_SCROLL);
+				expandedFeatures.clear();
+				expandedFeatures.addAll(LAST_EXPANDED_FEATURES);
+				expandedGroups.addAll(LAST_EXPANDED_GROUPS);
+			}
+			case FAVORITES ->
+			{
+				selectedCategory = "Important";
+				enabledCategorySelected = false;
+				styleCategorySelected = false;
+				moduleScroll = 0;
+				categoryScroll = 0;
+				pendingScrollRestore = -1;
+				expandedFeatures.clear();
+				expandedFeatures.addAll(LAST_EXPANDED_FEATURES);
+				expandedGroups.addAll(LAST_EXPANDED_GROUPS);
+			}
+		}
+		selectedFeature =
+			cfg().getOpenBehavior() == AltGuiHack.OpenBehavior.LAST_POSITION
+				? findHackByName(LAST_SELECTED_FEATURE) : null;
+		
+		if(!enabledCategorySelected && !styleCategorySelected)
+		{
+			List<String> categories = getDisplayCategories();
+			if(!containsIgnoreCase(categories, selectedCategory)
+				&& !categories.isEmpty())
+				selectedCategory = categories.get(0);
+		}
+		restoreCurrentViewState();
+	}
+	
+	private AltGuiHack cfg()
+	{
+		return WurstClient.INSTANCE.getHax().altGuiHack;
+	}
+	
+	private String getViewKey()
+	{
+		if(styleCategorySelected)
+			return "style";
+		if(enabledCategorySelected)
+			return "enabled";
+		return selectedCategory.toLowerCase(Locale.ROOT);
+	}
+	
+	private void rememberCurrentViewState()
+	{
+		if(selectedFeature != null)
+			LAST_VIEW_STATES.put(getViewKey(),
+				new ViewState(selectedFeature.getName(), settingsScroll));
+	}
+	
+	private void restoreCurrentViewState()
+	{
+		ViewState state = LAST_VIEW_STATES.get(getViewKey());
+		if(state == null)
+			return;
+		selectedFeature = getDisplayedEntries().stream()
+			.map(DisplayEntry::feature)
+			.filter(feature -> feature.getName().equals(state.featureName()))
+			.findFirst().orElse(null);
+		settingsScroll = state.settingsScroll();
+	}
+	
+	private int getCategoryRowHeight()
+	{
+		return cfg().getCategoryHeight();
+	}
+	
+	private int getCategoryRowGap()
+	{
+		if(cfg().isCategoryRowBordersEnabled())
+			return 0;
+		return Math.max(2, Math.round(getCategoryRowHeight() * 0.25F));
+	}
+	
+	private boolean isTopTabsLayout()
+	{
+		return cfg().getCategoryLayout() == AltGuiHack.CategoryLayout.TOP_TABS;
+	}
+	
+	private int getCategoryAreaX1()
+	{
+		if(isTopTabsLayout())
+			return panelX + 8;
+		return cfg().isCategoryRowBordersEnabled() ? panelX + 4 : panelX + 6;
+	}
+	
+	private int getCategoryAreaX2()
+	{
+		if(isTopTabsLayout())
+			return panelX + panelW - 8;
+		
+		return cfg().isCategoryRowBordersEnabled() ? moduleX + 1
+			: panelX + categoryW - 8;
+	}
+	
+	private int getCategoryAreaY1()
+	{
+		if(isTopTabsLayout())
+			return panelY + 34;
+		
+		// Keep the first category row clear of the two-line sidebar title.
+		return panelY + getSearchLayoutHeight() + 40;
+	}
+	
+	private int getSearchLayoutHeight()
+	{
+		return shouldRenderSearchBox() ? getSearchHeight() : 0;
+	}
+	
+	private int getCategoryAreaY2()
+	{
+		if(isTopTabsLayout())
+			return getCategoryAreaY1() + getCategoryRowHeight();
+		
+		return panelY + panelH - 20;
+	}
+	
+	private int getTopTabGap()
+	{
+		if(cfg().isCategoryRowBordersEnabled())
+			return 0;
+		return Math.max(2, Math.round(getCategoryRowGap() * 0.75F));
+	}
+	
+	private int getSearchBoxX()
+	{
+		if(isTopTabsLayout())
+			return panelX + (panelW - getSearchBoxWidth()) / 2;
+		
+		return moduleX + 14;
+	}
+	
+	private int getSearchBoxY()
+	{
+		if(isTopTabsLayout())
+			return panelY + 10;
+		
+		return panelY + 12;
+	}
+	
+	private int getSearchBoxWidth()
+	{
+		if(isTopTabsLayout())
+		{
+			int desired = Math.max(160, Math.min(320, panelW / 3));
+			int maxW = Math.max(120, getCategoryAreaX2() - (panelX + 210));
+			return Math.min(desired, maxW);
+		}
+		
+		return moduleW - 24;
+	}
+	
+	private boolean shouldRenderSearchBox()
+	{
+		if(searchBox == null)
+			return false;
+		
+		if(!cfg().isSearchOnlyWhileTypingEnabled())
+			return true;
+		
+		String value = searchBox.getValue();
+		return searchBox.isFocused() || (value != null && !value.isBlank());
+	}
+	
+	private int getSearchHeight()
+	{
+		return 12;
+	}
+	
+	private float getRightSettingsWidthScale()
+	{
+		return Math.max(0.05F, cfg().getSettingsWidth());
+	}
+	
+	private float getRightSettingsHeightScale()
+	{
+		return Math.max(0.05F, cfg().getSettingsHeight());
+	}
+	
+	private int scaleRightSettingWidth(int value)
+	{
+		return Math.max(1, Math.round(value * getRightSettingsWidthScale()));
+	}
+	
+	private int scaleRightSettingHeight(int value)
+	{
+		return Math.max(1, Math.round(value * getRightSettingsHeightScale()));
+	}
+	
+	private int getMinimumReadableUiRowHeight()
+	{
+		Font font = minecraft != null ? minecraft.font : null;
+		int textH = font == null ? 9 : Math.max(1, scaledFontHeight(font));
+		return Math.max(10, textH + 2);
+	}
+	
+	private int getSettingsValueColumnWidth(int rowX1, int rowX2)
+	{
+		int min = scaleRightSettingWidth(120);
+		int max = scaleRightSettingWidth(180);
+		return Math.min(max, Math.max(min, (rowX2 - rowX1) / 4));
+	}
+	
+	private void rebuildLayout()
+	{
+		int targetW = (int)(width * cfg().getWidthPercent());
+		int targetH = (int)(height * cfg().getHeightPercent());
+		int searchHeight = getSearchHeight();
+		int edgePadding = 8;
+		panelW = Math.max(320, Math.min(width - edgePadding * 2, targetW));
+		panelH = Math.max(220, Math.min(height - edgePadding * 2, targetH));
+		panelX = (width - panelW) / 2;
+		panelY = (height - panelH) / 2;
+		categoryW = Math.min(cfg().getCategoryWidth(), panelW - 270);
+		int contentX;
+		int contentW;
+		if(isTopTabsLayout())
+		{
+			contentX = panelX + 6;
+			contentW = panelW - 12;
+			moduleY = getCategoryAreaY2() + getCategoryRowGap() + 8;
+			int moduleBottomY = panelY + panelH - 6;
+			moduleH = Math.max(40, moduleBottomY - moduleY);
+		}else
+		{
+			contentX = panelX + categoryW + 8;
+			contentW = panelW - categoryW - 16;
+			moduleY = shouldRenderSearchBox() ? panelY + searchHeight + 22
+				: panelY + 6;
+			moduleH = panelY + panelH - 6 - moduleY;
+		}
+		int paneGap = 2;
+		moduleX = contentX;
+		moduleW = Math.max(100, (contentW - paneGap) * 42 / 100);
+		settingsX = moduleX + moduleW + paneGap;
+		settingsW = Math.max(100, contentW - moduleW - paneGap);
+		
+		uiMenuX = settingsX + 8;
+		uiMenuY = moduleY;
+		uiMenuW = settingsW - 16;
+		uiMenuH = moduleH;
+	}
+	
+	@Override
+	public void tick()
+	{
+		if(searchBox != null)
+		{
+			boolean wasVisible = searchVisibleInLayout;
+			searchText = searchBox.getValue();
+			if(wasVisible != shouldRenderSearchBox())
+				applyLiveLayout();
+			searchBox.setVisible(shouldRenderSearchBox());
+		}
+	}
+	
+	private void applyLiveLayout()
+	{
+		cfg().enforceNoClipLayout();
+		rebuildLayout();
+		searchVisibleInLayout = shouldRenderSearchBox();
+		if(searchBox != null)
+		{
+			searchBox.setX(getSearchBoxX());
+			searchBox.setY(getSearchBoxY());
+			searchBox.setHeight(getSearchHeight());
+			searchBox.setWidth(getSearchBoxWidth());
+			searchBox.setVisible(shouldRenderSearchBox());
+		}
+		clampScroll();
+	}
+	
+	@Override
+	public boolean keyPressed(KeyEvent context)
+	{
+		searchSuppressedCodepoint = -1;
+		
+		if(editingTextField != null)
+		{
+			if(context.key() == InputConstants.KEY_ESCAPE)
+			{
+				finishInlineTextField(false);
+				return true;
+			}
+			if(context.key() == InputConstants.KEY_RETURN)
+			{
+				finishInlineTextField(true);
+				return true;
+			}
+			return super.keyPressed(context);
+		}
+		
+		if(context.key() == InputConstants.KEY_ESCAPE)
+		{
+			minecraft.setScreen(prevScreen);
+			return true;
+		}
+		
+		if(handleSearchKeyPressed(context))
+			return true;
+		
+		return super.keyPressed(context);
+	}
+	
+	@Override
+	public boolean charTyped(CharacterEvent event)
+	{
+		if(editingTextField != null)
+			return super.charTyped(event);
+		
+		if(isSuppressedSearchChar(event))
+			return true;
+		
+		if(searchBox != null && cfg().isSearchOnlyWhileTypingEnabled()
+			&& !searchBox.isFocused())
+		{
+			setFocused(searchBox);
+			searchBox.setFocused(true);
+			searchBox.setVisible(true);
+		}
+		
+		if(searchBox != null && searchBox.charTyped(event))
+		{
+			searchText = searchBox.getValue();
+			if(searchVisibleInLayout != shouldRenderSearchBox())
+				applyLiveLayout();
+			return true;
+		}
+		
+		return super.charTyped(event);
+	}
+	
+	private boolean handleSearchKeyPressed(KeyEvent context)
+	{
+		if(searchBox == null || searchBox.isFocused()
+			|| !cfg().isSearchOnlyWhileTypingEnabled())
+			return false;
+		
+		int codepoint = getSearchCodepoint(context);
+		if(codepoint < 0)
+			return false;
+		
+		setFocused(searchBox);
+		searchBox.setFocused(true);
+		searchBox.setVisible(true);
+		
+		if(!searchBox.charTyped(new CharacterEvent(codepoint)))
+			return false;
+		
+		searchText = searchBox.getValue();
+		moduleScroll = 0;
+		searchSuppressedCodepoint = codepoint;
+		if(searchVisibleInLayout != shouldRenderSearchBox())
+			applyLiveLayout();
+		return true;
+	}
+	
+	private int getSearchCodepoint(KeyEvent context)
+	{
+		if(context.hasControlDown() || context.hasAltDown())
+			return -1;
+		
+		int key = context.key();
+		if(key >= InputConstants.KEY_A && key <= InputConstants.KEY_Z)
+		{
+			int codepoint = 'a' + key - InputConstants.KEY_A;
+			return context.hasShiftDown() ? Character.toUpperCase(codepoint)
+				: codepoint;
+		}
+		if(!context.hasShiftDown() && key >= InputConstants.KEY_0
+			&& key <= InputConstants.KEY_9)
+			return '0' + key - InputConstants.KEY_0;
+		if(key == InputConstants.KEY_SPACE)
+			return ' ';
+		return -1;
+	}
+	
+	private boolean isSuppressedSearchChar(CharacterEvent event)
+	{
+		if(searchSuppressedCodepoint < 0)
+			return false;
+		
+		if(event.codepoint() != searchSuppressedCodepoint && event
+			.codepoint() != Character.toUpperCase(searchSuppressedCodepoint))
+			return false;
+		
+		searchSuppressedCodepoint = -1;
+		return true;
+	}
+	
+	@Override
+	public boolean mouseClicked(MouseButtonEvent context, boolean doubleClick)
+	{
+		double mouseX = context.x();
+		double mouseY = context.y();
+		int button = context.button();
+		
+		boolean wasSearchVisible = searchVisibleInLayout;
+		if(super.mouseClicked(context, doubleClick))
+		{
+			if(wasSearchVisible != shouldRenderSearchBox())
+				applyLiveLayout();
+			return true;
+		}
+		
+		if(handleCategoryClick(mouseX, mouseY))
+			return true;
+		
+		if(handleSelectedFeatureSettingsClick(mouseX, mouseY, button))
+			return true;
+		
+		if(handleModuleClick(mouseX, mouseY, button))
+			return true;
+		
+		return false;
+	}
+	
+	@Override
+	public boolean mouseDragged(MouseButtonEvent context, double dragX,
+		double dragY)
+	{
+		if(draggingSlider == null)
+			return super.mouseDragged(context, dragX, dragY);
+		
+		setSliderValueFromMouse(draggingSlider, context.x());
+		if(isStyleSlider(draggingSlider.slider()))
+			applyLiveLayout();
+		return true;
+	}
+	
+	@Override
+	public boolean mouseReleased(MouseButtonEvent context)
+	{
+		draggingSlider = null;
+		return super.mouseReleased(context);
+	}
+	
+	@Override
+	public boolean mouseScrolled(double mouseX, double mouseY,
+		double horizontalAmount, double verticalAmount)
+	{
+		if(mouseX >= moduleX && mouseX <= moduleX + moduleW && mouseY >= moduleY
+			&& mouseY <= moduleY + moduleH)
+		{
+			moduleScroll -= (int)(verticalAmount * cfg().getRowHeight());
+			clampScroll();
+			return true;
+		}
+		if(mouseX >= settingsX && mouseX <= settingsX + settingsW
+			&& mouseY >= moduleY && mouseY <= moduleY + moduleH)
+		{
+			settingsScroll -= (int)(verticalAmount * cfg().getRowHeight());
+			clampScroll();
+			return true;
+		}
+		
+		if(isInsideCategoryArea(mouseX, mouseY))
+		{
+			if(!isTopTabsLayout())
+			{
+				categoryScroll -=
+					(int)(verticalAmount * getCategoryRowHeight());
+				clampScroll();
+				return true;
+			}
+		}
+		
+		return super.mouseScrolled(mouseX, mouseY, horizontalAmount,
+			verticalAmount);
+	}
+	
+	@Override
+	public void resize(int width, int height)
+	{
+		super.resize(width, height);
+		applyLiveLayout();
+	}
+	
+	@Override
+	public void extractRenderState(GuiGraphicsExtractor context, int mouseX,
+		int mouseY, float partialTicks)
+	{
+		hoverTooltip = "";
+		syncFontManager();
+		int bg =
+			withAlpha(cfg().getBackgroundColor(), cfg().getBackgroundOpacity());
+		int panel = withAlpha(cfg().getPanelColor(), cfg().getUiOpacity());
+		
+		context.fill(0, 0, width, height, bg);
+		context.fill(panelX, panelY, panelX + panelW, panelY + panelH, panel);
+		renderHeader(context);
+		renderCategories(context, mouseX, mouseY);
+		renderModules(context, mouseX, mouseY);
+		renderSelectedFeatureSettings(context, mouseX, mouseY);
+		renderSectionBorders(context);
+		
+		if(shouldRenderSearchBox())
+		{
+			renderSearchBoxText(context);
+		}
+		
+		renderTooltip(context);
+	}
+	
+	private void renderSectionBorders(GuiGraphicsExtractor context)
+	{
+		if(!cfg().isSectionBordersEnabled())
+			return;
+		
+		float borderThickness = cfg().getSectionBorderThickness();
+		int border = cfg().getSectionBorderColor();
+		if(isTopTabsLayout())
+			drawThickRectBorder(context, getCategoryAreaX1() - 2,
+				getCategoryAreaY1() - 2, getCategoryAreaX2() + 2,
+				getCategoryAreaY2() + 2, border, borderThickness);
+		else
+		{
+			drawPaneBorder(context, panelX + 4, panelY + 6, moduleX,
+				panelY + panelH - 6, border, true, false, borderThickness);
+			drawVerticalStroke(context, moduleX, panelY + 6, moduleY + 1,
+				borderThickness, border);
+		}
+		drawPaneBorder(context, moduleX, moduleY, moduleX + moduleW,
+			moduleY + moduleH, border, true, false, borderThickness);
+		drawPaneBorder(context, settingsX, moduleY, settingsX + settingsW,
+			moduleY + moduleH, border, false, true, borderThickness);
+		if(shouldRenderSearchBox() && searchBox != null)
+		{
+			int x1 = isTopTabsLayout() ? getSearchBoxX() - 4 : moduleX + 6;
+			int x2 =
+				isTopTabsLayout() ? getSearchBoxX() + getSearchBoxWidth() + 4
+					: moduleX + moduleW - 6;
+			int y1 = getSearchBoxY() - 3;
+			int y2 = getSearchBoxY() + getSearchHeight() + 3;
+			context.fill(x1, y1, x2, y2,
+				withAlpha(cfg().getPanelLightColor(), cfg().getUiOpacity()));
+			drawThickRectBorder(context, x1, y1, x2, y2, border,
+				borderThickness);
+		}
+		int dividerX =
+			moduleX + moduleW + (settingsX - (moduleX + moduleW)) / 2;
+		drawVerticalStroke(context, dividerX, moduleY, moduleY + moduleH,
+			borderThickness, border);
+	}
+	
+	private void drawPaneBorder(GuiGraphicsExtractor context, int x1, int y1,
+		int x2, int y2, int color, boolean left, boolean right, float thickness)
+	{
+		drawHorizontalStroke(context, x1, y1, x2, thickness, color);
+		drawHorizontalStroke(context, x1, y2 - thickness, x2, thickness, color);
+		if(left)
+			drawVerticalStroke(context, x1, y1, y2, thickness, color);
+		if(right)
+			drawVerticalStroke(context, x2 - thickness, y1, y2, thickness,
+				color);
+	}
+	
+	private void renderSearchBoxText(GuiGraphicsExtractor context)
+	{
+		if(searchBox == null)
+			return;
+		
+		Font font = minecraft.font;
+		int x1 = searchBox.getX();
+		int y1 = searchBox.getY();
+		int x2 = x1 + searchBox.getWidth();
+		int y2 = y1 + searchBox.getHeight();
+		int padX =
+			Math.max(6, Math.round(4F * Math.max(0.25F, cfg().getFontScale())));
+		int textY = centeredTextY(font, y1, y2);
+		int maxTextW = Math.max(1, (x2 - x1) - padX * 2);
+		
+		String value = searchBox.getValue();
+		boolean focused = searchBox.isFocused();
+		boolean empty = value == null || value.isBlank();
+		String baseText =
+			empty && !focused ? "search" : (value == null ? "" : value);
+		String drawText = trimToWidth(font, baseText, maxTextW);
+		int textColor = empty && !focused ? cfg().getMutedTextColor()
+			: cfg().getTextColor();
+		
+		drawStringScaled(context, font, drawText, x1 + padX, textY, textColor,
+			false);
+		
+		if(focused && (minecraft.gui.getGuiTicks() / 6) % 2 == 0)
+		{
+			int caretX = x1 + padX + scaledFontWidth(font, drawText);
+			int caretTop = textY;
+			int caretBottom = textY + Math.max(1, scaledFontHeight(font));
+			context.fill(caretX, caretTop, caretX + 1, caretBottom,
+				withAlpha(cfg().getTextColor(), cfg().getUiOpacity()));
+		}
+	}
+	
+	private void renderHeader(GuiGraphicsExtractor context)
+	{
+		Font font = minecraft.font;
+		int accent = cfg().getAccentColor();
+		int muted = cfg().getMutedTextColor();
+		int panelLight =
+			withAlpha(cfg().getPanelLightColor(), cfg().getUiOpacity());
+		
+		drawStringScaled(context, font, "Wurst7 CevAPI", panelX + 12,
+			panelY + 10, accent, true);
+		int altGuiX = isTopTabsLayout()
+			? panelX + 12 + scaledFontWidth(font, "Wurst7 CevAPI") + 8
+			: panelX + 12;
+		int altGuiY = isTopTabsLayout() ? panelY + 10 : panelY + 22;
+		drawStringScaled(context, font, "Alt GUI", altGuiX, altGuiY, muted,
+			false);
+		
+		if(shouldRenderSearchBox())
+		{
+			int sx1 = getSearchBoxX() - 4;
+			int sx2 = getSearchBoxX() + getSearchBoxWidth() + 4;
+			if(isTopTabsLayout())
+			{
+				sx1 = Math.max(getCategoryAreaX1(), sx1);
+				sx2 = Math.min(getCategoryAreaX2(), sx2);
+			}
+			int sy1 = getSearchBoxY() - 2;
+			int sy2 = getSearchBoxY() + getSearchHeight() + 2;
+			context.fill(sx1, sy1, sx2, sy2, panelLight);
+		}
+	}
+	
+	private void renderTooltip(GuiGraphicsExtractor context)
+	{
+		if(hoverTooltip == null || hoverTooltip.isBlank())
+			return;
+		
+		Font font = minecraft.font;
+		String text = trimToWidth(font, hoverTooltip, panelW - 16);
+		int boxY1 = panelY + panelH - 16;
+		int boxY2 = panelY + panelH - 2;
+		context.fill(panelX, boxY1, panelX + panelW, boxY2,
+			withAlpha(cfg().getPanelLightColor(), cfg().getTooltipOpacity()));
+		drawStringScaled(context, font, text, panelX + 8, boxY1 + 3,
+			cfg().getDescriptionColor(), false);
+	}
+	
+	private void renderCategories(GuiGraphicsExtractor context, int mouseX,
+		int mouseY)
+	{
+		if(isTopTabsLayout())
+		{
+			renderTopTabCategories(context, mouseX, mouseY);
+			return;
+		}
+		
+		renderSidebarCategories(context, mouseX, mouseY);
+	}
+	
+	private void renderSidebarCategories(GuiGraphicsExtractor context,
+		int mouseX, int mouseY)
+	{
+		Font font = minecraft.font;
+		int rowH = getCategoryRowHeight();
+		int rowGap = getCategoryRowGap();
+		int areaX1 = getCategoryAreaX1();
+		int areaX2 = getCategoryAreaX2();
+		int areaY1 = getCategoryAreaY1();
+		int areaY2 = getCategoryAreaY2();
+		int y = areaY1 - categoryScroll;
+		int accentFill = withAlpha(cfg().getAccentColor(), 0.35F);
+		int accentHover = withAlpha(cfg().getAccentColor(), 0.2F);
+		List<String> categories = getDisplayCategories();
+		
+		int rows = 2 + categories.size();
+		int totalHeight = rows * rowH + (rows - 1) * rowGap;
+		int viewportHeight = Math.max(0, areaY2 - areaY1);
+		maxCategoryScroll = Math.max(0, totalHeight - viewportHeight);
+		clampScroll();
+		y = areaY1 - categoryScroll;
+		
+		context.enableScissor(areaX1, areaY1, areaX2, areaY2);
+		
+		int enabledRowH = rowH;
+		boolean enabledHovered =
+			isInside(mouseX, mouseY, areaX1, y, areaX2, y + enabledRowH);
+		if(enabledCategorySelected || enabledHovered)
+			context.fill(areaX1, y, areaX2, y + enabledRowH,
+				enabledCategorySelected ? accentFill : accentHover);
+		
+		int enabledTextY = centeredTextY(font, y, y + enabledRowH) + 1;
+		drawStringScaled(context, font, "Enabled", panelX + 12, enabledTextY,
+			enabledCategorySelected ? cfg().getTextColor()
+				: cfg().getMutedTextColor(),
+			false);
+		y += enabledRowH + rowGap;
+		
+		for(String categoryName : categories)
+		{
+			boolean hovered =
+				isInside(mouseX, mouseY, areaX1, y, areaX2, y + rowH);
+			boolean selected =
+				!styleCategorySelected && !enabledCategorySelected
+					&& selectedCategory.equalsIgnoreCase(categoryName);
+			
+			if(selected || hovered)
+				context.fill(areaX1, y, areaX2, y + rowH,
+					selected ? accentFill : accentHover);
+			
+			int catTextY = centeredTextY(font, y, y + rowH) + 1;
+			drawStringScaled(context, font, categoryName, panelX + 12, catTextY,
+				selected ? cfg().getTextColor() : cfg().getMutedTextColor(),
+				false);
+			y += rowH + rowGap;
+		}
+		
+		int styleRowH = rowH;
+		boolean styleHovered =
+			isInside(mouseX, mouseY, areaX1, y, areaX2, y + styleRowH);
+		if(styleCategorySelected || styleHovered)
+			context.fill(areaX1, y, areaX2, y + styleRowH,
+				styleCategorySelected ? accentFill : accentHover);
+		
+		int styleTextY = centeredTextY(font, y, y + styleRowH) + 1;
+		drawStringScaled(context, font, "Client Settings", panelX + 12,
+			styleTextY, styleCategorySelected ? cfg().getTextColor()
+				: cfg().getMutedTextColor(),
+			false);
+		if(cfg().isCategoryRowBordersEnabled())
+		{
+			int border = cfg().getSectionBorderColor();
+			float thickness = cfg().getCategoryRowBorderThickness();
+			int rowsTop = areaY1 - categoryScroll;
+			int rowsBottom = rowsTop + rows * rowH;
+			drawHorizontalStroke(context, areaX1, rowsTop, areaX2, thickness,
+				border);
+			drawHorizontalStroke(context, areaX1, rowsBottom - thickness,
+				areaX2, thickness, border);
+			drawVerticalStroke(context, areaX1, rowsTop, rowsBottom, thickness,
+				border);
+			drawVerticalStroke(context, areaX2 - thickness, rowsTop, rowsBottom,
+				thickness, border);
+			for(int i = 1; i < rows; i++)
+				drawHorizontalStroke(context, areaX1, rowsTop + i * rowH,
+					areaX2, thickness, border);
+		}
+		context.disableScissor();
+		
+		if(maxCategoryScroll > 0)
+			renderCategoryScrollbar(context, areaX1, areaY1, areaX2, areaY2);
+	}
+	
+	private void renderTopTabCategories(GuiGraphicsExtractor context,
+		int mouseX, int mouseY)
+	{
+		Font font = minecraft.font;
+		int areaY1 = getCategoryAreaY1();
+		int areaY2 = getCategoryAreaY2();
+		int accentFill = withAlpha(cfg().getAccentColor(), 0.35F);
+		int accentHover = withAlpha(cfg().getAccentColor(), 0.2F);
+		int areaX1 = getCategoryAreaX1();
+		int areaX2 = getCategoryAreaX2();
+		List<TopCategoryTab> tabs = getTopCategoryTabs(font);
+		
+		maxCategoryScroll = 0;
+		categoryScroll = 0;
+		
+		context.fill(areaX1, areaY1, areaX2, areaY2,
+			withAlpha(cfg().getPanelLightColor(), 0.58F));
+		context.fill(areaX1, areaY2, areaX2, areaY2 + 1,
+			withAlpha(cfg().getPanelLightColor(), 0.85F));
+		
+		for(TopCategoryTab tab : tabs)
+		{
+			boolean selected = switch(tab.kind())
+			{
+				case ENABLED -> enabledCategorySelected;
+				case STYLE -> styleCategorySelected;
+				case CATEGORY -> !styleCategorySelected
+					&& !enabledCategorySelected
+					&& selectedCategory.equalsIgnoreCase(tab.categoryName());
+			};
+			drawTopCategoryTab(context, font, tab.label(), selected,
+				isInside(mouseX, mouseY, tab.x1(), areaY1, tab.x2(), areaY2),
+				tab.x1(), areaY1, tab.x2(), areaY2, accentFill, accentHover);
+		}
+		if(cfg().isCategoryRowBordersEnabled())
+		{
+			float thickness = cfg().getCategoryRowBorderThickness();
+			int border = cfg().getSectionBorderColor();
+			drawPaneBorder(context, areaX1, areaY1, areaX2, areaY2, border,
+				true, true, thickness);
+			for(int i = 1; i < tabs.size(); i++)
+				drawVerticalStroke(context, tabs.get(i).x1(), areaY1, areaY2,
+					thickness, border);
+		}
+	}
+	
+	private List<TopCategoryTab> getTopCategoryTabs(Font font)
+	{
+		int areaX1 = getCategoryAreaX1();
+		int areaX2 = getCategoryAreaX2();
+		int areaW = Math.max(1, areaX2 - areaX1);
+		int gap = getTopTabGap();
+		
+		ArrayList<String> labels = new ArrayList<>();
+		labels.add("Enabled");
+		List<String> categories = getDisplayCategories();
+		labels.addAll(categories);
+		labels.add("Client Settings");
+		int tabCount = labels.size();
+		if(tabCount == 0)
+			return List.of();
+		
+		int[] widths = new int[tabCount];
+		int availableW = Math.max(1, areaW - Math.max(0, tabCount - 1) * gap);
+		
+		if(cfg().isAutoSizeTopTabsEnabled()
+			&& !cfg().isCategoryRowBordersEnabled())
+		{
+			int minW = 24;
+			int sum = 0;
+			for(int i = 0; i < tabCount; i++)
+			{
+				widths[i] =
+					Math.max(minW, scaledFontWidth(font, labels.get(i)) + 14);
+				sum += widths[i];
+			}
+			
+			if(sum > availableW)
+			{
+				double scale = availableW / (double)sum;
+				sum = 0;
+				for(int i = 0; i < tabCount; i++)
+				{
+					widths[i] =
+						Math.max(minW, (int)Math.floor(widths[i] * scale));
+					sum += widths[i];
+				}
+				
+				for(int i = 0; sum > availableW && i < tabCount * 6; i++)
+				{
+					int idx = i % tabCount;
+					if(widths[idx] > minW)
+					{
+						widths[idx]--;
+						sum--;
+					}
+				}
+			}
+		}else
+		{
+			int tabW = Math.max(1, availableW / tabCount);
+			for(int i = 0; i < tabCount; i++)
+				widths[i] = tabW;
+			int remainder = Math.max(0, availableW - tabW * tabCount);
+			for(int i = 0; i < remainder; i++)
+				widths[i % tabCount]++;
+		}
+		
+		int usedW = Math.max(0, (tabCount - 1) * gap);
+		for(int w : widths)
+			usedW += w;
+		int x = areaX1 + Math.max(0, (areaW - usedW) / 2);
+		
+		ArrayList<TopCategoryTab> tabs = new ArrayList<>(tabCount);
+		int labelIndex = 0;
+		int x1 = x;
+		int x2 = Math.min(areaX2, x1 + widths[labelIndex]);
+		tabs.add(new TopCategoryTab(TopTabKind.ENABLED, labels.get(labelIndex),
+			null, x1, x2));
+		x = x2 + gap;
+		labelIndex++;
+		
+		for(String categoryName : categories)
+		{
+			x1 = x;
+			x2 = Math.min(areaX2, x1 + widths[labelIndex]);
+			tabs.add(new TopCategoryTab(TopTabKind.CATEGORY,
+				labels.get(labelIndex), categoryName, x1, x2));
+			x = x2 + gap;
+			labelIndex++;
+		}
+		
+		x1 = x;
+		x2 = Math.min(areaX2, x1 + widths[labelIndex]);
+		tabs.add(new TopCategoryTab(TopTabKind.STYLE, labels.get(labelIndex),
+			null, x1, x2));
+		return tabs;
+	}
+	
+	private void drawTopCategoryTab(GuiGraphicsExtractor context, Font font,
+		String label, boolean selected, boolean hovered, int x1, int y1, int x2,
+		int y2, int accentFill, int accentHover)
+	{
+		if(x2 <= x1)
+			return;
+		
+		if(selected || hovered)
+			context.fill(x1, y1, x2, y2, selected ? accentFill : accentHover);
+		
+		String text = trimToWidth(font, label, Math.max(1, x2 - x1 - 6));
+		drawCenteredStringScaledInBox(context, font, text, x1, y1, x2, y2,
+			selected ? cfg().getTextColor() : cfg().getMutedTextColor());
+		if(selected)
+			context.fill(x1, y2 - 1, x2, y2,
+				withAlpha(cfg().getAccentColor(), 0.95F));
+	}
+	
+	private void renderCategoryScrollbar(GuiGraphicsExtractor context,
+		int areaX1, int areaY1, int areaX2, int areaY2)
+	{
+		int trackX2 = areaX2 - 1;
+		int trackX1 = trackX2 - 2;
+		int trackY1 = areaY1;
+		int trackY2 = areaY2;
+		
+		int trackColor = withAlpha(cfg().getPanelLightColor(), 0.7F);
+		context.fill(trackX1, trackY1, trackX2, trackY2, trackColor);
+		
+		double trackH = Math.max(1, trackY2 - trackY1);
+		double knobRatio = trackH / (trackH + Math.max(1, maxCategoryScroll));
+		int knobH = Math.max(10, (int)Math.round(trackH * knobRatio));
+		int maxKnobY = (int)(trackH - knobH);
+		double scrollRatio = maxCategoryScroll == 0 ? 0
+			: categoryScroll / (double)maxCategoryScroll;
+		int knobOffset = (int)Math.round(maxKnobY * scrollRatio);
+		
+		int knobY1 = trackY1 + knobOffset;
+		int knobY2 = Math.min(trackY2, knobY1 + knobH);
+		int knobColor = withAlpha(cfg().getAccentColor(), 0.95F);
+		context.fill(trackX1, knobY1, trackX2, knobY2, knobColor);
+	}
+	
+	private void renderModules(GuiGraphicsExtractor context, int mouseX,
+		int mouseY)
+	{
+		Font font = minecraft.font;
+		int contentPadding = scaleRightSettingHeight(8);
+		int contentY = moduleY + contentPadding - moduleScroll;
+		int viewTop = moduleY + contentPadding;
+		int viewBottom = moduleY + moduleH - contentPadding;
+		int rowH = cfg().getRowHeight();
+		int clipX1 = moduleX + 8;
+		int clipY1 = viewTop;
+		int clipX2 = moduleX + moduleW - 8;
+		int clipY2 = viewBottom;
+		int contentBottomX = moduleX + moduleW - 12;
+		int totalContentHeight = 0;
+		int bottomPadding = contentPadding;
+		context.enableScissor(clipX1, clipY1, clipX2, clipY2);
+		
+		List<DisplayEntry> entries = getDisplayedEntries();
+		int entryIndex = 0;
+		
+		for(DisplayEntry entry : entries)
+		{
+			Feature feature = entry.feature();
+			boolean expanded = expandedFeatures.contains(feature.getName());
+			boolean settingsOpen = feature == selectedFeature;
+			List<SettingRow> settingRows = null;
+			boolean hasExpandableRows = false;
+			if(expanded || cfg().isHackExpandIconsEnabled())
+			{
+				settingRows = getSettingRows(feature);
+				hasExpandableRows = !settingRows.isEmpty();
+			}
+			int rowTop = contentY;
+			int rowBottom = rowTop + rowH;
+			boolean visible = rowBottom >= viewTop && rowTop <= viewBottom;
+			if(visible)
+			{
+				boolean hovered = isInside(mouseX, mouseY, moduleX + 8, rowTop,
+					contentBottomX, rowBottom);
+				boolean selected = feature == selectedFeature;
+				if(hovered)
+					hoverTooltip = feature.getDescription();
+				int bgColor = feature.isEnabled()
+					? withAlpha(cfg().getEnabledHackRowColor(), 0.42F)
+					: withAlpha(cfg().isHackRowStripingEnabled()
+						&& (entryIndex & 1) == 1
+							? cfg().getAlternateHackRowColor()
+							: cfg().getHackRowColor(),
+						0.72F);
+				boolean highlightEnabled = cfg().isHackRowHighlightEnabled();
+				if(hovered && highlightEnabled)
+					bgColor =
+						withAlpha(cfg().getHackRowHighlightColor(), 0.42F);
+				if(selected && !hovered && highlightEnabled)
+					bgColor =
+						withAlpha(cfg().getHackRowHighlightColor(), 0.58F);
+				context.fill(moduleX + 8, rowTop, contentBottomX, rowBottom,
+					bgColor);
+				if(selected && highlightEnabled)
+					drawThickRectBorder(context, moduleX + 8, rowTop,
+						contentBottomX, rowBottom,
+						withAlpha(cfg().getHackRowHighlightColor(), 0.9F),
+						cfg().getHackHighlightThickness());
+				int nameX = moduleX + 14;
+				int rowTextY = centeredTextY(font, rowTop, rowBottom);
+				if((settingsOpen || cfg().isHackExpandIconsEnabled())
+					&& hasExpandableRows)
+				{
+					String icon = settingsOpen ? "▼" : "▶";
+					drawStringScaled(context, font, icon, nameX, rowTextY,
+						cfg().getMutedTextColor(), false);
+					nameX += Math.max(11, scaledFontWidth(font, icon) + 4);
+				}
+				if(feature instanceof Hack hack
+					&& cfg().isFavoriteStarsEnabled() && hack.isImportant())
+				{
+					drawStringScaled(context, font, "★", nameX, rowTextY,
+						cfg().getAccentColor(), false);
+					nameX += Math.max(12, scaledFontWidth(font, "★") + 4);
+				}
+				if(entry.recentDisabled())
+				{
+					String recentTag = "RECENT";
+					drawStringScaled(context, font, recentTag, nameX, rowTextY,
+						cfg().getMutedTextColor(), false);
+					nameX += scaledFontWidth(font, recentTag) + 6;
+				}
+				
+				drawStringScaled(context, font, feature.getName(), nameX,
+					rowTextY, cfg().getTextColor(), false);
+				
+				if(featureHasStatePill(feature))
+				{
+					int toggleX2 = contentBottomX;
+					if(cfg().isSwitchHackTogglesEnabled())
+					{
+						int switchH = Math.min(14, rowBottom - rowTop - 2);
+						drawSwitch(context, toggleX2 - 44,
+							(rowTop + rowBottom - switchH) / 2, toggleX2,
+							(rowTop + rowBottom + switchH) / 2,
+							feature.isEnabled());
+					}else
+					{
+						context.fill(toggleX2 - 44, rowTop, toggleX2, rowBottom,
+							feature.isEnabled()
+								? withAlpha(cfg().getEnabledColor(), 0.9F)
+								: withAlpha(cfg().getDisabledColor(), 0.92F));
+						drawCenteredStringScaled(context, font,
+							feature.isEnabled() ? "ON" : "OFF", toggleX2 - 22,
+							centeredTextY(font, rowTop, rowBottom) + 1,
+							cfg().getTextColor());
+					}
+				}
+				if(cfg().isHackRowBordersEnabled())
+					drawThickRectBorder(context, moduleX + 8, rowTop,
+						contentBottomX, rowBottom,
+						cfg().getSectionBorderColor(),
+						cfg().getHackRowBorderThickness());
+			}
+			
+			contentY += rowH;
+			totalContentHeight += rowH;
+			
+			entryIndex++;
+		}
+		context.disableScissor();
+		
+		totalContentHeight += bottomPadding;
+		maxModuleScroll =
+			Math.max(0, totalContentHeight - (viewBottom - viewTop));
+		if(pendingScrollRestore >= 0)
+		{
+			moduleScroll = pendingScrollRestore;
+			pendingScrollRestore = -1;
+		}
+		clampScroll();
+		
+		if(maxModuleScroll > 0)
+			renderScrollbar(context);
+	}
+	
+	private void renderSelectedFeatureSettings(GuiGraphicsExtractor context,
+		int mouseX, int mouseY)
+	{
+		List<DisplayEntry> entries = getDisplayedEntries();
+		if(selectedFeature == null || entries.stream()
+			.noneMatch(entry -> entry.feature() == selectedFeature))
+			selectedFeature =
+				entries.isEmpty() ? null : entries.get(0).feature();
+		
+		int x1 = settingsX + 3;
+		int x2 = settingsX + settingsW - 3;
+		maxSettingsScroll = 0;
+		context.fill(x1, moduleY, x2, moduleY + moduleH,
+			withAlpha(cfg().getPanelColor(), 0.72F));
+		if(selectedFeature == null)
+			return;
+		
+		Font font = minecraft.font;
+		context.fill(x1, moduleY, x2, moduleY + 30,
+			withAlpha(cfg().getPanelLightColor(), 0.9F));
+		drawStringScaled(context, font, selectedFeature.getName(), x1 + 8,
+			moduleY + 6, cfg().getTextColor(), true);
+		String description = trimToWidth(font, selectedFeature.getDescription(),
+			Math.max(1, x2 - x1 - 16));
+		if(!description.isBlank())
+			drawStringScaled(context, font, description, x1 + 8, moduleY + 17,
+				cfg().getMutedTextColor(), false);
+		
+		List<SettingRow> rows = getSettingRows(selectedFeature);
+		int contentHeight = rows.stream().mapToInt(SettingRow::height).sum();
+		int bottomPadding = scaleRightSettingHeight(8);
+		maxSettingsScroll =
+			Math.max(0, contentHeight - (moduleH - 34 - bottomPadding));
+		clampScroll();
+		int y = moduleY + 34 - settingsScroll;
+		context.enableScissor(x1, moduleY + 30, x2,
+			moduleY + moduleH - bottomPadding);
+		for(SettingRow row : rows)
+		{
+			int y2 = y + row.height();
+			if(y2 >= moduleY + 22 && y <= moduleY + moduleH - bottomPadding)
+				renderSettingRow(context, font, mouseX, mouseY, row, y, y2);
+			y = y2;
+		}
+		context.disableScissor();
+		if(maxSettingsScroll > 0)
+			renderSettingsScrollbar(context);
+	}
+	
+	private void renderSettingsScrollbar(GuiGraphicsExtractor context)
+	{
+		int x1 = settingsX + settingsW - 11;
+		int x2 = x1 + 3;
+		int bottomPadding = scaleRightSettingHeight(8);
+		context.fill(x1, moduleY + 30, x2, moduleY + moduleH - bottomPadding,
+			withAlpha(cfg().getPanelLightColor(), 0.65F));
+		int trackH = moduleH - 30 - bottomPadding;
+		int knobH = Math.max(20,
+			(int)(trackH * (trackH / (double)(trackH + maxSettingsScroll))));
+		int knobY = moduleY + 30 + (int)((trackH - knobH)
+			* (settingsScroll / (double)maxSettingsScroll));
+		context.fill(x1, knobY, x2, knobY + knobH, cfg().getAccentColor());
+	}
+	
+	private void renderScrollbar(GuiGraphicsExtractor context)
+	{
+		int x1 = moduleX + moduleW - 11;
+		int x2 = x1 + 3;
+		int contentPadding = scaleRightSettingHeight(8);
+		int trackY1 = moduleY + contentPadding;
+		int trackH = moduleH - contentPadding * 2;
+		context.fill(x1, trackY1, x2, trackY1 + trackH,
+			withAlpha(cfg().getPanelLightColor(), 0.65F));
+		
+		double progress =
+			maxModuleScroll == 0 ? 0 : moduleScroll / (double)maxModuleScroll;
+		int knobH = Math.max(20,
+			(int)(trackH * (trackH / (double)(trackH + maxModuleScroll))));
+		int knobY = trackY1 + (int)((trackH - knobH) * progress);
+		context.fill(x1, knobY, x2, knobY + knobH, cfg().getAccentColor());
+	}
+	
+	private void renderSettingRow(GuiGraphicsExtractor context, Font font,
+		int mouseX, int mouseY, SettingRow row, int y1, int y2)
+	{
+		if(row.isKeybindRow())
+		{
+			int rowX1 =
+				settingsX + 16 + row.depth() * scaleRightSettingWidth(10);
+			int rowX2 = settingsX + settingsW - 12;
+			boolean hovered = isInside(mouseX, mouseY, rowX1, y1, rowX2, y2);
+			
+			context.fill(rowX1, y1, rowX2, y2,
+				hovered ? withAlpha(cfg().getSettingRowHighlightColor(), 0.48F)
+					: withAlpha(cfg().getSettingRowColor(), 0.78F));
+			if(hovered)
+				drawThickRectBorder(context, rowX1, y1, rowX2, y2,
+					withAlpha(cfg().getSettingRowHighlightColor(), 0.9F),
+					cfg().getSettingHighlightThickness());
+			context.fill(rowX1, y1, rowX1 + scaleRightSettingWidth(3), y2,
+				withAlpha(cfg().getAccentColor(), 0.95F));
+			
+			String label = "Keybinds";
+			int count = getExistingKeybindsForFeature(row.owner(),
+				getPossibleKeybindsForFeature(row.owner())).size();
+			String value = count == 0 ? "Open" : count + " bound";
+			
+			int valueW = getSettingsValueColumnWidth(rowX1, rowX2);
+			int valueX2 = rowX2 - scaleRightSettingWidth(6);
+			int valueX1 = valueX2 - valueW;
+			int valuePad = getPillPadding(font, y2 - y1);
+			int valueY1 = y1 + valuePad;
+			int valueY2 = y2 - valuePad;
+			
+			drawStringScaled(context, font, label,
+				rowX1 + scaleRightSettingWidth(10), centeredTextY(font, y1, y2),
+				cfg().getTextColor(), false);
+			
+			context.fill(valueX1, valueY1, valueX2, valueY2,
+				withAlpha(cfg().getSettingValueBackgroundColor(), 0.92F));
+			drawMarqueeStringScaledInBox(context, font, value, valueX1, valueY1,
+				valueX2, valueY2, cfg().getTextColor(),
+				scaleRightSettingWidth(6));
+			return;
+		}
+		
+		if(row.setting() instanceof SpacerSetting)
+			return;
+		
+		int depth = row.depth();
+		int baseX1 = settingsX + 16;
+		int rowX1 = baseX1 + depth * scaleRightSettingWidth(10);
+		int rowX2 = settingsX + settingsW - 12;
+		boolean hovered = isInside(mouseX, mouseY, rowX1, y1, rowX2, y2);
+		if(hovered && row.setting().getDescription() != null
+			&& !row.setting().getDescription().isBlank())
+			hoverTooltip = row.setting().getDescription();
+		boolean oddStripe = cfg().isSettingRowStripingEnabled()
+			&& ((y1 / Math.max(1, row.height())) & 1) == 0;
+		int rowColor =
+			hovered ? withAlpha(cfg().getSettingRowHighlightColor(), 0.48F)
+				: oddStripe
+					? withAlpha(cfg().getAlternateSettingRowColor(), 0.78F)
+					: withAlpha(cfg().getSettingRowColor(), 0.78F);
+		context.fill(rowX1, y1, rowX2, y2, rowColor);
+		if(hovered)
+			drawThickRectBorder(context, rowX1, y1, rowX2, y2,
+				withAlpha(cfg().getSettingRowHighlightColor(), 0.9F),
+				cfg().getSettingHighlightThickness());
+		if(cfg().isSettingRowDividersEnabled()
+			&& cfg().getSettingDividerThickness() > 0)
+		{
+			float thickness = cfg().getSettingDividerThickness();
+			drawHorizontalStroke(context, rowX1, y1, rowX2, thickness,
+				withAlpha(cfg().getSettingRowHighlightColor(), 0.35F));
+			drawHorizontalStroke(context, rowX1, y2 - (int)Math.ceil(thickness),
+				rowX2, thickness,
+				withAlpha(cfg().getSettingRowHighlightColor(), 0.22F));
+		}
+		
+		for(int i = 0; i < depth; i++)
+		{
+			int guideX = baseX1 + i * scaleRightSettingWidth(10)
+				+ scaleRightSettingWidth(4);
+			context.fill(guideX, y1, guideX + 1, y2,
+				withAlpha(cfg().getMutedTextColor(), 0.28F));
+		}
+		
+		int markerColor = getSettingMarkerColor(row.setting());
+		context.fill(rowX1, y1, rowX1 + scaleRightSettingWidth(3), y2,
+			markerColor);
+		
+		int tagX2 = rowX1 + scaleRightSettingWidth(6);
+		if(cfg().isTypeBadgesEnabled())
+		{
+			String typeTag = getSettingTypeTag(row.setting());
+			int tagX1 = rowX1 + scaleRightSettingWidth(6);
+			int tagW = Math.max(scaleRightSettingWidth(22),
+				scaledFontWidth(font, typeTag) + scaleRightSettingWidth(8));
+			tagX2 = tagX1 + tagW;
+			context.fill(tagX1, y1 + scaleRightSettingHeight(2), tagX2,
+				y2 - scaleRightSettingHeight(2),
+				withAlpha(cfg().getPanelColor(), 0.92F));
+			int tagTextY = centeredTextY(font, y1 + scaleRightSettingHeight(2),
+				y2 - scaleRightSettingHeight(2));
+			drawCenteredStringScaled(context, font, typeTag,
+				(tagX1 + tagX2) / 2, tagTextY,
+				withAlpha(cfg().getMutedTextColor(), 0.95F));
+		}
+		
+		String nameText = getSettingName(row.setting());
+		String valueText = getSettingValue(row.setting());
+		
+		int valuePad = scaleRightSettingWidth(6);
+		int fixedValueColW = getSettingsValueColumnWidth(rowX1, rowX2);
+		boolean editingText =
+			row.setting() instanceof TextFieldSetting textField
+				&& textField == editingTextField;
+		int valueBoxW =
+			valueText.isEmpty() && !editingText ? 0 : fixedValueColW;
+		int valueX2 = rowX2 - scaleRightSettingWidth(6);
+		int valueX1 = valueX2 - valueBoxW;
+		int nameMaxW =
+			valueText.isEmpty() ? rowX2 - tagX2 - scaleRightSettingWidth(12)
+				: valueX1 - tagX2 - scaleRightSettingWidth(10);
+		
+		nameText = trimToWidth(font, nameText, Math.max(30, nameMaxW));
+		int settingTextY = centeredTextY(font, y1, y2);
+		drawStringScaled(context, font, nameText,
+			tagX2 + scaleRightSettingWidth(6), settingTextY,
+			cfg().getTextColor(), false);
+		
+		if(!valueText.isEmpty() || editingText)
+		{
+			int valuePadY = getPillPadding(font, y2 - y1);
+			int valueY1 = y1 + valuePadY;
+			int valueY2 = y2 - valuePadY;
+			if(valueY2 <= valueY1)
+			{
+				valueY1 = y1 + 1;
+				valueY2 = y2 - 1;
+			}
+			int valueTextColor = cfg().getTextColor();
+			if(editingText)
+			{
+				inlineTextField.setX(valueX1 + valuePad);
+				inlineTextField.setY(valueY1);
+				inlineTextField
+					.setWidth(Math.max(1, valueX2 - valueX1 - valuePad * 2));
+				inlineTextField.setHeight(Math.max(1, valueY2 - valueY1));
+				inlineTextField.setTextColor(valueTextColor);
+				inlineTextField.extractRenderState(context, mouseX, mouseY, 0);
+				return;
+			}
+			if(row.setting() instanceof CheckboxSetting checkbox)
+			{
+				if(cfg().isSwitchSettingTogglesEnabled())
+				{
+					int switchH = Math.min(16, valueY2 - valueY1);
+					drawSwitch(context, valueX1, (y1 + y2 - switchH) / 2,
+						valueX2, (y1 + y2 + switchH) / 2, checkbox.isChecked());
+				}else
+				{
+					context.fill(valueX1, valueY1, valueX2, valueY2,
+						checkbox.isChecked()
+							? withAlpha(cfg().getEnabledColor(), 0.9F)
+							: withAlpha(cfg().getDisabledColor(), 0.92F));
+					drawCenteredStringScaledInBox(context, font,
+						checkbox.isChecked() ? "ON" : "OFF", valueX1,
+						valueY1 + 1, valueX2, valueY2 + 1,
+						cfg().getTextColor());
+				}
+			}else if(row.setting() instanceof ColorSetting color
+				&& cfg().isFillColorValuesEnabled())
+			{
+				context.fill(valueX1, valueY1, valueX2, valueY2,
+					color.getColorI());
+				valueTextColor = getReadableTextColor(color.getColorI());
+			}else if(row.setting() instanceof SliderSetting slider)
+			{
+				context.fill(valueX1, valueY1, valueX2, valueY2,
+					withAlpha(cfg().getSettingValueBackgroundColor(), 0.9F));
+				int innerX1 = valueX1 + scaleRightSettingWidth(2);
+				int innerX2 = valueX2 - scaleRightSettingWidth(2);
+				int innerY1 = valueY1 + scaleRightSettingHeight(1);
+				int innerY2 = valueY2 - scaleRightSettingHeight(1);
+				if(innerY2 <= innerY1)
+				{
+					innerY1 = valueY1;
+					innerY2 = valueY2;
+				}
+				int fill = (int)((innerX2 - innerX1) * slider.getPercentage());
+				context.fill(innerX1, innerY1, innerX1 + fill, innerY2,
+					withAlpha(cfg().getAccentColor(), 0.92F));
+			}else
+			{
+				context.fill(valueX1, valueY1, valueX2, valueY2,
+					getValueBadgeColor(row.setting(), valueText));
+			}
+			if(!(row.setting() instanceof CheckboxSetting))
+				drawMarqueeStringScaledInBox(context, font, valueText, valueX1,
+					valueY1, valueX2, valueY2, valueTextColor, valuePad);
+			
+			if(row.setting() instanceof ColorSetting color
+				&& !cfg().isFillColorValuesEnabled())
+			{
+				drawThickRectBorder(context, valueX1, valueY1, valueX2, valueY2,
+					color.getColorI(), cfg().getSectionBorderThickness());
+			}
+		}
+	}
+	
+	private void renderSliderPreview(GuiGraphicsExtractor context,
+		SliderSetting slider, int y1, int y2, int fillColor, int bx1, int bx2)
+	{
+		int by1 = y1 + 6;
+		int by2 = y2 - 6;
+		context.fill(bx1, by1, bx2, by2,
+			withAlpha(cfg().getPanelLightColor(), 0.8F));
+		
+		int fill = (int)((bx2 - bx1) * slider.getPercentage());
+		context.fill(bx1, by1, bx1 + fill, by2, fillColor);
+	}
+	
+	private void renderUiSettingsPanel(GuiGraphicsExtractor context, int mouseX,
+		int mouseY)
+	{
+		Font font = minecraft.font;
+		context.fill(uiMenuX, uiMenuY, uiMenuX + uiMenuW, uiMenuY + uiMenuH,
+			withAlpha(cfg().getPanelColor(), 0.95F));
+		context.fill(uiMenuX, uiMenuY, uiMenuX + uiMenuW, uiMenuY + 18,
+			withAlpha(cfg().getPanelLightColor(), 0.95F));
+		drawStringScaled(context, font, "AltGUI Style", uiMenuX + 8,
+			uiMenuY + 5, cfg().getTextColor(), false);
+		
+		int y = uiMenuY + 24;
+		y = renderUiSlider(context, font, "UI opacity",
+			cfg().getUiOpacitySetting(), y, mouseX, mouseY);
+		y = renderUiSlider(context, font, "Background opacity",
+			cfg().getBackgroundOpacitySetting(), y, mouseX, mouseY);
+		y = renderUiSlider(context, font, "Settings width",
+			cfg().getSettingsWidthSetting(), y, mouseX, mouseY);
+		y = renderUiSlider(context, font, "Settings height",
+			cfg().getSettingsHeightSetting(), y, mouseX, mouseY);
+		y = renderUiSlider(context, font, "Window width",
+			cfg().getWidthPercentSetting(), y, mouseX, mouseY);
+		y = renderUiSlider(context, font, "Window height",
+			cfg().getHeightPercentSetting(), y, mouseX, mouseY);
+		y = renderUiSlider(context, font, "Category height",
+			cfg().getCategoryHeightSetting(), y, mouseX, mouseY);
+		y = renderUiSlider(context, font, "Category width",
+			cfg().getCategoryWidthSetting(), y, mouseX, mouseY);
+		y = renderUiSlider(context, font, "Row height",
+			cfg().getRowHeightSetting(), y, mouseX, mouseY);
+		y = renderUiSlider(context, font, "Font scale",
+			cfg().getFontScaleSetting(), y, mouseX, mouseY);
+		y = renderUiEnum(context, font, "Category layout",
+			cfg().getCategoryLayoutSetting(), y, mouseX, mouseY);
+		y = renderUiEnum(context, font, "Hack click mode",
+			cfg().getHackClickModeSetting(), y, mouseX, mouseY);
+		y = renderUiToggle(context, font, "Type badges",
+			cfg().getTypeBadgesSetting(), y, mouseX, mouseY);
+		y = renderUiToggle(context, font, "Fill color values",
+			cfg().getFillColorValuesSetting(), y, mouseX, mouseY);
+		y = renderUiToggle(context, font, "Setting row dividers",
+			cfg().getSettingRowDividersSetting(), y, mouseX, mouseY);
+		y = renderUiToggle(context, font, "Section borders",
+			cfg().getSectionBordersSetting(), y, mouseX, mouseY);
+		y = renderUiToggle(context, font, "Hack expand icons",
+			cfg().getHackExpandIconsSetting(), y, mouseX, mouseY);
+		y = renderUiToggle(context, font, "Auto-size top tabs",
+			cfg().getAutoSizeTopTabsSetting(), y, mouseX, mouseY);
+		y = renderUiToggle(context, font, "Search while typing",
+			cfg().getSearchOnlyWhileTypingSetting(), y, mouseX, mouseY);
+		y += 4;
+		
+		y = renderUiColor(context, font, "Background",
+			cfg().getBgColorSetting(), y, mouseX, mouseY);
+		y = renderUiColor(context, font, "Panel", cfg().getPanelColorSetting(),
+			y, mouseX, mouseY);
+		y = renderUiColor(context, font, "Panel light",
+			cfg().getPanelLightColorSetting(), y, mouseX, mouseY);
+		y = renderUiColor(context, font, "Text", cfg().getTextColorSetting(), y,
+			mouseX, mouseY);
+		y = renderUiColor(context, font, "Muted",
+			cfg().getMutedTextColorSetting(), y, mouseX, mouseY);
+		y = renderUiColor(context, font, "Accent",
+			cfg().getAccentColorSetting(), y, mouseX, mouseY);
+		y = renderUiColor(context, font, "Enabled",
+			cfg().getEnabledColorSetting(), y, mouseX, mouseY);
+		y = renderUiColor(context, font, "Disabled",
+			cfg().getDisabledColorSetting(), y, mouseX, mouseY);
+		y = renderUiColor(context, font, "Section border",
+			cfg().getSectionBorderColorSetting(), y, mouseX, mouseY);
+		
+		int btnY1 = uiMenuY + uiMenuH - 18;
+		int btnY2 = uiMenuY + uiMenuH - 4;
+		int btnX1 = uiMenuX + uiMenuW - 64;
+		int btnX2 = uiMenuX + uiMenuW - 8;
+		context.fill(btnX1, btnY1, btnX2, btnY2,
+			withAlpha(cfg().getAccentColor(), 0.4F));
+		drawCenteredStringScaled(context, font, "Reset", (btnX1 + btnX2) / 2,
+			btnY1 + 3, cfg().getTextColor());
+		
+	}
+	
+	private int renderUiSlider(GuiGraphicsExtractor context, Font font,
+		String label, SliderSetting slider, int y, int mouseX, int mouseY)
+	{
+		int rowH = Math.max(getMinimumReadableUiRowHeight(),
+			scaleRightSettingHeight(14));
+		int x1 = uiMenuX + 8;
+		int x2 = uiMenuX + uiMenuW - 8;
+		int valueW = Math.min(scaleRightSettingWidth(82), (x2 - x1) / 3);
+		int valueX1 = x2 - valueW;
+		int trackX1 = x1 + scaleRightSettingWidth(4);
+		int trackX2 = valueX1 - scaleRightSettingWidth(6);
+		boolean hovered = isInside(mouseX, mouseY, x1, y, x2, y + rowH);
+		context.fill(x1, y, x2, y + rowH,
+			hovered ? withAlpha(cfg().getAccentColor(), 0.14F)
+				: withAlpha(cfg().getPanelLightColor(), 0.58F));
+		String shownLabel = trimToWidth(font, label,
+			Math.max(1, trackX1 - x1 - scaleRightSettingWidth(8)));
+		drawStringScaled(context, font, shownLabel,
+			x1 + scaleRightSettingWidth(4), centeredTextY(font, y, y + rowH),
+			cfg().getMutedTextColor(), false);
+		context.fill(valueX1, y + 1, x2, y + rowH - 1,
+			withAlpha(cfg().getPanelColor(), 0.8F));
+		int trackY1 = y + rowH - scaleRightSettingHeight(3);
+		context.fill(trackX1, trackY1, trackX2, trackY1 + 1,
+			withAlpha(cfg().getPanelColor(), 0.95F));
+		int fill = (int)((trackX2 - trackX1) * slider.getPercentage());
+		context.fill(trackX1, trackY1, trackX1 + fill, trackY1 + 1,
+			cfg().getAccentColor());
+		drawCenteredStringScaledInBox(context, font, slider.getValueString(),
+			valueX1, y + 1, x2, y + rowH - 1, cfg().getTextColor());
+		return y + rowH + scaleRightSettingHeight(2);
+	}
+	
+	private int renderUiToggle(GuiGraphicsExtractor context, Font font,
+		String label, CheckboxSetting setting, int y, int mouseX, int mouseY)
+	{
+		int rowH = Math.max(getMinimumReadableUiRowHeight(),
+			scaleRightSettingHeight(14));
+		int x1 = uiMenuX + 8;
+		int x2 = uiMenuX + uiMenuW - 8;
+		boolean hovered = isInside(mouseX, mouseY, x1, y, x2, y + rowH);
+		context.fill(x1, y, x2, y + rowH,
+			hovered ? withAlpha(cfg().getAccentColor(), 0.14F)
+				: withAlpha(cfg().getPanelLightColor(), 0.58F));
+		drawStringScaled(context, font, label, x1 + scaleRightSettingWidth(4),
+			y + scaleRightSettingHeight(3), cfg().getMutedTextColor(), false);
+		
+		int switchX2 = x2 - 1;
+		if(cfg().isSwitchSettingTogglesEnabled())
+		{
+			int switchH = Math.min(16, rowH - 2);
+			drawSwitch(context, x1 + 1, (y + rowH - switchH) / 2, switchX2,
+				(y + rowH + switchH) / 2, setting.isChecked());
+		}else
+		{
+			int pillY1 = y + 1;
+			int pillY2 = y + rowH - 1;
+			context.fill(switchX2 - 44, pillY1, switchX2, pillY2,
+				setting.isChecked() ? withAlpha(cfg().getEnabledColor(), 0.9F)
+					: withAlpha(cfg().getDisabledColor(), 0.92F));
+			drawCenteredStringScaledInBox(context, font,
+				setting.isChecked() ? "ON" : "OFF", switchX2 - 44, pillY1 + 1,
+				switchX2, pillY2 + 1, cfg().getTextColor());
+		}
+		return y + rowH + scaleRightSettingHeight(2);
+	}
+	
+	private void drawSwitch(GuiGraphicsExtractor context, int x1, int y1,
+		int x2, int y2, boolean checked)
+	{
+		int width = Math.max(4, x2 - x1);
+		int height = Math.max(4, y2 - y1);
+		context.fill(x1, y1, x2, y2,
+			checked ? withAlpha(cfg().getEnabledColor(), 0.92F)
+				: withAlpha(cfg().getDisabledColor(), 0.92F));
+		int inset = Math.max(1, Math.min(width, height) / 6);
+		int knobSize = Math.max(2, height - inset * 2);
+		int knobX = checked ? x2 - inset - knobSize : x1 + inset;
+		int knobY = (y1 + y2 - knobSize) / 2;
+		context.fill(knobX, knobY, knobX + knobSize, knobY + knobSize,
+			cfg().getTextColor());
+	}
+	
+	private int renderUiEnum(GuiGraphicsExtractor context, Font font,
+		String label, EnumSetting<?> setting, int y, int mouseX, int mouseY)
+	{
+		int rowH = Math.max(getMinimumReadableUiRowHeight(),
+			scaleRightSettingHeight(14));
+		int x1 = uiMenuX + 8;
+		int x2 = uiMenuX + uiMenuW - 8;
+		boolean hovered = isInside(mouseX, mouseY, x1, y, x2, y + rowH);
+		context.fill(x1, y, x2, y + rowH,
+			hovered ? withAlpha(cfg().getAccentColor(), 0.14F)
+				: withAlpha(cfg().getPanelLightColor(), 0.58F));
+		drawStringScaled(context, font, label, x1 + scaleRightSettingWidth(4),
+			y + scaleRightSettingHeight(3), cfg().getMutedTextColor(), false);
+		
+		String value = normalizeDisplayValue("" + setting.getSelected());
+		int pillW = scaleRightSettingWidth(96);
+		int pillX2 = x2 - scaleRightSettingWidth(4);
+		int pillX1 = pillX2 - pillW;
+		int pillY1 = y + scaleRightSettingHeight(2);
+		int pillY2 = y + rowH - scaleRightSettingHeight(2);
+		context.fill(pillX1, pillY1, pillX2, pillY2,
+			withAlpha(cfg().getPanelColor(), 0.92F));
+		drawMarqueeStringScaledInBox(context, font, value, pillX1, pillY1,
+			pillX2, pillY2, cfg().getTextColor(), scaleRightSettingWidth(3));
+		return y + rowH + scaleRightSettingHeight(2);
+	}
+	
+	private int renderUiColor(GuiGraphicsExtractor context, Font font,
+		String label, ColorSetting color, int y, int mouseX, int mouseY)
+	{
+		int rowH = Math.max(getMinimumReadableUiRowHeight(),
+			scaleRightSettingHeight(13));
+		int x1 = uiMenuX + 8;
+		int x2 = uiMenuX + uiMenuW - 8;
+		boolean hovered = isInside(mouseX, mouseY, x1, y, x2, y + rowH);
+		context.fill(x1, y, x2, y + rowH,
+			hovered ? withAlpha(cfg().getAccentColor(), 0.14F)
+				: withAlpha(cfg().getPanelLightColor(), 0.58F));
+		drawStringScaled(context, font, label, x1 + scaleRightSettingWidth(4),
+			y + scaleRightSettingHeight(2), cfg().getMutedTextColor(), false);
+		context.fill(x2 - scaleRightSettingWidth(44),
+			y + scaleRightSettingHeight(2), x2 - scaleRightSettingWidth(30),
+			y + rowH - scaleRightSettingHeight(2), color.getColorI());
+		drawStringScaled(context, font, ColorUtils.toHex(color.getColor()),
+			x2 - scaleRightSettingWidth(26), y + scaleRightSettingHeight(2),
+			cfg().getTextColor(), false);
+		return y + rowH + scaleRightSettingHeight(1);
+	}
+	
+	private boolean handleUiSettingsClick(double mouseX, double mouseY,
+		int button)
+	{
+		if(!isInside(mouseX, mouseY, uiMenuX, uiMenuY, uiMenuX + uiMenuW,
+			uiMenuY + uiMenuH))
+			return false;
+		
+		int y = uiMenuY + 24;
+		y = handleUiSliderClick(cfg().getUiOpacitySetting(), mouseX, mouseY, y,
+			button);
+		y = handleUiSliderClick(cfg().getBackgroundOpacitySetting(), mouseX,
+			mouseY, y, button);
+		y = handleUiSliderClick(cfg().getSettingsWidthSetting(), mouseX, mouseY,
+			y, button);
+		y = handleUiSliderClick(cfg().getSettingsHeightSetting(), mouseX,
+			mouseY, y, button);
+		y = handleUiSliderClick(cfg().getWidthPercentSetting(), mouseX, mouseY,
+			y, button);
+		y = handleUiSliderClick(cfg().getHeightPercentSetting(), mouseX, mouseY,
+			y, button);
+		y = handleUiSliderClick(cfg().getCategoryHeightSetting(), mouseX,
+			mouseY, y, button);
+		y = handleUiSliderClick(cfg().getCategoryWidthSetting(), mouseX, mouseY,
+			y, button);
+		y = handleUiSliderClick(cfg().getRowHeightSetting(), mouseX, mouseY, y,
+			button);
+		y = handleUiSliderClick(cfg().getFontScaleSetting(), mouseX, mouseY, y,
+			button);
+		y = handleUiEnumClick(cfg().getCategoryLayoutSetting(), mouseX, mouseY,
+			y, button);
+		y = handleUiEnumClick(cfg().getHackClickModeSetting(), mouseX, mouseY,
+			y, button);
+		y = handleUiToggleClick(cfg().getTypeBadgesSetting(), mouseX, mouseY,
+			y);
+		y = handleUiToggleClick(cfg().getFillColorValuesSetting(), mouseX,
+			mouseY, y);
+		y = handleUiToggleClick(cfg().getSettingRowDividersSetting(), mouseX,
+			mouseY, y);
+		y = handleUiToggleClick(cfg().getSectionBordersSetting(), mouseX,
+			mouseY, y);
+		y = handleUiToggleClick(cfg().getHackExpandIconsSetting(), mouseX,
+			mouseY, y);
+		y = handleUiToggleClick(cfg().getAutoSizeTopTabsSetting(), mouseX,
+			mouseY, y);
+		y = handleUiToggleClick(cfg().getSearchOnlyWhileTypingSetting(), mouseX,
+			mouseY, y);
+		y += 4;
+		
+		y = handleUiColorClick(cfg().getBgColorSetting(), mouseX, mouseY, y);
+		y = handleUiColorClick(cfg().getPanelColorSetting(), mouseX, mouseY, y);
+		y = handleUiColorClick(cfg().getPanelLightColorSetting(), mouseX,
+			mouseY, y);
+		y = handleUiColorClick(cfg().getTextColorSetting(), mouseX, mouseY, y);
+		y = handleUiColorClick(cfg().getMutedTextColorSetting(), mouseX, mouseY,
+			y);
+		y = handleUiColorClick(cfg().getAccentColorSetting(), mouseX, mouseY,
+			y);
+		y = handleUiColorClick(cfg().getEnabledColorSetting(), mouseX, mouseY,
+			y);
+		y = handleUiColorClick(cfg().getDisabledColorSetting(), mouseX, mouseY,
+			y);
+		y = handleUiColorClick(cfg().getSectionBorderColorSetting(), mouseX,
+			mouseY, y);
+		
+		int btnY1 = uiMenuY + uiMenuH - 18;
+		int btnY2 = uiMenuY + uiMenuH - 4;
+		int btnX1 = uiMenuX + uiMenuW - 64;
+		int btnX2 = uiMenuX + uiMenuW - 8;
+		if(isInside(mouseX, mouseY, btnX1, btnY1, btnX2, btnY2))
+		{
+			cfg().resetStyle();
+			applyLiveLayout();
+			return true;
+		}
+		
+		return true;
+	}
+	
+	private int handleUiSliderClick(SliderSetting slider, double mouseX,
+		double mouseY, int y, int button)
+	{
+		int rowH = Math.max(getMinimumReadableUiRowHeight(),
+			scaleRightSettingHeight(14));
+		int x1 = uiMenuX + 8;
+		int x2 = uiMenuX + uiMenuW - 8;
+		int valueW = Math.min(scaleRightSettingWidth(82), (x2 - x1) / 3);
+		int valueX1 = x2 - valueW;
+		int trackX1 = x1 + scaleRightSettingWidth(4);
+		int trackX2 = valueX1 - scaleRightSettingWidth(6);
+		if(isInside(mouseX, mouseY, x1, y, x2, y + rowH))
+		{
+			if(button == InputConstants.MOUSE_BUTTON_RIGHT)
+			{
+				slider.setValue(slider.getValue() - slider.getIncrement());
+			}else
+			{
+				draggingSlider = new SliderDrag(slider, trackX1, trackX2);
+				setSliderValueFromMouse(draggingSlider, mouseX);
+			}
+			applyLiveLayout();
+		}
+		return y + rowH + scaleRightSettingHeight(2);
+	}
+	
+	private int handleUiColorClick(ColorSetting setting, double mouseX,
+		double mouseY, int y)
+	{
+		int rowH = Math.max(getMinimumReadableUiRowHeight(),
+			scaleRightSettingHeight(13));
+		int x1 = uiMenuX + 8;
+		int x2 = uiMenuX + uiMenuW - 8;
+		if(isInside(mouseX, mouseY, x1, y, x2, y + rowH))
+			minecraft.setScreen(new EditColorScreen(this, setting));
+		return y + rowH + scaleRightSettingHeight(1);
+	}
+	
+	private int handleUiToggleClick(CheckboxSetting setting, double mouseX,
+		double mouseY, int y)
+	{
+		int rowH = Math.max(getMinimumReadableUiRowHeight(),
+			scaleRightSettingHeight(14));
+		int x1 = uiMenuX + 8;
+		int x2 = uiMenuX + uiMenuW - 8;
+		if(isInside(mouseX, mouseY, x1, y, x2, y + rowH))
+		{
+			setting.setChecked(!setting.isChecked());
+			if(setting == cfg().getSearchOnlyWhileTypingSetting()
+				&& searchBox != null)
+			{
+				if(setting.isChecked())
+				{
+					if(searchBox.getValue().isBlank())
+					{
+						setFocused(null);
+						searchBox.setFocused(false);
+						searchBox.setVisible(false);
+					}
+				}else
+				{
+					searchBox.setVisible(true);
+				}
+			}
+			if(setting == cfg().getAutoSizeTopTabsSetting())
+				applyLiveLayout();
+		}
+		return y + rowH + scaleRightSettingHeight(2);
+	}
+	
+	private int handleUiEnumClick(EnumSetting<?> setting, double mouseX,
+		double mouseY, int y, int button)
+	{
+		int rowH = Math.max(getMinimumReadableUiRowHeight(),
+			scaleRightSettingHeight(14));
+		int x1 = uiMenuX + 8;
+		int x2 = uiMenuX + uiMenuW - 8;
+		if(isInside(mouseX, mouseY, x1, y, x2, y + rowH))
+		{
+			if(button == InputConstants.MOUSE_BUTTON_RIGHT)
+				setting.selectPrev();
+			else
+				setting.selectNext();
+			applyLiveLayout();
+		}
+		return y + rowH + scaleRightSettingHeight(2);
+	}
+	
+	private boolean handleCategoryClick(double mouseX, double mouseY)
+	{
+		if(isTopTabsLayout())
+			return handleTopTabCategoryClick(mouseX, mouseY);
+		
+		int rowH = getCategoryRowHeight();
+		int rowGap = getCategoryRowGap();
+		int areaX1 = getCategoryAreaX1();
+		int areaX2 = getCategoryAreaX2();
+		int areaY1 = getCategoryAreaY1();
+		int y = areaY1 - categoryScroll;
+		
+		if(!isInsideCategoryArea(mouseX, mouseY))
+			return false;
+		rememberCurrentViewState();
+		
+		if(isInside(mouseX, mouseY, areaX1, y, areaX2, y + rowH))
+		{
+			clearSearch();
+			enabledCategorySelected = true;
+			styleCategorySelected = false;
+			moduleScroll = 0;
+			restoreCurrentViewState();
+			return true;
+		}
+		y += rowH + rowGap;
+		
+		for(String categoryName : getDisplayCategories())
+		{
+			if(isInside(mouseX, mouseY, areaX1, y, areaX2, y + rowH))
+			{
+				clearSearch();
+				selectedCategory = categoryName;
+				enabledCategorySelected = false;
+				styleCategorySelected = false;
+				moduleScroll = 0;
+				restoreCurrentViewState();
+				return true;
+			}
+			y += rowH + rowGap;
+		}
+		
+		if(isInside(mouseX, mouseY, areaX1, y, areaX2, y + rowH))
+		{
+			clearSearch();
+			enabledCategorySelected = false;
+			styleCategorySelected = true;
+			moduleScroll = 0;
+			restoreCurrentViewState();
+			return true;
+		}
+		
+		return false;
+	}
+	
+	private boolean handleTopTabCategoryClick(double mouseX, double mouseY)
+	{
+		if(!isInsideCategoryArea(mouseX, mouseY))
+			return false;
+		rememberCurrentViewState();
+		
+		int areaY1 = getCategoryAreaY1();
+		int areaY2 = getCategoryAreaY2();
+		for(TopCategoryTab tab : getTopCategoryTabs(minecraft.font))
+		{
+			if(!isInside(mouseX, mouseY, tab.x1(), areaY1, tab.x2(), areaY2))
+				continue;
+			
+			clearSearch();
+			switch(tab.kind())
+			{
+				case ENABLED ->
+				{
+					enabledCategorySelected = true;
+					styleCategorySelected = false;
+				}
+				case CATEGORY ->
+				{
+					selectedCategory = tab.categoryName();
+					enabledCategorySelected = false;
+					styleCategorySelected = false;
+				}
+				case STYLE ->
+				{
+					enabledCategorySelected = false;
+					styleCategorySelected = true;
+				}
+			}
+			moduleScroll = 0;
+			restoreCurrentViewState();
+			return true;
+		}
+		
+		return false;
+	}
+	
+	private void clearSearch()
+	{
+		searchText = "";
+		if(searchBox != null)
+		{
+			searchBox.setValue("");
+			if(cfg().isSearchOnlyWhileTypingEnabled())
+			{
+				setFocused(null);
+				searchBox.setFocused(false);
+				searchBox.setVisible(false);
+			}
+		}
+	}
+	
+	private boolean handleModuleClick(double mouseX, double mouseY, int button)
+	{
+		if(mouseX < moduleX + 8 || mouseX > moduleX + moduleW - 8
+			|| mouseY < moduleY || mouseY > moduleY + moduleH)
+			return false;
+		
+		int contentY = moduleY + scaleRightSettingHeight(8) - moduleScroll;
+		int rowH = cfg().getRowHeight();
+		List<DisplayEntry> entries = getDisplayedEntries();
+		
+		for(DisplayEntry entry : entries)
+		{
+			Feature feature = entry.feature();
+			int rowTop = contentY;
+			int rowBottom = rowTop + rowH;
+			if(isInside(mouseX, mouseY, moduleX + 8, rowTop,
+				moduleX + moduleW - 8, rowBottom))
+			{
+				selectedFeature = feature;
+				settingsScroll = 0;
+				rememberCurrentViewState();
+				if(button == InputConstants.MOUSE_BUTTON_RIGHT)
+					toggleExpandedFeature(feature);
+				else if(button == InputConstants.MOUSE_BUTTON_MIDDLE
+					&& feature instanceof Hack hack)
+					hack.setImportant(!hack.isImportant());
+				else if(button == InputConstants.MOUSE_BUTTON_LEFT
+					&& isManagerShortcut(feature))
+					toggleFeature(feature);
+				else if(button == InputConstants.MOUSE_BUTTON_LEFT && cfg()
+					.getHackClickMode() == AltGuiHack.HackClickMode.OPEN_SETTINGS
+					&& featureHasStatePill(feature)
+					&& isInsideHackToggle(mouseX, rowTop, rowBottom))
+				{
+					toggleFeature(feature);
+				}else if(button == InputConstants.MOUSE_BUTTON_LEFT && cfg()
+					.getHackClickMode() == AltGuiHack.HackClickMode.OPEN_SETTINGS)
+				{
+					expandedFeatures.add(feature.getName());
+				}else if(button == InputConstants.MOUSE_BUTTON_LEFT)
+				{
+					if(isMenuOnlyFeature(feature))
+					{
+						toggleExpandedFeature(feature);
+						return true;
+					}
+					
+					toggleFeature(feature);
+				}
+				return true;
+			}
+			contentY += rowH;
+		}
+		
+		return false;
+	}
+	
+	private boolean isInsideHackToggle(double mouseX, int rowTop, int rowBottom)
+	{
+		int contentBottomX = moduleX + moduleW - 12;
+		int toggleX2 = contentBottomX;
+		return isInside(mouseX, (rowTop + rowBottom) / 2D, toggleX2 - 44,
+			rowTop, toggleX2, rowBottom);
+	}
+	
+	private void toggleFeature(Feature feature)
+	{
+		TooManyHaxHack tooManyHax =
+			WurstClient.INSTANCE.getHax().tooManyHaxHack;
+		if(feature != tooManyHax && tooManyHax.isBlocked(feature))
+		{
+			ChatUtils.error(feature.getName() + " is blocked by TooManyHax.");
+			return;
+		}
+		feature.doPrimaryAction();
+		if(feature instanceof Hack hack)
+		{
+			if(hack.isEnabled())
+				removeRecentlyDisabled(hack.getName());
+			else
+				addRecentlyDisabled(hack.getName());
+		}
+	}
+	
+	private boolean handleSelectedFeatureSettingsClick(double mouseX,
+		double mouseY, int button)
+	{
+		if(selectedFeature == null || !isInside(mouseX, mouseY, settingsX,
+			moduleY, settingsX + settingsW, moduleY + moduleH))
+			return false;
+		
+		int x1 = settingsX + 3;
+		int x2 = settingsX + settingsW - 3;
+		if(mouseY < moduleY + 34)
+			return true;
+		int y = moduleY + 34 - settingsScroll;
+		for(SettingRow row : getSettingRows(selectedFeature))
+		{
+			int y2 = y + row.height();
+			if(isInside(mouseX, mouseY, x1, y, x2, y2))
+				return handleSettingClick(row, mouseX, mouseY, button, y, y2);
+			y = y2;
+		}
+		return true;
+	}
+	
+	private boolean handleSettingClick(SettingRow row, double mouseX,
+		double mouseY, int button, int y1, int y2)
+	{
+		if(editingTextField != null
+			&& !(row.setting() instanceof TextFieldSetting textField
+				&& textField == editingTextField))
+			finishInlineTextField(true);
+		
+		Feature owner = row.owner();
+		if(row.isKeybindRow())
+		{
+			if(button == InputConstants.MOUSE_BUTTON_LEFT)
+				minecraft.setScreen(new AltGuiKeybindScreen(this, owner));
+			return true;
+		}
+		
+		Setting setting = row.setting();
+		if(setting instanceof SpacerSetting)
+			return false;
+		
+		if(setting instanceof CheckboxSetting checkbox)
+		{
+			checkbox.setChecked(!checkbox.isChecked());
+			if(checkbox == cfg().getSearchOnlyWhileTypingSetting()
+				&& searchBox != null)
+			{
+				if(checkbox.isChecked())
+				{
+					if(searchBox.getValue().isBlank())
+					{
+						setFocused(null);
+						searchBox.setFocused(false);
+						searchBox.setVisible(false);
+					}
+				}else
+				{
+					searchBox.setVisible(true);
+				}
+			}
+			if(checkbox == cfg().getAutoSizeTopTabsSetting())
+				applyLiveLayout();
+			return true;
+		}
+		
+		if(setting instanceof SliderSetting slider)
+		{
+			if(button == InputConstants.MOUSE_BUTTON_RIGHT)
+			{
+				slider.setValue(slider.getDefaultValue());
+				if(owner instanceof ClientChatOverlayHack chatHack
+					&& slider == chatHack.getChatFontScaleSetting())
+					chatHack.resetVanillaChatScale();
+				if(isStyleSlider(slider))
+					applyLiveLayout();
+				return true;
+			}
+			
+			int rowX1 =
+				settingsX + 16 + row.depth() * scaleRightSettingWidth(10);
+			int rowX2 = settingsX + settingsW - 12;
+			int fixedValueColW = getSettingsValueColumnWidth(rowX1, rowX2);
+			int valueX2 = rowX2 - scaleRightSettingWidth(6);
+			int valueX1 = valueX2 - fixedValueColW;
+			int x1 = valueX1 + scaleRightSettingWidth(2);
+			int x2 = valueX2 - scaleRightSettingWidth(2);
+			draggingSlider = new SliderDrag(slider, x1, x2);
+			setSliderValueFromMouse(draggingSlider, mouseX);
+			if(isStyleSlider(slider))
+				applyLiveLayout();
+			return true;
+		}
+		
+		if(setting instanceof EnumSetting<?> enumSetting)
+		{
+			if(button == InputConstants.MOUSE_BUTTON_MIDDLE)
+			{
+				Enum<?>[] values = enumSetting.getValues();
+				if(values.length > 0)
+					enumSetting.setSelected(values[0].toString());
+				return true;
+			}
+			if(button == InputConstants.MOUSE_BUTTON_RIGHT)
+				enumSetting.selectPrev();
+			else
+				enumSetting.selectNext();
+			if(enumSetting == cfg().getCategoryLayoutSetting())
+				applyLiveLayout();
+			return true;
+		}
+		
+		if(setting instanceof StringDropdownSetting dropdown)
+		{
+			List<String> values = dropdown.getValues();
+			if(values.isEmpty())
+				return true;
+			if(button == InputConstants.MOUSE_BUTTON_MIDDLE)
+			{
+				dropdown.setSelected(values.get(0));
+				return true;
+			}
+			int i = values.indexOf(dropdown.getSelected());
+			if(i < 0)
+				i = 0;
+			int delta = button == InputConstants.MOUSE_BUTTON_RIGHT ? -1 : 1;
+			for(int attempts = 0; attempts < values.size(); attempts++)
+			{
+				i += delta;
+				if(i < 0)
+					i = values.size() - 1;
+				if(i >= values.size())
+					i = 0;
+				String candidate = values.get(i);
+				if(owner instanceof AltGuiHack
+					&& dropdown == cfg().getFontFamilySetting()
+					&& (candidate == null || candidate.isBlank()))
+					continue;
+				dropdown.setSelected(candidate);
+				break;
+			}
+			return true;
+		}
+		
+		if(setting instanceof ButtonSetting buttonSetting)
+		{
+			buttonSetting.runAction();
+			return true;
+		}
+		
+		if(owner instanceof PacketFirewallOtf packetFirewall
+			&& "Allowed hacks".equals(setting.getName()))
+		{
+			minecraft.setScreen(
+				new PacketFirewallAllowedHacksScreen(this, packetFirewall));
+			return true;
+		}
+		
+		if(owner instanceof TooManyHaxHack tooManyHax
+			&& "Blocked hacks".equals(setting.getName()))
+		{
+			minecraft.setScreen(new TooManyHaxEditorScreen(this, tooManyHax));
+			return true;
+		}
+		
+		if(setting instanceof SettingGroup group)
+		{
+			toggleGroup(group);
+			return true;
+		}
+		
+		if(setting instanceof PlantTypeSetting plantType)
+		{
+			if(button == InputConstants.MOUSE_BUTTON_RIGHT)
+				plantType.toggleReplantingEnabled();
+			else
+				plantType.toggleHarvestingEnabled();
+			return true;
+		}
+		
+		if(setting instanceof ToggleAllPlantTypesSetting allPlantTypes)
+		{
+			if(button == InputConstants.MOUSE_BUTTON_RIGHT)
+				allPlantTypes.toggleReplantingEnabled();
+			else
+				allPlantTypes.toggleHarvestingEnabled();
+			return true;
+		}
+		
+		if(setting instanceof MobWeaponRuleSetting mobRule)
+		{
+			if(button == InputConstants.MOUSE_BUTTON_RIGHT)
+				cycleMobRuleMob(mobRule, -1);
+			else
+				cycleMobRuleWeapon(mobRule, 1);
+			return true;
+		}
+		
+		if(setting instanceof ColorSetting color)
+		{
+			if(button == InputConstants.MOUSE_BUTTON_RIGHT)
+			{
+				color.setColor(color.getDefaultColor());
+				if(isStyleColor(color))
+					applyLiveLayout();
+				return true;
+			}
+			
+			minecraft.setScreen(new EditColorScreen(this, color));
+			return true;
+		}
+		
+		if(setting instanceof TextFieldSetting textField)
+		{
+			beginInlineTextField(textField);
+			return true;
+		}
+		
+		if(setting instanceof BlockSetting block)
+		{
+			minecraft.setScreen(new EditBlockScreen(this, block));
+			return true;
+		}
+		
+		if(setting instanceof BlockListSetting blockList)
+		{
+			minecraft.setScreen(new EditBlockListScreen(this, blockList));
+			return true;
+		}
+		
+		if(setting instanceof ItemListSetting itemList)
+		{
+			minecraft.setScreen(new EditItemListScreen(this, itemList));
+			return true;
+		}
+		
+		if(setting instanceof EntityTypeListSetting entityList)
+		{
+			minecraft.setScreen(new EditEntityTypeListScreen(this, entityList));
+			return true;
+		}
+		
+		if(setting instanceof FriendListSetting friendList)
+		{
+			minecraft.setScreen(new EditFriendListScreen(this, friendList));
+			return true;
+		}
+		
+		if(setting instanceof BookOffersSetting bookOffers)
+		{
+			minecraft.setScreen(new EditBookOffersScreen(this, bookOffers));
+			return true;
+		}
+		
+		if(setting instanceof FileSetting file)
+		{
+			minecraft.setScreen(new SelectFileScreen(this, file));
+			return true;
+		}
+		
+		if(setting instanceof WaypointsSetting waypoints)
+		{
+			minecraft
+				.setScreen(new WaypointsScreen(this, waypoints.getManager()));
+			return true;
+		}
+		
+		return true;
+	}
+	
+	private void beginInlineTextField(TextFieldSetting setting)
+	{
+		if(editingTextField == setting)
+		{
+			setFocused(inlineTextField);
+			inlineTextField.setFocused(true);
+			return;
+		}
+		
+		finishInlineTextField(true);
+		editingTextField = setting;
+		originalTextFieldValue = setting.getValue();
+		inlineTextField.addFormatter(
+			(value, cursor) -> net.minecraft.network.chat.Component
+				.literal(
+					setting.isMasked() ? "*".repeat(value.length()) : value)
+				.getVisualOrderText());
+		inlineTextField.setMaxLength(setting.getMaxLength());
+		inlineTextField.setValue(originalTextFieldValue);
+		inlineTextField.setEditable(true);
+		inlineTextField.setVisible(true);
+		inlineTextField.setFocused(true);
+		inlineTextField.setCursorPosition(inlineTextField.getValue().length());
+		inlineTextField.setHighlightPos(inlineTextField.getValue().length());
+		setFocused(inlineTextField);
+	}
+	
+	private void finishInlineTextField(boolean apply)
+	{
+		if(editingTextField == null)
+			return;
+		
+		if(apply)
+			editingTextField.setValue(inlineTextField.getValue());
+		else
+			inlineTextField.setValue(originalTextFieldValue);
+		
+		inlineTextField.setEditable(false);
+		inlineTextField.setFocused(false);
+		inlineTextField.setVisible(false);
+		editingTextField = null;
+		originalTextFieldValue = null;
+		setFocused(null);
+	}
+	
+	private void cycleMobRuleWeapon(MobWeaponRuleSetting setting, int delta)
+	{
+		MobWeaponRuleSetting.WeaponCategory[] values =
+			MobWeaponRuleSetting.WeaponCategory.values();
+		int i = setting.getSelectedWeapon().ordinal() + delta;
+		if(i < 0)
+			i = values.length - 1;
+		if(i >= values.length)
+			i = 0;
+		setting.setSelectedWeapon(values[i]);
+	}
+	
+	private void cycleMobRuleMob(MobWeaponRuleSetting setting, int delta)
+	{
+		List<MobWeaponRuleSetting.MobOption> values = setting.getMobOptions();
+		int i = values.indexOf(setting.getSelectedMob());
+		if(i < 0)
+			i = 0;
+		i += delta;
+		if(i < 0)
+			i = values.size() - 1;
+		if(i >= values.size())
+			i = 0;
+		setting.setSelectedMob(values.get(i));
+	}
+	
+	private void setSliderValueFromMouse(SliderDrag drag, double mouseX)
+	{
+		double pct = (mouseX - drag.x1()) / (drag.x2() - drag.x1());
+		pct = Math.max(0, Math.min(1, pct));
+		SliderSetting slider = drag.slider();
+		double value = slider.getMinimum()
+			+ (slider.getMaximum() - slider.getMinimum()) * pct;
+		slider.setValue(value);
+	}
+	
+	private void toggleExpandedFeature(Feature feature)
+	{
+		String key = feature.getName();
+		if(expandedFeatures.contains(key))
+			expandedFeatures.remove(key);
+		else
+			expandedFeatures.add(key);
+		LAST_EXPANDED_FEATURES.clear();
+		LAST_EXPANDED_FEATURES.addAll(expandedFeatures);
+	}
+	
+	private void toggleGroup(SettingGroup group)
+	{
+		if(expandedGroups.contains(group))
+			expandedGroups.remove(group);
+		else
+			expandedGroups.add(group);
+		LAST_EXPANDED_GROUPS.clear();
+		LAST_EXPANDED_GROUPS.addAll(expandedGroups);
+	}
+	
+	private Set<PossibleKeybind> getPossibleKeybindsForFeature(Feature feature)
+	{
+		LinkedHashSet<PossibleKeybind> possible =
+			new LinkedHashSet<>(feature.getPossibleKeybinds());
+		
+		if(feature instanceof Hack)
+			possible.add(new PossibleKeybind(feature.getName(),
+				"Toggle " + feature.getName()));
+		
+		return possible;
+	}
+	
+	private boolean featureSupportsKeybinds(Feature feature)
+	{
+		if(feature == null)
+			return false;
+		
+		if(KEYBINDS_HIDDEN_FOR.stream()
+			.anyMatch(name -> name.equalsIgnoreCase(feature.getName())))
+			return false;
+		
+		return !getPossibleKeybindsForFeature(feature).isEmpty();
+	}
+	
+	private TreeMap<String, PossibleKeybind> getExistingKeybindsForFeature(
+		Feature feature, Set<PossibleKeybind> possibleKeybinds)
+	{
+		TreeMap<String, PossibleKeybind> existing = new TreeMap<>();
+		TreeMap<String, String> possibleByCommand =
+			new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+		for(PossibleKeybind pkb : possibleKeybinds)
+			possibleByCommand.put(pkb.getCommand(), pkb.getDescription());
+		
+		for(Keybind keybind : WurstClient.INSTANCE.getKeybinds()
+			.getAllKeybinds())
+		{
+			String commands = keybind.getCommands().replace(";", "\u00a7")
+				.replace("\u00a7\u00a7", ";");
+			for(String commandRaw : commands.split("\u00a7"))
+			{
+				String command = commandRaw.trim();
+				String description = possibleByCommand.get(command);
+				if(description != null)
+				{
+					existing.put(keybind.getKey(),
+						new PossibleKeybind(command, description));
+					continue;
+				}
+				
+				if(feature instanceof Hack
+					&& command.equalsIgnoreCase(feature.getName()))
+					existing.put(keybind.getKey(), new PossibleKeybind(command,
+						"Toggle " + feature.getName()));
+			}
+		}
+		
+		return existing;
+	}
+	
+	private List<Feature> getFilteredFeatures()
+	{
+		String query = searchText == null ? ""
+			: searchText.toLowerCase(Locale.ROOT).trim();
+		boolean globalSearch = !query.isEmpty();
+		ArrayList<Feature> features = new ArrayList<>();
+		List<Feature> clientSettingsFeatures = getClientSettingsFeatures();
+		
+		for(Hack hack : WurstClient.INSTANCE.getHax().getAllHax())
+		{
+			if(hack instanceof ClickGuiHack || hack instanceof NavigatorHack
+				|| hack instanceof AltGuiHack || hack instanceof XpGuiHack)
+				continue;
+			if(hack == null)
+				continue;
+			if(isHiddenByTooManyHax(hack))
+				continue;
+			
+			if(!globalSearch)
+			{
+				if(styleCategorySelected)
+					continue;
+				if(enabledCategorySelected)
+				{
+					if(!hack.isEnabled())
+						continue;
+				}else if(!matchesCategory(hack, selectedCategory))
+					continue;
+			}
+			
+			if(globalSearch && !matchesSearch(hack, query))
+				continue;
+			
+			features.add(hack);
+		}
+		
+		NecoCmd necoCmd = WurstClient.INSTANCE.getCmds().necoCmd;
+		if(!globalSearch && !styleCategorySelected && !enabledCategorySelected
+			&& matchesCategory(necoCmd, selectedCategory))
+			features.add(necoCmd);
+		else if(globalSearch && matchesSearch(necoCmd, query))
+			features.add(necoCmd);
+		
+		for(OtherFeature otf : WurstClient.INSTANCE.getOtfs().getAllOtfs())
+		{
+			if(otf == null)
+				continue;
+			
+			if(HIDDEN_OTHER_FEATURES.contains(otf.getName()))
+				continue;
+			
+			if(MOVE_TO_CLIENT_SETTINGS.stream()
+				.anyMatch(name -> name.equalsIgnoreCase(otf.getName())))
+				continue;
+			
+			if(clientSettingsFeatures.contains(otf))
+				continue;
+			
+			if(isHiddenByTooManyHax(otf))
+				continue;
+			
+			if(!globalSearch)
+			{
+				if(styleCategorySelected || enabledCategorySelected)
+					continue;
+				if(!matchesCategory(otf, selectedCategory))
+					continue;
+			}
+			
+			if(globalSearch && !matchesSearch(otf, query))
+				continue;
+			
+			features.add(otf);
+		}
+		
+		if(globalSearch)
+			features.sort(buildSearchComparator(query));
+		else
+			features.sort(Comparator.comparing(Feature::getName,
+				String.CASE_INSENSITIVE_ORDER));
+		return features;
+	}
+	
+	private List<DisplayEntry> getDisplayedEntries()
+	{
+		String query = searchText == null ? ""
+			: searchText.toLowerCase(Locale.ROOT).trim();
+		if(!query.isEmpty())
+			return getUniversalSearchEntries(query);
+		
+		ArrayList<DisplayEntry> entries = new ArrayList<>();
+		if(!styleCategorySelected && !enabledCategorySelected)
+		{
+			for(Feature feature : getFilteredFeatures())
+				entries.add(new DisplayEntry(feature, false));
+			return entries;
+		}
+		
+		if(enabledCategorySelected)
+			return getEnabledCategoryEntries();
+		
+		ArrayList<Feature> features =
+			new ArrayList<>(getClientSettingsFeatures());
+		for(Feature feature : features)
+			entries.add(new DisplayEntry(feature, false));
+		return entries;
+	}
+	
+	private List<DisplayEntry> getUniversalSearchEntries(String query)
+	{
+		ArrayList<DisplayEntry> entries = new ArrayList<>();
+		HashSet<String> added = new HashSet<>();
+		
+		for(Feature feature : getFilteredFeatures())
+		{
+			String key = feature.getName().toLowerCase(Locale.ROOT);
+			if(!added.add(key))
+				continue;
+			entries.add(new DisplayEntry(feature, false));
+		}
+		
+		for(Feature feature : getClientSettingsFeatures())
+		{
+			if(!matchesSearch(feature, query))
+				continue;
+			
+			String key = feature.getName().toLowerCase(Locale.ROOT);
+			if(!added.add(key))
+				continue;
+			entries.add(new DisplayEntry(feature, false));
+		}
+		
+		Comparator<Feature> comparator = buildSearchComparator(query);
+		entries.sort(Comparator
+			.comparing((DisplayEntry entry) -> entry.feature(), comparator));
+		return entries;
+	}
+	
+	private Comparator<Feature> buildSearchComparator(String query)
+	{
+		Comparator<String> indexComparator = (a, b) -> {
+			int index1 = indexOfQuery(a, query);
+			int index2 = indexOfQuery(b, query);
+			if(index1 == index2)
+				return 0;
+			if(index1 == -1)
+				return 1;
+			if(index2 == -1)
+				return -1;
+			return index1 - index2;
+		};
+		
+		return Comparator.comparing(Feature::getName, indexComparator)
+			.thenComparing(Feature::getSearchTags, indexComparator)
+			.thenComparing(Feature::getDescription, indexComparator)
+			.thenComparing(Feature::getName, String.CASE_INSENSITIVE_ORDER);
+	}
+	
+	private int indexOfQuery(String text, String query)
+	{
+		if(text == null || query == null)
+			return -1;
+		return text.toLowerCase(Locale.ROOT).indexOf(query);
+	}
+	
+	private List<DisplayEntry> getEnabledCategoryEntries()
+	{
+		String query = searchText == null ? ""
+			: searchText.toLowerCase(Locale.ROOT).trim();
+		ArrayList<DisplayEntry> entries = new ArrayList<>();
+		HashSet<String> added = new HashSet<>();
+		
+		for(Hack hack : WurstClient.INSTANCE.getHax().getAllHax())
+		{
+			if(hack instanceof ClickGuiHack || hack instanceof NavigatorHack
+				|| hack instanceof AltGuiHack || hack instanceof XpGuiHack)
+				continue;
+			if(isHiddenByTooManyHax(hack))
+				continue;
+			
+			if(!hack.isEnabled())
+				continue;
+			if(!query.isEmpty() && !matchesSearch(hack, query))
+				continue;
+			
+			entries.add(new DisplayEntry(hack, false));
+			added.add(hack.getName());
+		}
+		
+		entries.sort(Comparator.comparing(entry -> entry.feature().getName(),
+			String.CASE_INSENSITIVE_ORDER));
+		
+		ArrayList<String> staleNames = new ArrayList<>();
+		for(String name : RECENTLY_DISABLED_HACKS)
+		{
+			Hack hack = findHackByName(name);
+			if(hack == null)
+			{
+				staleNames.add(name);
+				continue;
+			}
+			
+			if(hack.isEnabled() || added.contains(name))
+			{
+				staleNames.add(name);
+				continue;
+			}
+			if(isHiddenByTooManyHax(hack))
+				continue;
+			if(!query.isEmpty() && !matchesSearch(hack, query))
+				continue;
+			
+			entries.add(new DisplayEntry(hack, true));
+		}
+		
+		for(String staleName : staleNames)
+			RECENTLY_DISABLED_HACKS.remove(staleName);
+		
+		return entries;
+	}
+	
+	private List<Feature> getClientSettingsFeatures()
+	{
+		ArrayList<Feature> features = new ArrayList<>();
+		if(true)
+			features.add(WurstClient.INSTANCE.getOtfs().wurstLogoOtf);
+		if(true)
+			features.add(WurstClient.INSTANCE.getOtfs().hackListOtf);
+		if(true)
+			features.add(WurstClient.INSTANCE.getOtfs().keybindManagerOtf);
+		if(true)
+			features.add(WurstClient.INSTANCE.getOtfs().presetManagerOtf);
+		if(true)
+			features.add(WurstClient.INSTANCE.getOtfs().wurstOptionsOtf);
+		if(false)
+			features.add(null);
+		if(true)
+			features.add(WurstClient.INSTANCE.getHax().navigatorHack);
+		if(true)
+			features.add(WurstClient.INSTANCE.getHax().clickGuiHack);
+		if(true)
+			features.add(WurstClient.INSTANCE.getHax().altGuiHack);
+		if(true)
+			features.add(WurstClient.INSTANCE.getHax().xpGuiHack);
+		return features;
+	}
+	
+	private boolean matchesCategory(Feature feature, String categoryName)
+	{
+		if(categoryName.equalsIgnoreCase("Important"))
+			return feature instanceof Hack hack && hack.isImportant();
+		
+		String featureCategory = feature.getCategoryName();
+		if(featureCategory == null || featureCategory.isBlank())
+			featureCategory = Category.OTHER.getName();
+		
+		return featureCategory.equalsIgnoreCase(categoryName);
+	}
+	
+	private List<String> getDisplayCategories()
+	{
+		ArrayList<String> present = new ArrayList<>();
+		for(Hack hack : WurstClient.INSTANCE.getHax().getAllHax())
+		{
+			if(hack instanceof ClickGuiHack || hack instanceof NavigatorHack
+				|| hack instanceof AltGuiHack || hack instanceof XpGuiHack
+				|| hack == null || isHiddenByTooManyHax(hack))
+				continue;
+			if(hack.isImportant() && !containsIgnoreCase(present, "Important"))
+				present.add("Important");
+			String categoryName = hack.getCategoryName();
+			if(categoryName != null && !categoryName.isBlank()
+				&& !containsIgnoreCase(present, categoryName))
+				present.add(categoryName);
+		}
+		
+		List<Feature> clientSettings = getClientSettingsFeatures();
+		for(OtherFeature feature : WurstClient.INSTANCE.getOtfs().getAllOtfs())
+		{
+			if(HIDDEN_OTHER_FEATURES.contains(feature.getName())
+				|| MOVE_TO_CLIENT_SETTINGS.stream()
+					.anyMatch(name -> name.equalsIgnoreCase(feature.getName()))
+				|| clientSettings.contains(feature)
+				|| isHiddenByTooManyHax(feature))
+				continue;
+			String categoryName = feature.getCategoryName();
+			if(categoryName == null || categoryName.isBlank())
+				categoryName = Category.OTHER.getName();
+			if(!containsIgnoreCase(present, categoryName))
+				present.add(categoryName);
+		}
+		
+		ArrayList<String> categories = new ArrayList<>();
+		for(Category category : Category.values())
+			if(containsIgnoreCase(present, category.getName()))
+				categories.add(category.getName());
+		for(String categoryName : present)
+			if(!containsIgnoreCase(categories, categoryName))
+				categories.add(categoryName);
+		return categories;
+	}
+	
+	private boolean containsIgnoreCase(List<String> values, String needle)
+	{
+		for(String value : values)
+			if(value.equalsIgnoreCase(needle))
+				return true;
+		return false;
+	}
+	
+	private boolean matchesSearch(Feature feature, String query)
+	{
+		if(feature.getName().toLowerCase(Locale.ROOT).contains(query))
+			return true;
+		
+		if(feature.getDescription().toLowerCase(Locale.ROOT).contains(query))
+			return true;
+		
+		if(feature.getSearchTags().toLowerCase(Locale.ROOT).contains(query))
+			return true;
+		
+		if(!cfg().isSearchSettingsEnabled())
+			return false;
+		
+		return matchesSettingsSearch(feature, query);
+	}
+	
+	private boolean matchesSettingsSearch(Feature feature, String query)
+	{
+		for(Setting setting : feature.getSettings().values())
+			if(matchesSettingSearch(setting, query))
+				return true;
+			
+		return false;
+	}
+	
+	private boolean matchesSettingSearch(Setting setting, String query)
+	{
+		if(!(setting instanceof SettingGroup) && !setting.isVisibleInGui())
+			return false;
+		
+		if(setting.getName().toLowerCase(Locale.ROOT).contains(query))
+			return true;
+		
+		if(setting instanceof SettingGroup group)
+			for(Setting child : group.getChildren())
+				if(matchesSettingSearch(child, query))
+					return true;
+				
+		return false;
+	}
+	
+	private List<SettingRow> getSettingRows(Feature feature)
+	{
+		ArrayList<SettingRow> rows = new ArrayList<>();
+		Set<Setting> nestedSettings =
+			java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+		for(Setting setting : feature.getSettings().values())
+			if(setting instanceof SettingGroup group)
+				collectNestedSettings(group, nestedSettings);
+			
+		for(Setting setting : feature.getSettings().values())
+		{
+			if(nestedSettings.contains(setting))
+				continue;
+			appendSettingRows(rows, feature, setting, 0, false);
+		}
+		
+		if(featureSupportsKeybinds(feature))
+		{
+			int h = Math.max(cfg().getMinimumRowHeight(), Math
+				.round(cfg().getRowHeight() * getRightSettingsHeightScale()));
+			rows.add(new SettingRow(feature, null, 0, h, true));
+		}
+		
+		return rows;
+	}
+	
+	private void collectNestedSettings(SettingGroup group, Set<Setting> nested)
+	{
+		for(Setting child : group.getChildren())
+		{
+			if(!nested.add(child))
+				continue;
+			if(child instanceof SettingGroup childGroup)
+				collectNestedSettings(childGroup, nested);
+		}
+	}
+	
+	private void appendSettingRows(List<SettingRow> rows, Feature owner,
+		Setting setting, int depth, boolean insideGroup)
+	{
+		if(!insideGroup && !(setting instanceof SettingGroup)
+			&& !setting.isVisibleInGui())
+			return;
+		
+		int h = setting instanceof SpacerSetting
+			? Math.max(6, scaleRightSettingHeight(8))
+			: Math.max(cfg().getMinimumRowHeight(), Math
+				.round(cfg().getRowHeight() * getRightSettingsHeightScale()));
+		rows.add(new SettingRow(owner, setting, depth, h, false));
+		
+		if(setting instanceof SettingGroup group)
+		{
+			if(!expandedGroups.contains(group))
+				return;
+			
+			for(Setting child : group.getChildren())
+				appendSettingRows(rows, owner, child, depth + 1, true);
+		}
+	}
+	
+	private String getSettingName(Setting setting)
+	{
+		if(setting instanceof ButtonSetting button)
+			return button.getButtonText();
+		if(setting instanceof SettingGroup group)
+			return (expandedGroups.contains(group) ? "[-] " : "[+] ")
+				+ setting.getName();
+		
+		if(setting instanceof SpacerSetting)
+			return "";
+		
+		return setting.getName();
+	}
+	
+	private String getSettingValue(Setting setting)
+	{
+		if(setting instanceof CheckboxSetting checkbox)
+			return checkbox.isChecked() ? "ON" : "OFF";
+		
+		if(setting instanceof SliderSetting slider)
+			return normalizeDisplayValue(slider.getValueString());
+		
+		if(setting instanceof EnumSetting<?> enumSetting)
+			return normalizeDisplayValue("" + enumSetting.getSelected());
+		
+		if(setting instanceof StringDropdownSetting dropdown)
+			return normalizeDisplayValue(dropdown.getSelected());
+		
+		if(setting instanceof TextFieldSetting textField)
+			return normalizeDisplayValue(textField.getDisplayValue());
+		
+		if(setting instanceof ColorSetting color)
+			return ColorUtils.toHex(color.getColor());
+		
+		if(setting instanceof ButtonSetting button)
+			return button.getButtonText().startsWith("STOP") ? "STOP" : "Run";
+		
+		if(setting instanceof PlantTypeSetting plant)
+			return "H:" + (plant.isHarvestingEnabled() ? "ON" : "OFF") + " R:"
+				+ (plant.isReplantingEnabled() ? "ON" : "OFF");
+		
+		if(setting instanceof ToggleAllPlantTypesSetting all)
+			return "H:" + triState(all.isHarvestingEnabled()) + " R:"
+				+ triState(all.isReplantingEnabled());
+		
+		if(setting instanceof MobWeaponRuleSetting mobRule)
+			return mobRule.getSelectedMob() + " -> "
+				+ mobRule.getSelectedWeapon();
+		
+		if(setting instanceof SettingGroup group)
+			return expandedGroups.contains(group) ? "Expanded" : "Collapsed";
+		
+		if(setting instanceof SpacerSetting)
+			return "";
+		
+		return "Edit";
+	}
+	
+	private int getSettingMarkerColor(Setting setting)
+	{
+		if(setting instanceof CheckboxSetting)
+			return withAlpha(cfg().getEnabledColor(), 0.95F);
+		if(setting instanceof SliderSetting)
+			return withAlpha(cfg().getAccentColor(), 0.95F);
+		if(setting instanceof ButtonSetting)
+			return withAlpha(cfg().getAccentColor(), 0.9F);
+		if(setting instanceof EnumSetting<?>
+			|| setting instanceof StringDropdownSetting)
+			return withAlpha(cfg().getAccentColor(), 0.85F);
+		if(setting instanceof ColorSetting)
+			return withAlpha(cfg().getTextColor(), 0.9F);
+		if(setting instanceof SettingGroup)
+			return withAlpha(cfg().getMutedTextColor(), 0.95F);
+		return withAlpha(cfg().getMutedTextColor(), 0.75F);
+	}
+	
+	private String getSettingTypeTag(Setting setting)
+	{
+		if(setting instanceof CheckboxSetting)
+			return "BOOL";
+		if(setting instanceof SliderSetting)
+			return "SLD";
+		if(setting instanceof ColorSetting)
+			return "CLR";
+		if(setting instanceof ButtonSetting)
+			return "BTN";
+		if(setting instanceof EnumSetting<?>
+			|| setting instanceof StringDropdownSetting)
+			return "MODE";
+		if(setting instanceof SettingGroup)
+			return "GRP";
+		if(setting instanceof TextFieldSetting)
+			return "TXT";
+		return "EDIT";
+	}
+	
+	private int getValueBadgeColor(Setting setting, String valueText)
+	{
+		if(setting instanceof CheckboxSetting)
+		{
+			boolean on = "ON".equalsIgnoreCase(valueText)
+				|| "true".equalsIgnoreCase(valueText);
+			return on ? withAlpha(cfg().getEnabledColor(), 0.82F)
+				: withAlpha(cfg().getDisabledColor(), 0.86F);
+		}
+		
+		if(setting instanceof SettingGroup group)
+			return expandedGroups.contains(group)
+				? withAlpha(cfg().getAccentColor(), 0.58F)
+				: withAlpha(cfg().getDisabledColor(), 0.86F);
+		
+		if(setting instanceof SliderSetting)
+			return withAlpha(cfg().getAccentColor(), 0.62F);
+		
+		if(setting instanceof ButtonSetting)
+			return withAlpha(cfg().getAccentColor(), 0.56F);
+		
+		return withAlpha(cfg().getSettingValueBackgroundColor(), 0.9F);
+	}
+	
+	private String trimToWidth(Font font, String text, int maxWidth)
+	{
+		if(text == null)
+			return "";
+		int unscaledMaxWidth = Math.max(1,
+			(int)(maxWidth / Math.max(0.01F, cfg().getFontScale())));
+		if(textWidthBase(font, text) <= unscaledMaxWidth)
+			return text;
+		
+		String ellipsis = "...";
+		int ellipsisW = textWidthBase(font, ellipsis);
+		int lo = 0;
+		int hi = text.length();
+		while(lo < hi)
+		{
+			int mid = (lo + hi + 1) >>> 1;
+			int w = fontManager.getTextWidthPrefix(font, text, mid) + ellipsisW;
+			if(w <= unscaledMaxWidth)
+				lo = mid;
+			else
+				hi = mid - 1;
+		}
+		
+		if(lo <= 0)
+			return ellipsis;
+		
+		return text.substring(0, lo) + ellipsis;
+	}
+	
+	private String triState(Boolean value)
+	{
+		if(value == null)
+			return "MIX";
+		return value ? "ON" : "OFF";
+	}
+	
+	private String normalizeDisplayValue(String value)
+	{
+		if(value == null)
+			return "";
+		
+		String trimmed = value.trim();
+		if(trimmed.equalsIgnoreCase("off"))
+			return "OFF";
+		if(trimmed.equalsIgnoreCase("on"))
+			return "ON";
+		
+		return trimmed;
+	}
+	
+	private boolean isStyleSlider(SliderSetting slider)
+	{
+		return slider == cfg().getUiOpacitySetting()
+			|| slider == cfg().getBackgroundOpacitySetting()
+			|| slider == cfg().getTooltipOpacitySetting()
+			|| slider == cfg().getSettingsWidthSetting()
+			|| slider == cfg().getSettingsHeightSetting()
+			|| slider == cfg().getWidthPercentSetting()
+			|| slider == cfg().getHeightPercentSetting()
+			|| slider == cfg().getCategoryHeightSetting()
+			|| slider == cfg().getCategoryWidthSetting()
+			|| slider == cfg().getRowHeightSetting()
+			|| slider == cfg().getFontScaleSetting();
+	}
+	
+	private Hack findHackByName(String name)
+	{
+		for(Hack hack : WurstClient.INSTANCE.getHax().getAllHax())
+			if(hack.getName().equals(name))
+				return hack;
+			
+		return null;
+	}
+	
+	private void addRecentlyDisabled(String hackName)
+	{
+		RECENTLY_DISABLED_HACKS.remove(hackName);
+		RECENTLY_DISABLED_HACKS.add(0, hackName);
+		if(RECENTLY_DISABLED_HACKS.size() > MAX_RECENTLY_DISABLED)
+			RECENTLY_DISABLED_HACKS.remove(MAX_RECENTLY_DISABLED);
+	}
+	
+	private void removeRecentlyDisabled(String hackName)
+	{
+		RECENTLY_DISABLED_HACKS.remove(hackName);
+	}
+	
+	private boolean isStyleColor(ColorSetting color)
+	{
+		return color == cfg().getBgColorSetting()
+			|| color == cfg().getPanelColorSetting()
+			|| color == cfg().getPanelLightColorSetting()
+			|| color == cfg().getTextColorSetting()
+			|| color == cfg().getMutedTextColorSetting()
+			|| color == cfg().getAccentColorSetting()
+			|| color == cfg().getEnabledColorSetting()
+			|| color == cfg().getDisabledColorSetting();
+	}
+	
+	private boolean featureHasStatePill(Feature feature)
+	{
+		if(isMenuOnlyFeature(feature))
+			return false;
+		
+		if(feature instanceof ClickGuiHack || feature instanceof AltGuiHack
+			|| feature instanceof XpGuiHack)
+			return false;
+		
+		String action = feature.getPrimaryAction();
+		if(action == null || action.isBlank())
+			return false;
+		
+		String a = action.toLowerCase(Locale.ROOT);
+		if(a.contains("open") || a.contains("options") || a.contains("preset")
+			|| a.contains("keybind"))
+			return false;
+		
+		return a.contains("enable") || a.contains("disable")
+			|| a.contains("show") || a.contains("hide") || a.contains("allow")
+			|| a.contains("block") || feature.isEnabled();
+	}
+	
+	private boolean isMenuOnlyFeature(Feature feature)
+	{
+		String name = feature.getName();
+		return name != null && (name.equalsIgnoreCase("GlobalSettings")
+			|| name.equalsIgnoreCase("GlobalToggle")
+			|| name.equalsIgnoreCase("HackList")
+			|| name.equalsIgnoreCase("WurstOptions")
+			|| name.equalsIgnoreCase("WurstLogo")
+			|| name.equalsIgnoreCase("ClickGUI")
+			|| name.equalsIgnoreCase("AltGUI")
+			|| name.equalsIgnoreCase("XPGUI"));
+	}
+	
+	private boolean isManagerShortcut(Feature feature)
+	{
+		String name = feature.getName();
+		return name != null && (name.equalsIgnoreCase("Keybinds")
+			|| name.equalsIgnoreCase("Presets"));
+	}
+	
+	private boolean isHiddenByTooManyHax(Feature feature)
+	{
+		TooManyHaxHack tooManyHax =
+			WurstClient.INSTANCE.getHax().tooManyHaxHack;
+		return false;
+	}
+	
+	private void clampScroll()
+	{
+		if(moduleScroll < 0)
+			moduleScroll = 0;
+		if(moduleScroll > maxModuleScroll)
+			moduleScroll = maxModuleScroll;
+		
+		if(categoryScroll < 0)
+			categoryScroll = 0;
+		if(categoryScroll > maxCategoryScroll)
+			categoryScroll = maxCategoryScroll;
+		if(settingsScroll < 0)
+			settingsScroll = 0;
+		if(settingsScroll > maxSettingsScroll)
+			settingsScroll = maxSettingsScroll;
+	}
+	
+	private boolean isInsideCategoryArea(double mouseX, double mouseY)
+	{
+		int x1 = getCategoryAreaX1();
+		int x2 = getCategoryAreaX2();
+		int y1 = getCategoryAreaY1();
+		int y2 = getCategoryAreaY2();
+		return isInside(mouseX, mouseY, x1, y1, x2, y2);
+	}
+	
+	private boolean isInside(double mouseX, double mouseY, int x1, int y1,
+		int x2, int y2)
+	{
+		return mouseX >= x1 && mouseX < x2 && mouseY >= y1 && mouseY < y2;
+	}
+	
+	private static int withAlpha(int color, float alpha)
+	{
+		int a = Math.max(0, Math.min(255, (int)(alpha * 255)));
+		return (color & 0x00FFFFFF) | (a << 24);
+	}
+	
+	private static int getReadableTextColor(int bgColor)
+	{
+		int r = (bgColor >> 16) & 0xFF;
+		int g = (bgColor >> 8) & 0xFF;
+		int b = bgColor & 0xFF;
+		double luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+		return luminance > 0.55 ? 0xFF000000 : 0xFFFFFFFF;
+	}
+	
+	private void drawThickRectBorder(GuiGraphicsExtractor context, int x1,
+		int y1, int x2, int y2, int color, float thickness)
+	{
+		if(thickness <= 0.0F)
+			return;
+		int maxThickness = Math.max(1, Math.min(x2 - x1, y2 - y1) / 2);
+		float actualThickness = Math.min(thickness, maxThickness);
+		int stroke = (int)actualThickness;
+		for(int i = 0; i < stroke; i++)
+		{
+			context.fill(x1 + i, y1 + i, x2 - i, y1 + i + 1, color);
+			context.fill(x1 + i, y2 - i - 1, x2 - i, y2 - i, color);
+			context.fill(x1 + i, y1 + i, x1 + i + 1, y2 - i, color);
+			context.fill(x2 - i - 1, y1 + i, x2 - i, y2 - i, color);
+		}
+		float fractional = actualThickness - stroke;
+		if(fractional > 0)
+		{
+			int innerX1 = x1 + stroke;
+			int innerY1 = y1 + stroke;
+			int innerX2 = x2 - stroke;
+			int innerY2 = y2 - stroke;
+			drawFractionalRect(context, innerX1, innerY1, innerX2 - innerX1,
+				fractional, color);
+			drawFractionalRect(context, innerX1, innerY2 - fractional,
+				innerX2 - innerX1, fractional, color);
+			drawFractionalRect(context, innerX1, innerY1, fractional,
+				innerY2 - innerY1, color);
+			drawFractionalRect(context, innerX2 - fractional, innerY1,
+				fractional, innerY2 - innerY1, color);
+		}
+	}
+	
+	private void drawHorizontalStroke(GuiGraphicsExtractor context, int x1,
+		float y, int x2, float thickness, int color)
+	{
+		int fullPixels = (int)thickness;
+		for(int i = 0; i < fullPixels; i++)
+			drawFractionalRect(context, x1, y + i, x2 - x1, 1, color);
+		float fractional = thickness - fullPixels;
+		if(fractional > 0)
+			drawFractionalRect(context, x1, y + fullPixels, x2 - x1, fractional,
+				color);
+	}
+	
+	private void drawVerticalStroke(GuiGraphicsExtractor context, float x,
+		int y1, int y2, float thickness, int color)
+	{
+		int fullPixels = (int)thickness;
+		for(int i = 0; i < fullPixels; i++)
+			drawFractionalRect(context, x + i, y1, 1, y2 - y1, color);
+		float fractional = thickness - fullPixels;
+		if(fractional > 0)
+			drawFractionalRect(context, x + fullPixels, y1, fractional, y2 - y1,
+				color);
+	}
+	
+	private void drawFractionalRect(GuiGraphicsExtractor context, float x,
+		float y, float rectW, float rectH, int color)
+	{
+		if(rectW <= 0 || rectH <= 0)
+			return;
+		context.pose().pushMatrix();
+		context.pose().translate(x, y);
+		context.pose().scale(rectW, rectH);
+		context.fill(0, 0, 1, 1, color);
+		context.pose().popMatrix();
+	}
+	
+	private int scaledFontWidth(Font font, String text)
+	{
+		return (int)(textWidthBase(font, text) * cfg().getFontScale());
+	}
+	
+	private int scaledFontHeight(Font font)
+	{
+		return (int)(lineHeightBase(font) * cfg().getFontScale());
+	}
+	
+	private int centeredTextY(Font font, int top, int bottom)
+	{
+		int h = Math.max(1, scaledFontHeight(font));
+		return top + Math.max(0, ((bottom - top) - h) / 2);
+	}
+	
+	private int getPillPadding(Font font, int rowHeight)
+	{
+		int textH = Math.max(1, scaledFontHeight(font));
+		int maxPad = Math.max(1, (rowHeight - textH - 2) / 2);
+		return Math.min(4, maxPad);
+	}
+	
+	private void drawStringScaled(GuiGraphicsExtractor context, Font font,
+		String text, int x, int y, int color, boolean shadow)
+	{
+		float scale = Math.max(0.01F, cfg().getFontScale());
+		fontManager.drawString(context, font, text, x, y, color, shadow, scale);
+	}
+	
+	private int textWidthBase(Font font, String text)
+	{
+		return fontManager.getTextWidth(font, text);
+	}
+	
+	private int lineHeightBase(Font font)
+	{
+		return fontManager.getLineHeight(font);
+	}
+	
+	private void syncFontManager()
+	{
+		int smoothing = cfg().getFontSmoothingFactor();
+		if(appliedFontSmoothing != smoothing)
+		{
+			fontManager.setSmoothingFactor(smoothing);
+			appliedFontSmoothing = smoothing;
+			appliedFontFamily = "";
+		}
+		
+		String family = cfg().getSelectedFontFamily();
+		if(!family.equals(appliedFontFamily))
+		{
+			fontManager.setActiveFont(family);
+			appliedFontFamily = family;
+		}
+	}
+	
+	private void drawCenteredStringScaled(GuiGraphicsExtractor context,
+		Font font, String text, int centerX, int y, int color)
+	{
+		int x = centerX - scaledFontWidth(font, text) / 2;
+		drawStringScaled(context, font, text, x, y, color, false);
+	}
+	
+	private void drawCenteredStringScaledInBox(GuiGraphicsExtractor context,
+		Font font, String text, int x1, int y1, int x2, int y2, int color)
+	{
+		float textW = scaledFontWidth(font, text);
+		float textH = Math.max(1, scaledFontHeight(font));
+		float centerX = (x1 + x2) * 0.5F;
+		float centerY = (y1 + y2) * 0.5F;
+		int x = Math.round(centerX - textW * 0.5F);
+		int y = Math.round(centerY - textH * 0.5F);
+		drawStringScaled(context, font, text, x, y, color, false);
+	}
+	
+	private void drawMarqueeStringScaledInBox(GuiGraphicsExtractor context,
+		Font font, String text, int x1, int y1, int x2, int y2, int color,
+		int padX)
+	{
+		if(text == null || text.isEmpty())
+			return;
+		
+		int innerX1 = x1 + Math.max(0, padX);
+		int innerX2 = x2 - Math.max(0, padX);
+		if(innerX2 <= innerX1)
+			return;
+		
+		int innerW = innerX2 - innerX1;
+		int textW = Math.max(1, scaledFontWidth(font, text));
+		int textH = Math.max(1, scaledFontHeight(font));
+		int y = centeredTextY(font, y1, y2);
+		
+		if(textW <= innerW)
+		{
+			int x = Math.round((x1 + x2) * 0.5F - textW * 0.5F);
+			drawStringScaled(context, font, text, x, y, color, false);
+			return;
+		}
+		
+		int overflow = textW - innerW;
+		int ticks = minecraft != null && minecraft.gui != null
+			? minecraft.gui.getGuiTicks()
+			: (int)(System.currentTimeMillis() / 50L);
+		float cycle = 220F;
+		float phase = (ticks % (int)cycle) / cycle;
+		float pingPong = phase <= 0.5F ? phase * 2F : (1F - phase) * 2F;
+		int x = innerX1 - Math.round(overflow * pingPong);
+		
+		context.enableScissor(innerX1, y1, innerX2, y2);
+		drawStringScaled(context, font, text, x, y, color, false);
+		context.disableScissor();
+	}
+	
+	@Override
+	public void extractBackground(GuiGraphicsExtractor context, int mouseX,
+		int mouseY, float deltaTicks)
+	{
+		// custom background above
+	}
+	
+	@Override
+	public void removed()
+	{
+		rememberCurrentViewState();
+		LAST_SELECTED_CATEGORY = selectedCategory;
+		LAST_ENABLED_CATEGORY_SELECTED = enabledCategorySelected;
+		LAST_STYLE_CATEGORY_SELECTED = styleCategorySelected;
+		LAST_MODULE_SCROLL = Math.max(0, moduleScroll);
+		LAST_SETTINGS_SCROLL = Math.max(0, settingsScroll);
+		LAST_SELECTED_FEATURE =
+			selectedFeature == null ? "" : selectedFeature.getName();
+		LAST_EXPANDED_FEATURES.clear();
+		LAST_EXPANDED_FEATURES.addAll(expandedFeatures);
+		LAST_EXPANDED_GROUPS.clear();
+		LAST_EXPANDED_GROUPS.addAll(expandedGroups);
+		super.removed();
+	}
+	
+	@Override
+	public boolean isPauseScreen()
+	{
+		return false;
+	}
+	
+	private record DisplayEntry(Feature feature, boolean recentDisabled)
+	{}
+	
+	private record ViewState(String featureName, int settingsScroll)
+	{}
+	
+	private record SettingRow(Feature owner, Setting setting, int depth,
+		int height, boolean isKeybindRow)
+	{}
+	
+	private record SliderDrag(SliderSetting slider, int x1, int x2)
+	{}
+	
+	private enum TopTabKind
+	{
+		ENABLED,
+		CATEGORY,
+		STYLE
+	}
+	
+	private record TopCategoryTab(TopTabKind kind, String label,
+		String categoryName, int x1, int x2)
+	{}
+}

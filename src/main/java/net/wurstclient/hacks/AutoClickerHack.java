@@ -527,14 +527,14 @@ public final class AutoClickerHack extends Hack
 	
 	private boolean staffDetected()
 	{
-		// TODO: StaffMonitor isn't ported yet
-		return false;
+		return WURST.getHax().staffMonitorHack.isEnabled()
+			&& WURST.getHax().staffMonitorHack.hasDetectedStaff();
 	}
 	
 	private boolean sonarDetected()
 	{
-		// TODO: SimulationSonar isn't ported yet
-		return false;
+		return WURST.getHax().simulationSonarHack.isEnabled()
+			&& WURST.getHax().simulationSonarHack.hasDetectedSource();
 	}
 	
 	@Override

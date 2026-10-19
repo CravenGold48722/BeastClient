@@ -283,7 +283,8 @@ public final class ClutchFallHack extends Hack implements UpdateListener
 	{
 		return MC.player.getAbilities().flying || MC.player.isFallFlying()
 			|| WURST.getHax().flightHack.isEnabled()
-			|| WURST.getHax().creativeFlightHack.isEnabled();
+			|| WURST.getHax().creativeFlightHack.isEnabled()
+			|| WURST.getHax().autoFlyHack.isEnabled();
 	}
 	
 	private static BlockHitResult getWaterPlacement(BlockPos support)

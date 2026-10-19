@@ -19,11 +19,13 @@ import net.minecraft.network.protocol.game.ClientboundLoginPacket;
 import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
 import net.wurstclient.WurstClient;
 import net.wurstclient.hack.HackList;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 
 /**
  * Join, chunk and block-update hooks of the features ported from the CevAPI
- * fork (InstantCommand, JoinDrop, NewerNewChunks). All at TAIL/RETURN, so
- * they run once, on the client thread.
+ * fork (InstantCommand, JoinDrop, NewerNewChunks, AutoFly). All at
+ * TAIL/RETURN, so they run once, on the client thread.
  */
 @Mixin(ClientPacketListener.class)
 public abstract class PortedPacketListenerHooksMixin
@@ -49,6 +51,10 @@ public abstract class PortedPacketListenerHooksMixin
 	{
 		WurstClient.INSTANCE.getHax().newerNewChunksHack
 			.onChunkDataPacket(packet.getX(), packet.getZ());
+		ClientLevel level = Minecraft.getInstance().level;
+		if(level != null)
+			WurstClient.INSTANCE.getHax().autoFlyHack.onPathChunkLoaded(
+				level.getChunk(packet.getX(), packet.getZ()));
 	}
 	
 	@Inject(
@@ -59,6 +65,8 @@ public abstract class PortedPacketListenerHooksMixin
 	{
 		WurstClient.INSTANCE.getHax().newerNewChunksHack
 			.afterUpdateBlock(packet.getPos());
+		WurstClient.INSTANCE.getHax().autoFlyHack
+			.onPathBlockUpdate(packet.getPos(), packet.getBlockState());
 	}
 	
 	@Inject(
@@ -67,8 +75,10 @@ public abstract class PortedPacketListenerHooksMixin
 	private void wurst$onSectionUpdate(
 		ClientboundSectionBlocksUpdatePacket packet, CallbackInfo ci)
 	{
-		packet.runUpdates(
-			(pos, state) -> WurstClient.INSTANCE.getHax().newerNewChunksHack
-				.afterChunkDeltaUpdate(pos, state));
+		packet.runUpdates((pos, state) -> {
+			HackList hax = WurstClient.INSTANCE.getHax();
+			hax.newerNewChunksHack.afterChunkDeltaUpdate(pos, state);
+			hax.autoFlyHack.onPathBlockUpdate(pos, state);
+		});
 	}
 }

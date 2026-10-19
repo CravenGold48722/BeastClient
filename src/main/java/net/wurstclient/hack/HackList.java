@@ -23,6 +23,7 @@ import net.minecraft.ReportedException;
 import net.wurstclient.WurstClient;
 import net.wurstclient.event.EventManager;
 import net.wurstclient.events.UpdateListener;
+import net.wurstclient.hacks.ophack.NBTEditorHack;
 import net.wurstclient.hacks.itemhandler.ItemHandlerHack;
 import net.wurstclient.hacks.spawnradius.SpawnRadiusHack;
 import net.wurstclient.hacks.*;
@@ -65,6 +66,7 @@ public final class HackList implements UpdateListener
 	public final AutoDisenchantHack autoDisenchantHack =
 		new AutoDisenchantHack();
 	public final AutoDropHack autoDropHack = new AutoDropHack();
+	public final AutoFlyHack autoFlyHack = new AutoFlyHack();
 	public final AutoLeaveHack autoLeaveHack = new AutoLeaveHack();
 	public final AutoLibrarianHack autoLibrarianHack = new AutoLibrarianHack();
 	public final AutoEatHack autoEatHack = new AutoEatHack();
@@ -193,11 +195,13 @@ public final class HackList implements UpdateListener
 	public final LocatorTriangulationHack locatorTriangulationHack =
 		new LocatorTriangulationHack();
 	public final LogoutSpotsHack logoutSpotsHack = new LogoutSpotsHack();
+	public final LootRunnerHack lootRunnerHack = new LootRunnerHack();
 	public final LootSearchHack lootSearchHack = new LootSearchHack();
 	public final LootSorterHack lootSorterHack = new LootSorterHack();
 	public final LsdHack lsdHack = new LsdHack();
 	public final MaceAssistHack maceAssistHack = new MaceAssistHack();
 	public final MaceDmgHack maceDmgHack = new MaceDmgHack();
+	public final MapaHack mapaHack = new MapaHack();
 	public final MassTpaHack massTpaHack = new MassTpaHack();
 	public final MeasurementEspHack measurementEspHack =
 		new MeasurementEspHack();
@@ -217,6 +221,7 @@ public final class HackList implements UpdateListener
 	public final NameProtectHack nameProtectHack = new NameProtectHack();
 	public final NameTagsHack nameTagsHack = new NameTagsHack();
 	public final NavigatorHack navigatorHack = new NavigatorHack();
+	public final NBTEditorHack nbtEditorHack = new NBTEditorHack();
 	public final NbtFilterHack nbtFilterHack = new NbtFilterHack();
 	public final NbtSizeCounterHack nbtSizeCounterHack =
 		new NbtSizeCounterHack();

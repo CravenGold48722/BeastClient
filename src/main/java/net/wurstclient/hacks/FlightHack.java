@@ -63,6 +63,12 @@ public final class FlightHack extends Hack implements UpdateListener,
 	
 	private int tickCounter = 0;
 	
+	// temporary overrides for hacks that fly you (AutoFly and LootRunner,
+	// ported from the CevAPI fork) - they never change your settings
+	private Double horizontalSpeedOverride;
+	private Double verticalSpeedOverride;
+	private Boolean antiKickOverride;
+	
 	public FlightHack()
 	{
 		super("Flight");
@@ -131,7 +137,7 @@ public final class FlightHack extends Hack implements UpdateListener,
 			player.addDeltaMovement(new Vec3(0, -vSpeed, 0));
 		}
 		
-		if(antiKick.isChecked())
+		if(antiKickOverride != null ? antiKickOverride : antiKick.isChecked())
 			doAntiKick();
 	}
 	
@@ -141,7 +147,7 @@ public final class FlightHack extends Hack implements UpdateListener,
 		if(WURST.getHax().freecamHack.isMovingCamera())
 			return;
 		
-		event.setSpeed(horizontalSpeed.getValueF());
+		event.setSpeed((float)getHorizontalSpeed());
 	}
 	
 	@Override
@@ -197,7 +203,54 @@ public final class FlightHack extends Hack implements UpdateListener,
 	
 	public double getHorizontalSpeed()
 	{
-		return horizontalSpeed.getValue();
+		return horizontalSpeedOverride != null ? horizontalSpeedOverride
+			: horizontalSpeed.getValue();
+	}
+	
+	/**
+	 * The vertical speed multiplier (before {@link #getActualVerticalSpeed}).
+	 */
+	public double getVerticalSpeed()
+	{
+		return verticalSpeedOverride != null ? verticalSpeedOverride
+			: verticalSpeed.getValue();
+	}
+	
+	public double getMaxHorizontalSpeed()
+	{
+		return horizontalSpeed.getMaximum();
+	}
+	
+	public double getMaxVerticalSpeed()
+	{
+		return verticalSpeed.getMaximum();
+	}
+	
+	/** Overrides the horizontal speed until reset with null. */
+	public void setHorizontalSpeedOverride(Double speed)
+	{
+		horizontalSpeedOverride = speed;
+	}
+	
+	/** Overrides the vertical speed multiplier until reset with null. */
+	public void setVerticalSpeedOverride(Double speed)
+	{
+		verticalSpeedOverride = speed;
+	}
+	
+	/** Overrides Anti-Kick until reset with null. */
+	public void setAntiKickOverride(Boolean override)
+	{
+		antiKickOverride = override;
+	}
+	
+	/**
+	 * CevAPI's Flight had a "slow sneaking" option to override; Beast's
+	 * Flight doesn't, so this does nothing.
+	 */
+	public void setSlowSneakingOverride(Boolean override)
+	{
+		
 	}
 	
 	public double getActualVerticalSpeed()
@@ -205,7 +258,7 @@ public final class FlightHack extends Hack implements UpdateListener,
 		boolean limitVerticalSpeed = !allowUnsafeVerticalSpeed.isChecked()
 			&& !MC.player.getAbilities().invulnerable;
 		
-		return Mth.clamp(horizontalSpeed.getValue() * verticalSpeed.getValue(),
-			0.05, limitVerticalSpeed ? 3.95 : 10);
+		return Mth.clamp(getHorizontalSpeed() * getVerticalSpeed(), 0.05,
+			limitVerticalSpeed ? 3.95 : 10);
 	}
 }

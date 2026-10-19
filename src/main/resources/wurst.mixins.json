@@ -80,6 +80,7 @@
     "OptionInstanceMixin",
     "OptionsScreenMixin",
     "PackSelectionScreenMixin",
+    "PathFlightEntityMoveMixin",
     "PauseScreenMixin",
     "PearlLauncherGameModeMixin",
     "PortedPacketListenerHooksMixin",

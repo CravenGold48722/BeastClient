@@ -1209,8 +1209,7 @@ public final class NewerNewChunksHack extends Hack
 	
 	private boolean isMapaTrackingActive()
 	{
-		// TODO: Mapa isn't ported yet
-		return false;
+		return WURST.getHax().mapaHack.isNewerNewChunksMapModeActive();
 	}
 	
 	private void ensureTrackingWorld()

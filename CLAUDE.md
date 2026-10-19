@@ -897,7 +897,7 @@ each built, smoke-tested and shipped. Rules that came out of it:
   on, and must end clean. Add each new batch to its list.
 - **Nothing built to disrupt or grief servers** (user, 2026-10-18: "excluding
   server-disrupting stuff is fine"): BundleDupe (packet flood), VillagerDupe, ChatSpam,
-  CommandSpam, and CevAPI's Creative/Op kit except NBTEditor and AutoCommand (Airstrike,
+  CommandSpam, and CevAPI's Creative/Op kit except NBTEditor (AutoCommand's default macro deops everyone and ops you) (Airstrike,
   Boom, ExplosionAura, Voider, HandOfGod, ServerKill, MultiverseAnnihilator, UUIDBan,
   ForceTP, ForceOP book/sign, the advert text/title/display/name spawners).
 - Still open: StaffMonitor/SimulationSonar are in now (AutoClicker's pause checks still

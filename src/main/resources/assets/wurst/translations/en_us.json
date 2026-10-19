@@ -651,5 +651,9 @@
   "description.wurst.setting.flicker.swap_hands": "Also alternates the main-arm setting sent to the server.",
   "description.wurst.setting.flicker.hand_rate": "Ticks between main-arm alternations.",
   "description.wurst.setting.flicker.item_strobe": "Alternates the held item visibility state.",
-  "description.wurst.setting.flicker.item_rate": "Ticks between held-item visibility changes."
+  "description.wurst.setting.flicker.item_rate": "Ticks between held-item visibility changes.",
+  "description.wurst.hack.autofly": "Follows manual coordinates or SeedMapper waypoints, managing flight height, speed, crosshair status, and vehicle support so you can focus on travel.",
+  "description.wurst.hack.lootrunner": "Uses Baritone to visit SeedMapper export coordinates, find nearby chests, loot selected items, and log results.",
+  "description.wurst.hack.mapa": "Provides an integrated minimap and world map with optional ESP markers.",
+  "description.wurst.hack.nbteditor": "Sends a configurable NBT command for the selected target."
 }

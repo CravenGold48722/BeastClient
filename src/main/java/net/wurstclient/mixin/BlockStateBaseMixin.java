@@ -29,6 +29,9 @@ import net.wurstclient.event.EventManager;
 import net.wurstclient.events.IsNormalCubeListener.IsNormalCubeEvent;
 import net.wurstclient.hack.HackList;
 import net.wurstclient.hacks.HandNoClipHack;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.world.level.block.Blocks;
+import net.wurstclient.hacks.AutoFlyHack;
 
 @Mixin(BlockStateBase.class)
 public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState>
@@ -87,6 +90,46 @@ public abstract class BlockStateBaseMixin extends StateHolder<Block, BlockState>
 	private void onGetCollisionShape(BlockGetter world, BlockPos pos,
 		CollisionContext context, CallbackInfoReturnable<VoxelShape> cir)
 	{
+		// AutoFly (ported from the CevAPI fork) can make lava and fire solid,
+		// and the air above them, so a path never dips into them. Lava you're
+		// under or inside stays passable so you can get out upward.
+		HackList autoFlyHax = WurstClient.INSTANCE.getHax();
+		if(autoFlyHax != null && autoFlyHax.autoFlyHack.isEnabled())
+		{
+			AutoFlyHack autoFly = autoFlyHax.autoFlyHack;
+			BlockState self = (BlockState)(Object)this;
+			boolean solidLava = autoFly.shouldMakeLavaSolid();
+			boolean solidFire = autoFly.shouldMakeFireSolid();
+			boolean lava = solidLava && getFluidState().is(FluidTags.LAVA);
+			boolean fire = solidFire
+				&& (self.is(Blocks.FIRE) || self.is(Blocks.SOUL_FIRE));
+			boolean clearance = false;
+			if(!lava && !fire && (solidLava || solidFire))
+			{
+				BlockState below = world.getBlockState(pos.below());
+				clearance =
+					solidLava && below.getFluidState().is(FluidTags.LAVA)
+						|| solidFire && (below.is(Blocks.FIRE)
+							|| below.is(Blocks.SOUL_FIRE));
+			}
+			
+			boolean lavaCollision = lava || clearance && world
+				.getBlockState(pos.below()).getFluidState().is(FluidTags.LAVA);
+			if(lavaCollision && WurstClient.MC.player != null
+				&& WurstClient.MC.player.getBoundingBox().maxY <= pos.getY()
+					+ 1.0E-3)
+			{
+				cir.setReturnValue(Shapes.empty());
+				return;
+			}
+			
+			if(lava || fire || clearance)
+			{
+				cir.setReturnValue(Shapes.block());
+				return;
+			}
+		}
+		
 		// AntiVoid's client-side floor (ported from the CevAPI fork)
 		HackList antiVoidHax = WurstClient.INSTANCE.getHax();
 		BlockState state = (BlockState)(Object)this;

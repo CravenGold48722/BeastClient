@@ -112,6 +112,17 @@ public final class PlayerEspHack extends Hack implements UpdateListener,
 		entityFilters.forEach(this::addSetting);
 	}
 	
+	/** The players PlayerESP shows, for Mapa's map markers. */
+	public java.util.List<Player> getMapaPlayers()
+	{
+		return java.util.List.copyOf(players);
+	}
+	
+	public int getMapaPlayerColor(Player player)
+	{
+		return player == null ? 0xFFFFFFFF : getColor(player) | 0xFF000000;
+	}
+	
 	@Override
 	protected void onEnable()
 	{

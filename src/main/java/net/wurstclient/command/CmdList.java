@@ -20,6 +20,7 @@ public final class CmdList
 	public final AddAltCmd addAltCmd = new AddAltCmd();
 	public final AnnoyCmd annoyCmd = new AnnoyCmd();
 	public final AuthorCmd authorCmd = new AuthorCmd();
+	public final AutoFlyCmd autoFlyCmd = new AutoFlyCmd();
 	public final BindCmd bindCmd = new BindCmd();
 	public final BindsCmd bindsCmd = new BindsCmd();
 	public final BlinkCmd blinkCmd = new BlinkCmd();
@@ -46,12 +47,16 @@ public final class CmdList
 	public final ItemHandlerCmd itemHandlerCmd = new ItemHandlerCmd();
 	public final ItemListCmd itemListCmd = new ItemListCmd();
 	public final JumpCmd jumpCmd = new JumpCmd();
+	public final KeyboardCmd keyboardCmd = new KeyboardCmd();
+	public final KeymapCmd keymapCmd = new KeymapCmd();
 	public final LeaveCmd leaveCmd = new LeaveCmd();
 	public final LivestreamCmd livestreamCmd = new LivestreamCmd();
 	public final LootSorterCmd lootSorterCmd = new LootSorterCmd();
+	public final MapaCmd mapaCmd = new MapaCmd();
 	public final MeasurementEspCmd measurementEspCmd = new MeasurementEspCmd();
 	public final MobSearchCmd mobSearchCmd = new MobSearchCmd();
 	public final ModifyCmd modifyCmd = new ModifyCmd();
+	public final NBTEditorCmd nBTEditorCmd = new NBTEditorCmd();
 	public final NoGoZoneCmd noGoZoneCmd = new NoGoZoneCmd();
 	public final PathCmd pathCmd = new PathCmd();
 	public final PlayerMuteCmd playerMuteCmd = new PlayerMuteCmd();

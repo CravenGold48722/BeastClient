@@ -7,6 +7,8 @@
  */
 package net.wurstclient.mixinterface;
 
+import com.mojang.blaze3d.platform.InputConstants;
+
 import net.minecraft.client.KeyMapping;
 
 public interface IKeyMapping
@@ -52,6 +54,12 @@ public interface IKeyMapping
 	public default void setDownIgnoringToggle(boolean down)
 	{
 		wurst_setDownIgnoringToggle(down);
+	}
+	
+	/** The key this mapping is currently bound to. */
+	public default InputConstants.Key getBoundKey()
+	{
+		return InputConstants.getKey(asVanilla().saveString());
 	}
 	
 	public default KeyMapping asVanilla()

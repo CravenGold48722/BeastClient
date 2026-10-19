@@ -92,6 +92,12 @@ public final class PortalEspHack extends Hack implements UpdateListener,
 		addSetting(area);
 	}
 	
+	/** The portal groups, for Mapa's map markers. */
+	public List<PortalEspBlockGroup> getMapaGroups()
+	{
+		return groups;
+	}
+	
 	@Override
 	protected void onEnable()
 	{

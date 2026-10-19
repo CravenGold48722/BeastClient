@@ -67,7 +67,9 @@ public final class PortedFeaturesTest extends SingleplayerTest
 		"NewerNewChunks", "NoGoZone", "NoPlayerChat", "OppStats", "PacketRate",
 		"PlayerMute", "PlayerSonar", "RemoteEChest", "SafeTP", "ShearAura",
 		"SimulationSonar", "SoulChalice", "StaffMonitor", "Telemetrics",
-		"Towny", "VaultRoll", "VillagerRoll");
+		"Towny", "VaultRoll", "VillagerRoll",
+		// big systems
+		"AutoFly", "LootRunner", "Mapa", "NBTEditor");
 	
 	public PortedFeaturesTest(ClientGameTestContext context,
 		TestSingleplayerContext spContext)

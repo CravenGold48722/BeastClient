@@ -92,6 +92,11 @@ public final class TextFieldSetting extends Setting
 	/**
 	 * @return this setting's value. Cannot be null.
 	 */
+	public boolean isValidValue(String value)
+	{
+		return validator.test(value);
+	}
+	
 	public String getValue()
 	{
 		return value;

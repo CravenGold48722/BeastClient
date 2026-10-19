@@ -895,8 +895,15 @@ each built, smoke-tested and shipped. Rules that came out of it:
 - Gametest `PortedFeaturesTest` (`gametest ported`) switches every ported hack on and off
   (looking at the sky), opens a chest and the inventory with ChestSearch/EnchantmentHandler
   on, and must end clean. Add each new batch to its list.
-- Still open: StaffMonitor/SimulationSonar (AutoClicker's pause checks return false until
-  then), AutoFly (ClutchFall's flying check).
+- **Nothing built to disrupt or grief servers** (user, 2026-10-18: "excluding
+  server-disrupting stuff is fine"): BundleDupe (packet flood), VillagerDupe, ChatSpam,
+  CommandSpam, and CevAPI's Creative/Op kit except NBTEditor and AutoCommand (Airstrike,
+  Boom, ExplosionAura, Voider, HandOfGod, ServerKill, MultiverseAnnihilator, UUIDBan,
+  ForceTP, ForceOP book/sign, the advert text/title/display/name spawners).
+- Still open: StaffMonitor/SimulationSonar are in now (AutoClicker's pause checks still
+  return false - TODO), AutoFly (ClutchFall's flying check), Mapa (NewerNewChunks' map
+  mode), HideModMenu (needs ModMenu mixins), ClientChatOverlay (needs CevAPI's
+  ClientMessageOverlay).
 
 ### MaceAssistHack (COMBAT)
 

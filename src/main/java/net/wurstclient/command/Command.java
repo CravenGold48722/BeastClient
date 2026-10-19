@@ -7,6 +7,8 @@
  */
 package net.wurstclient.command;
 
+import java.util.List;
+
 import java.util.Objects;
 
 import net.wurstclient.Category;
@@ -36,6 +38,16 @@ public abstract class Command extends Feature
 	}
 	
 	public abstract void call(String[] args) throws CmdException;
+	
+	/**
+	 * Suggestions for the argument being typed (commands ported from the
+	 * CevAPI fork provide them). None by default.
+	 */
+	public List<String> getArgumentSuggestions(String[] args, int argIndex,
+		String prefix)
+	{
+		return List.of();
+	}
 	
 	@Override
 	public final String getName()

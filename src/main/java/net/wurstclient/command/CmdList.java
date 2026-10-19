@@ -47,11 +47,14 @@ public final class CmdList
 	public final ItemListCmd itemListCmd = new ItemListCmd();
 	public final JumpCmd jumpCmd = new JumpCmd();
 	public final LeaveCmd leaveCmd = new LeaveCmd();
+	public final LivestreamCmd livestreamCmd = new LivestreamCmd();
 	public final LootSorterCmd lootSorterCmd = new LootSorterCmd();
 	public final MeasurementEspCmd measurementEspCmd = new MeasurementEspCmd();
 	public final MobSearchCmd mobSearchCmd = new MobSearchCmd();
 	public final ModifyCmd modifyCmd = new ModifyCmd();
+	public final NoGoZoneCmd noGoZoneCmd = new NoGoZoneCmd();
 	public final PathCmd pathCmd = new PathCmd();
+	public final PlayerMuteCmd playerMuteCmd = new PlayerMuteCmd();
 	public final PotionCmd potionCmd = new PotionCmd();
 	public final ProtectCmd protectCmd = new ProtectCmd();
 	public final RenameCmd renameCmd = new RenameCmd();
@@ -72,9 +75,11 @@ public final class CmdList
 	public final TooManyHaxCmd tooManyHaxCmd = new TooManyHaxCmd();
 	public final TpCmd tpCmd = new TpCmd();
 	public final UnbindCmd unbindCmd = new UnbindCmd();
+	public final VaultRollCmd vaultRollCmd = new VaultRollCmd();
 	public final VClipCmd vClipCmd = new VClipCmd();
 	public final ViewCompCmd viewCompCmd = new ViewCompCmd();
 	public final ViewNbtCmd viewNbtCmd = new ViewNbtCmd();
+	public final VillagerRollCmd villagerRollCmd = new VillagerRollCmd();
 	public final WaypointCmd waypointCmd = new WaypointCmd();
 	public final WaypointsCmd waypointsCmd = new WaypointsCmd();
 	public final WindChargeKeyCmd windChargeKeyCmd = new WindChargeKeyCmd();

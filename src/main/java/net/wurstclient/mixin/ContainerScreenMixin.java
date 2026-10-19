@@ -23,6 +23,9 @@ import net.wurstclient.WurstClient;
 import net.wurstclient.chestsearch.ChestScreenRecording;
 import net.wurstclient.chestsearch.SlotHighlighter;
 import net.wurstclient.hacks.AutoStealHack;
+import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.input.KeyEvent;
+import net.wurstclient.hacks.RemoteEnderChestHack;
 
 @Mixin(ContainerScreen.class)
 public abstract class ContainerScreenMixin
@@ -74,6 +77,42 @@ public abstract class ContainerScreenMixin
 				.builder(Component.literal("Scan"),
 					b -> chestRecording.scanNow())
 				.bounds(leftPos + 6, topPos + 4, 50, 12).build());
+	}
+	
+	/**
+	 * RemoteEnderChest (ported from the CevAPI fork): E and Esc hide its
+	 * ender chest instead of closing it, its toggle key brings it back.
+	 */
+	@Override
+	public boolean keyPressed(KeyEvent event)
+	{
+		if(WurstClient.INSTANCE.isEnabled() && RemoteEnderChestHack
+			.isLinkedScreen((AbstractContainerScreen<?>)(Object)this))
+		{
+			RemoteEnderChestHack remote =
+				WurstClient.INSTANCE.getHax().remoteEnderChestHack;
+			int key = event.key();
+			if(key == InputConstants.KEY_ESCAPE || key == InputConstants.KEY_E)
+			{
+				if(remote.shouldSwapInventoryKey())
+				{
+					remote.setEnabled(false);
+					return true;
+				}
+				
+				RemoteEnderChestHack.hideLinkedGui();
+				return true;
+			}
+			
+			String keyName = InputConstants.getKey(event).getName();
+			if(keyName.equalsIgnoreCase(remote.getToggleGuiKeyName()))
+			{
+				RemoteEnderChestHack.toggleLinkedGui();
+				return true;
+			}
+		}
+		
+		return super.keyPressed(event);
 	}
 	
 	@Override

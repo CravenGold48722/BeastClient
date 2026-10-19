@@ -57,7 +57,17 @@ public final class PortedFeaturesTest extends SingleplayerTest
 		"FastFill", "InventorySorter", "LootSorter", "MusicAura", "PlaceNBreak",
 		"QuickShulker", "SignFramePT", "SilkOnly", "SourceFill", "StairMaker",
 		"SuperInstaMine", "SusNoMore", "TargetPlace", "UseItemSpam", "XCarry",
-		"ItemHandler");
+		"ItemHandler",
+		// chat and tools
+		"AirMiner", "Antisocial", "AutoChat", "AutoTrader", "BeaconExploit",
+		"CheatDetector", "ChorusFruit", "CoordLogger", "CustomTotem",
+		"DamageDetect", "Flicker", "InstantCommand", "JoinDrop",
+		"KickForensics", "LivestreamDetector", "Triangulator", "Mention",
+		"MicDetect", "MiningEvidence", "NBTFilter", "NbtSizeCounter",
+		"NewerNewChunks", "NoGoZone", "NoPlayerChat", "OppStats", "PacketRate",
+		"PlayerMute", "PlayerSonar", "RemoteEChest", "SafeTP", "ShearAura",
+		"SimulationSonar", "SoulChalice", "StaffMonitor", "Telemetrics",
+		"Towny", "VaultRoll", "VillagerRoll");
 	
 	public PortedFeaturesTest(ClientGameTestContext context,
 		TestSingleplayerContext spContext)

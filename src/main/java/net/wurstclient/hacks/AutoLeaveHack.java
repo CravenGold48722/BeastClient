@@ -129,6 +129,17 @@ public final class AutoLeaveHack extends Hack implements UpdateListener
 			this.leave = leave;
 		}
 		
+		/**
+		 * Leaves this way, for other hacks (Antisocial, ported from the
+		 * CevAPI fork). The details say why, for WebhookAlert.
+		 */
+		public void leave(String details)
+		{
+			net.wurstclient.util.DisconnectContext
+				.markExpectedDisconnect(details);
+			leave.run();
+		}
+		
 		@Override
 		public String toString()
 		{

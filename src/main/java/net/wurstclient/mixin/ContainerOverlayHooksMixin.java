@@ -33,6 +33,9 @@ import net.minecraft.world.item.ItemStack;
 import net.wurstclient.hacks.AntiDropHack;
 import net.wurstclient.hacks.QuickShulkerHack;
 import org.lwjgl.glfw.GLFW;
+import net.minecraft.client.gui.screens.inventory.MerchantScreen;
+import net.wurstclient.hacks.AutoTraderHack;
+import net.wurstclient.hacks.NbtSizeCounterHack;
 
 /**
  * Overlays that features ported from the CevAPI fork draw on container
@@ -63,12 +66,25 @@ public abstract class ContainerOverlayHooksMixin extends Screen
 		super(title);
 	}
 	
-	/** QuickShulker's button, above the container. */
+	/** QuickShulker's and AutoTrader's buttons, above the container. */
 	@Inject(at = @At("TAIL"), method = "init()V")
 	private void wurst$addButtons(CallbackInfo ci)
 	{
 		if(!WurstClient.INSTANCE.isEnabled())
 			return;
+		
+		// AutoTrader's button on villager trade screens
+		if((Object)this instanceof MerchantScreen)
+		{
+			AutoTraderHack autoTrader =
+				WurstClient.INSTANCE.getHax().autoTraderHack;
+			addRenderableWidget(Button
+				.builder(Component.literal("AutoTrader"),
+					b -> autoTrader.triggerFromGui())
+				.bounds(leftPos + imageWidth - 90, topPos - 20, 80, 16)
+				.build());
+			return;
+		}
 		
 		QuickShulkerHack quickShulker =
 			WurstClient.INSTANCE.getHax().quickShulkerHack;
@@ -109,6 +125,16 @@ public abstract class ContainerOverlayHooksMixin extends Screen
 		return (AbstractContainerScreen<?>)(Object)this;
 	}
 	
+	private static NbtSizeCounterHack wurst$nbtSizeCounter()
+	{
+		if(!WurstClient.INSTANCE.isEnabled())
+			return null;
+		
+		NbtSizeCounterHack hack =
+			WurstClient.INSTANCE.getHax().nbtSizeCounterHack;
+		return hack.isEnabled() ? hack : null;
+	}
+	
 	private static EnchantmentHandlerHack wurst$enchantHandler()
 	{
 		if(!WurstClient.INSTANCE.isEnabled())
@@ -132,6 +158,13 @@ public abstract class ContainerOverlayHooksMixin extends Screen
 			&& WurstClient.INSTANCE.isEnabled() && hoveredSlot != null
 			&& WurstClient.INSTANCE.getHax().quickShulkerHack
 				.openShulkerInventory(hoveredSlot))
+		{
+			cir.setReturnValue(true);
+			return;
+		}
+		
+		NbtSizeCounterHack nbtSize = wurst$nbtSizeCounter();
+		if(nbtSize != null && nbtSize.handleMouseClick(context))
 		{
 			cir.setReturnValue(true);
 			return;
@@ -178,6 +211,13 @@ public abstract class ContainerOverlayHooksMixin extends Screen
 	private void wurst$onMouseReleased(MouseButtonEvent context,
 		CallbackInfoReturnable<Boolean> cir)
 	{
+		NbtSizeCounterHack nbtSize = wurst$nbtSizeCounter();
+		if(nbtSize != null && nbtSize.handleMouseRelease())
+		{
+			cir.setReturnValue(true);
+			return;
+		}
+		
 		if(WurstClient.INSTANCE.isEnabled() && WurstClient.INSTANCE.getHud()
 			.getChestSearchMousePreview().handleMouseRelease(context.button()))
 		{
@@ -195,6 +235,10 @@ public abstract class ContainerOverlayHooksMixin extends Screen
 	private void wurst$onRemoved(CallbackInfo ci)
 	{
 		SlotHighlighter.INSTANCE.clearActive();
+		
+		NbtSizeCounterHack nbtSize = wurst$nbtSizeCounter();
+		if(nbtSize != null)
+			nbtSize.onContainerScreenClosed(wurst$self());
 	}
 	
 	@Inject(at = @At("TAIL"),
@@ -209,9 +253,24 @@ public abstract class ContainerOverlayHooksMixin extends Screen
 			enchantHack.renderOnHandledScreen(wurst$self(), context,
 				partialTicks);
 		
+		NbtSizeCounterHack nbtSize = wurst$nbtSizeCounter();
+		if(nbtSize != null)
+			nbtSize.renderOnHandledScreen(wurst$self(), context);
+		
 		if(WurstClient.INSTANCE.isEnabled())
 			WurstClient.INSTANCE.getHud().getChestSearchMousePreview()
 				.render(context);
+	}
+	
+	@Inject(at = @At("HEAD"),
+		method = "mouseDragged(Lnet/minecraft/client/input/MouseButtonEvent;DD)Z",
+		cancellable = true)
+	private void wurst$onMouseDragged(MouseButtonEvent context, double dragX,
+		double dragY, CallbackInfoReturnable<Boolean> cir)
+	{
+		NbtSizeCounterHack nbtSize = wurst$nbtSizeCounter();
+		if(nbtSize != null && nbtSize.handleMouseDrag(context))
+			cir.setReturnValue(true);
 	}
 	
 	/**

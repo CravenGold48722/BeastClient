@@ -31,6 +31,8 @@ public abstract class DisconnectHooksMixin
 		if(WurstClient.INSTANCE.getHax() == null)
 			return;
 		
+		WurstClient.INSTANCE.getHax().kickForensicsHack
+			.onDisconnected(details.reason());
 		WurstClient.INSTANCE.getHax().webhookAlertHack
 			.onDisconnected(details.reason());
 	}

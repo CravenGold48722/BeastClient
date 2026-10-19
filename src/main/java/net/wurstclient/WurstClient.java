@@ -248,6 +248,11 @@ public enum WurstClient
 	
 	public void saveSettings()
 	{
+		// settings changed while the hacks are still being created (some
+		// set their options in the constructor) are saved later anyway
+		if(settingsFile == null)
+			return;
+		
 		settingsFile.save();
 	}
 	

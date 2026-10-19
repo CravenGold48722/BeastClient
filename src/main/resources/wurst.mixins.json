@@ -6,6 +6,7 @@
   "client": [
     "AbstractClientPlayerMixin",
     "AbstractSignEditScreenMixin",
+    "AirMinerPlayerMixin",
     "AntiBlastClientPacketListenerMixin",
     "AnvilScreenMixin",
     "AtmosphericFogEnvironmentMixin",
@@ -81,6 +82,7 @@
     "PackSelectionScreenMixin",
     "PauseScreenMixin",
     "PearlLauncherGameModeMixin",
+    "PortedPacketListenerHooksMixin",
     "PowderSnowBlockMixin",
     "renderadjust.RenderAdjustAtmosphericFogMixin",
     "renderadjust.RenderAdjustEntityRenderDispatcherMixin",

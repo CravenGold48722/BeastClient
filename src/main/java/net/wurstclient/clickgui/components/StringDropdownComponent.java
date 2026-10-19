@@ -1,0 +1,151 @@
+/*
+ * Copyright (c) 2014-2026 Wurst-Imperium and contributors.
+ *
+ * This source code is subject to the terms of the GNU General Public
+ * License, version 3. If a copy of the GPL was not distributed with this
+ * file, You can obtain one at: https://www.gnu.org/licenses/gpl-3.0.txt
+ */
+package net.wurstclient.clickgui.components;
+
+import org.lwjgl.glfw.GLFW;
+
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.wurstclient.clickgui.ClickGui;
+import net.wurstclient.clickgui.ClickGuiIcons;
+import net.wurstclient.clickgui.StringDropdownPopup;
+import net.wurstclient.clickgui.Component;
+import net.wurstclient.settings.StringDropdownSetting;
+import net.wurstclient.util.BeastColors;
+import net.wurstclient.util.BeastFont;
+import net.wurstclient.util.RenderUtils;
+
+/**
+ * A dropdown for a {@link StringDropdownSetting} (options that only exist at
+ * runtime, e.g. AI model names), drawn like Beast's enum combo boxes.
+ */
+public final class StringDropdownComponent extends Component
+{
+	private static final ClickGui GUI = WURST.getGui();
+	private static final Font TR = BeastFont.get();
+	private static final int ARROW_SIZE = 11;
+	
+	private final StringDropdownSetting setting;
+	private final int popupWidth;
+	
+	private StringDropdownPopup popup;
+	
+	public StringDropdownComponent(StringDropdownSetting setting)
+	{
+		this.setting = setting;
+		popupWidth = Math.max(40, setting.getValues().stream()
+			.mapToInt(s -> TR.width(s)).max().orElse(0));
+		
+		setWidth(getDefaultWidth());
+		setHeight(getDefaultHeight());
+	}
+	
+	@Override
+	public void handleMouseClick(double mouseX, double mouseY, int mouseButton,
+		MouseButtonEvent context)
+	{
+		if(mouseX < getX() + getWidth() - popupWidth - ARROW_SIZE - 4)
+			return;
+		
+		switch(mouseButton)
+		{
+			case GLFW.GLFW_MOUSE_BUTTON_LEFT:
+			handleLeftClick();
+			break;
+			
+			case GLFW.GLFW_MOUSE_BUTTON_RIGHT:
+			handleRightClick();
+			break;
+		}
+	}
+	
+	private void handleLeftClick()
+	{
+		if(isPopupOpen())
+		{
+			popup.close();
+			popup = null;
+			return;
+		}
+		
+		popup = new StringDropdownPopup(this, setting, popupWidth);
+		GUI.addPopup(popup);
+	}
+	
+	private void handleRightClick()
+	{
+		if(isPopupOpen())
+			return;
+		
+		setting.setSelected(setting.getDefaultValue());
+	}
+	
+	private boolean isPopupOpen()
+	{
+		return popup != null && !popup.isClosing();
+	}
+	
+	@Override
+	public void render(GuiGraphicsExtractor context, int mouseX, int mouseY,
+		float partialTicks)
+	{
+		int x1 = getX();
+		int x2 = x1 + getWidth();
+		int x3 = x2 - ARROW_SIZE;
+		int x4 = x3 - popupWidth - 4;
+		int y1 = getY();
+		int y2 = y1 + getHeight();
+		
+		boolean hovering = isHovering(mouseX, mouseY);
+		boolean hText = hovering && mouseX < x4;
+		boolean hBox = hovering && mouseX >= x4;
+		
+		// tooltip
+		if(hText)
+			GUI.setTooltip(setting.getWrappedDescription(200));
+		
+		// box
+		context.fill(x4, y1, x2, y2, getFillColor(hBox));
+		
+		context.guiRenderState.up();
+		
+		// outlines
+		ClickGui.drawOutline(context, x4, y1, x2, y2);
+		RenderUtils.drawBorder2D(context, x3, y1, x3 + 1, y2,
+			BeastColors.ROW_BORDER);
+		
+		// arrow
+		ClickGuiIcons.drawMinimizeArrow(context, x3, y1 + 0.5F, x2, y2 - 0.5F,
+			hBox, !isPopupOpen());
+		
+		// text
+		String name = setting.getName();
+		String value =
+			setting.getSelected() == null ? "" : setting.getSelected();
+		ClickGui.drawAccentText(context, TR, name, x1, y1 + 2);
+		ClickGui.drawAccentText(context, TR, value, x4 + 2, y1 + 2);
+	}
+	
+	private int getFillColor(boolean hovering)
+	{
+		return GUI.getFillColor(hovering);
+	}
+	
+	@Override
+	public int getDefaultWidth()
+	{
+		return TR.width(setting.getName()) + popupWidth + ARROW_SIZE + 6;
+	}
+	
+	@Override
+	public int getDefaultHeight()
+	{
+		return ARROW_SIZE;
+	}
+}

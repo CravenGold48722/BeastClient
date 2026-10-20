@@ -399,6 +399,25 @@ tasks.register("trainNeuralAim", JavaExec) {
 	args((project.findProperty("nnArgs") ?: "train 26,8,10 2000").toString().split(" "))
 }
 
+// The trainer on its own (JDK only, no Minecraft): train.cmd / the nightly
+// task run it as java -cp beast-trainer.jar ...NeuralTrainer forever <folder>.
+tasks.register("neuralTrainerJar", Jar) {
+	dependsOn("classes", "testClasses")
+	archiveFileName = "beast-trainer.jar"
+	destinationDirectory = layout.buildDirectory.dir("neural")
+	from(sourceSets.main.output) {
+		include("net/wurstclient/hacks/aimassist/neural/**")
+		include("assets/wurst/neural/**")
+	}
+	from(sourceSets.test.output) {
+		include("net/wurstclient/hacks/aimassist/neural/**")
+		exclude("**/*Test.class", "**/*Test\$*.class")
+	}
+	manifest {
+		attributes("Main-Class": "net.wurstclient.hacks.aimassist.neural.NeuralTrainer")
+	}
+}
+
 def getGhVersion() {
 	return version.substring(0, version.indexOf("-MC"))
 }

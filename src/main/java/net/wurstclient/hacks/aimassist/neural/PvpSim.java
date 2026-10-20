@@ -61,6 +61,8 @@ public final class PvpSim
 	{
 		double x, y, z;
 		float yaw;
+		/** -sin(yaw), cos(yaw): where it faces on the ground. */
+		double faceX, faceZ;
 		boolean onGround, sprint, sneaking;
 		int hurtTime, lastSwingTick;
 	}
@@ -82,10 +84,49 @@ public final class PvpSim
 		/** Network fighters: only sprint hits and crits, like AimAssist. */
 		boolean onlyGoodHits;
 		
+		/**
+		 * How far this fighter's hits reach. 3.0 is vanilla; the online
+		 * learner gives a copied opponent the reach it was seen hitting from
+		 * (server-side bots and lag reach further).
+		 */
+		double reach = REACH;
+		
 		// the camera
 		double aimRate, aimNoise, aimLead;
 		double lastNeedYaw = Double.NaN;
 		float prevYaw, prevPitch;
+		
+		// the look vector, worked out once per yaw/pitch (trig is most of a
+		// tick's cost otherwise)
+		private float lookYaw = Float.NaN, lookPitch = Float.NaN;
+		double lookX, lookY, lookZ, sinYaw, cosYaw;
+		private double kRate = Double.NaN, k;
+		
+		void updateLook()
+		{
+			if(yaw == lookYaw && pitch == lookPitch)
+				return;
+			lookYaw = yaw;
+			lookPitch = pitch;
+			double ry = Math.toRadians(yaw), rp = Math.toRadians(pitch);
+			sinYaw = Math.sin(ry);
+			cosYaw = Math.cos(ry);
+			double cp = Math.cos(rp);
+			lookX = -sinYaw * cp;
+			lookY = -Math.sin(rp);
+			lookZ = cosYaw * cp;
+		}
+		
+		/** How much of the aim error the camera closes per tick. */
+		double aimK()
+		{
+			if(aimRate != kRate)
+			{
+				kRate = aimRate;
+				k = 1 - Math.exp(-aimRate * 0.05);
+			}
+			return k;
+		}
 		
 		/** How many ticks late this fighter sees the other one. */
 		int viewDelay;
@@ -159,6 +200,9 @@ public final class PvpSim
 			s.y = y;
 			s.z = z;
 			s.yaw = yaw;
+			updateLook();
+			s.faceX = -sinYaw;
+			s.faceZ = cosYaw;
 			s.onGround = onGround;
 			s.sprint = serverSprint;
 			s.sneaking = sneaking;
@@ -271,19 +315,22 @@ public final class PvpSim
 		push();
 		
 		// 4. end of tick
-		for(SimFighter f : new SimFighter[]{a, b})
-		{
-			if(f.hurtTime > 0 && f.lastHurtTick != tick)
-				f.hurtTime--;
-			if(f.invulnerableTime > 0)
-				f.invulnerableTime--;
-			f.attackTicker++;
-			f.serverSprint = f.sprinting;
-		}
+		endTick(a);
+		endTick(b);
 		aim(a, b);
 		aim(b, a);
 		a.record();
 		b.record();
+	}
+	
+	void endTick(SimFighter f)
+	{
+		if(f.hurtTime > 0 && f.lastHurtTick != tick)
+			f.hurtTime--;
+		if(f.invulnerableTime > 0)
+			f.invulnerableTime--;
+		f.attackTicker++;
+		f.serverSprint = f.sprinting;
 	}
 	
 	// ── observation ──────────────────────────────────────────────────────
@@ -350,20 +397,15 @@ public final class PvpSim
 		o.canHit = rayHits(me, s.x, s.y, s.z, opH, 0.03);
 		
 		double cy = s.y + opH / 2 - eyeY;
-		double lookX = -Math.sin(Math.toRadians(me.yaw))
-			* Math.cos(Math.toRadians(me.pitch));
-		double lookY = -Math.sin(Math.toRadians(me.pitch));
-		double lookZ = Math.cos(Math.toRadians(me.yaw))
-			* Math.cos(Math.toRadians(me.pitch));
+		me.updateLook();
+		double lookX = me.lookX, lookY = me.lookY, lookZ = me.lookZ;
 		double tx = s.x - me.x, tz = s.z - me.z;
 		double tl = Math.sqrt(tx * tx + cy * cy + tz * tz);
 		double dot =
 			tl < 1e-6 ? 1 : (lookX * tx + lookY * cy + lookZ * tz) / tl;
 		o.aimError = Math.toDegrees(Math.acos(Math.max(-1, Math.min(1, dot))));
 		
-		double opLookX = -Math.sin(Math.toRadians(s.yaw));
-		double opLookZ = Math.cos(Math.toRadians(s.yaw));
-		o.opFacing = len < 1e-4 ? 1 : -(opLookX * ax + opLookZ * az);
+		o.opFacing = len < 1e-4 ? 1 : -(s.faceX * ax + s.faceZ * az);
 		
 		o.sinceMyHit = Math.min(1000, tick - me.lastHitTick);
 		o.sinceTheirHit = Math.min(1000, tick - me.lastHurtTick - 1);
@@ -387,38 +429,30 @@ public final class PvpSim
 	static boolean rayHits(SimFighter me, double bx, double by, double bz,
 		double h, double inset)
 	{
-		double ex = me.x, ey = me.y + me.eyeHeight(), ez = me.z;
-		double yaw = Math.toRadians(me.yaw), pitch = Math.toRadians(me.pitch);
-		double dx = -Math.sin(yaw) * Math.cos(pitch);
-		double dy = -Math.sin(pitch);
-		double dz = Math.cos(yaw) * Math.cos(pitch);
+		me.updateLook();
 		double w = 0.3 - inset;
-		double[] lo = {bx - w, by + inset, bz - w};
-		double[] hi = {bx + w, by + h - inset, bz + w};
-		double[] o = {ex, ey, ez};
-		double[] d = {dx, dy, dz};
-		double tMin = 0, tMax = REACH;
-		for(int i = 0; i < 3; i++)
+		double[] t = {0, me.reach};
+		return slab(t, me.x, me.lookX, bx - w, bx + w) && slab(t,
+			me.y + me.eyeHeight(), me.lookY, by + inset, by + h - inset)
+			&& slab(t, me.z, me.lookZ, bz - w, bz + w);
+	}
+	
+	/** One axis of the ray-box test; t = {tMin, tMax}, narrowed. */
+	private static boolean slab(double[] t, double o, double d, double lo,
+		double hi)
+	{
+		if(Math.abs(d) < 1e-9)
+			return o >= lo && o <= hi;
+		double t1 = (lo - o) / d, t2 = (hi - o) / d;
+		if(t1 > t2)
 		{
-			if(Math.abs(d[i]) < 1e-9)
-			{
-				if(o[i] < lo[i] || o[i] > hi[i])
-					return false;
-				continue;
-			}
-			double t1 = (lo[i] - o[i]) / d[i], t2 = (hi[i] - o[i]) / d[i];
-			if(t1 > t2)
-			{
-				double t = t1;
-				t1 = t2;
-				t2 = t;
-			}
-			tMin = Math.max(tMin, t1);
-			tMax = Math.min(tMax, t2);
-			if(tMin > tMax)
-				return false;
+			double tmp = t1;
+			t1 = t2;
+			t2 = tmp;
 		}
-		return true;
+		t[0] = Math.max(t[0], t1);
+		t[1] = Math.min(t[1], t2);
+		return t[0] <= t[1];
 	}
 	
 	// ── combat ───────────────────────────────────────────────────────────
@@ -439,7 +473,7 @@ public final class PvpSim
 		// the server checks the real position (a little lenient)
 		double eyeY = f.y + f.eyeHeight();
 		if(boxDistance(f.x, eyeY, f.z, t.x, t.y, t.z,
-			SimFighter.height(t.sneaking)) > REACH + 0.1)
+			SimFighter.height(t.sneaking)) > f.reach + 0.1)
 			return;
 		
 		float damage = 7 * (0.2F + s * s * 0.8F);
@@ -463,8 +497,8 @@ public final class PvpSim
 		if(sprintHit)
 		{
 			f.sprintHits++;
-			queueKnockback(t, 0.5, Math.sin(Math.toRadians(f.yaw)),
-				-Math.cos(Math.toRadians(f.yaw)));
+			f.updateLook();
+			queueKnockback(t, 0.5, f.sinYaw, -f.cosYaw);
 			f.vx *= 0.6;
 			f.vz *= 0.6;
 			f.sprinting = false;
@@ -583,9 +617,9 @@ public final class PvpSim
 				f.vy = 0.42;
 				if(f.sprinting)
 				{
-					double r = Math.toRadians(f.yaw);
-					f.vx += -Math.sin(r) * 0.2;
-					f.vz += Math.cos(r) * 0.2;
+					f.updateLook();
+					f.vx += -f.sinYaw * 0.2;
+					f.vz += f.cosYaw * 0.2;
 				}
 				f.noJumpDelay = 10;
 			}
@@ -598,8 +632,8 @@ public final class PvpSim
 			ground ? f.sprinting ? 0.13 : 0.1 : f.sprinting ? 0.026 : 0.02;
 		if(len > 0)
 		{
-			double r = Math.toRadians(f.yaw);
-			double sin = Math.sin(r), cos = Math.cos(r);
+			f.updateLook();
+			double sin = f.sinYaw, cos = f.cosYaw;
 			f.vx += (ix * cos - iz * sin) * speed;
 			f.vz += (iz * cos + ix * sin) * speed;
 		}
@@ -666,7 +700,8 @@ public final class PvpSim
 		double h = SimFighter.height(s.sneaking);
 		double ty = Math.max(s.y + 0.2, Math.min(s.y + h - 0.2, eyeY));
 		double need = needYaw(f, s.x, s.z);
-		double horiz = Math.hypot(s.x - f.x, s.z - f.z);
+		double hx = s.x - f.x, hz = s.z - f.z;
+		double horiz = Math.sqrt(hx * hx + hz * hz);
 		double needPitch = -Math.toDegrees(Math.atan2(ty - eyeY, horiz));
 		
 		double lead = 0;
@@ -674,7 +709,7 @@ public final class PvpSim
 			lead = wrap(need - f.lastNeedYaw) * f.aimLead;
 		f.lastNeedYaw = need;
 		
-		double k = 1 - Math.exp(-f.aimRate * 0.05);
+		double k = f.aimK();
 		double errYaw = wrap(need + lead - f.yaw);
 		double stepYaw = Math.max(-45, Math.min(45, errYaw * k));
 		f.prevYaw = f.yaw;

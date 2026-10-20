@@ -20,6 +20,7 @@ import java.util.SplittableRandom;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.BooleanSupplier;
 
 import net.wurstclient.hacks.aimassist.neural.PvpSim.Policy;
 import net.wurstclient.hacks.aimassist.neural.PvpSim.SimFighter;
@@ -52,8 +53,36 @@ import net.wurstclient.hacks.aimassist.neural.PvpSim.SimFighter;
 public final class NeuralTrainer
 {
 	static final int MAX_TICKS = 600;
-	static final int THREADS =
-		Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+	static final int THREADS = Integer.getInteger("nn.threads",
+		Math.max(1, Runtime.getRuntime().availableProcessors() - 1));
+	/**
+	 * The share of the time spent working, the rest asleep (train lite:
+	 * 0.15 of one thread); 1 = flat out.
+	 */
+	static final double DUTY = Math.max(0.01,
+		Math.min(1, Double.parseDouble(System.getProperty("nn.duty", "1"))));
+	private static long lastDutyPause = System.nanoTime();
+	
+	/** Sleeps long enough that the work since the last call keeps DUTY. */
+	static void dutyPause()
+	{
+		if(DUTY >= 1)
+			return;
+		long work = System.nanoTime() - lastDutyPause;
+		long sleep = (long)(work * (1 / DUTY - 1)) / 1_000_000;
+		try
+		{
+			Thread.sleep(Math.min(sleep, 120_000));
+		}catch(InterruptedException e)
+		{
+			Thread.currentThread().interrupt();
+		}
+		lastDutyPause = System.nanoTime();
+	}
+	
+	/** Every fighter adapts mid-fight (FightAdapter), like in game. */
+	static final boolean ADAPT =
+		Boolean.parseBoolean(System.getProperty("nn.adapt", "true"));
 	
 	static final ExecutorService POOL =
 		Executors.newFixedThreadPool(THREADS, r -> {
@@ -90,6 +119,37 @@ public final class NeuralTrainer
 				System.out.println("Saved " + out);
 			}
 			case "probe" -> probe();
+			case "bench" -> bench();
+			case "forever" -> ContinuousTrainer.run(args);
+			case "selfplay" ->
+			{
+				// from random weights, against nothing but itself and its
+				// earlier versions: no teacher, no scripted opponents
+				int[] sizes = parseSizes(args.length > 1 ? args[1] : "26,8,10");
+				int gens = args.length > 2 ? Integer.parseInt(args[2]) : 2000;
+				Path out = Path.of(args.length > 3 ? args[3]
+					: "src/main/resources/assets/wurst/neural/aimassist_pvp.bin");
+				PAIRS = Integer.getInteger("nn.pairs", 128);
+				GAMES_PER_EVAL = Integer.getInteger("nn.games", 24);
+				SIGMA = Float.parseFloat(System.getProperty("nn.sigma", "0.1"));
+				LEARNING_RATE =
+					Float.parseFloat(System.getProperty("nn.lr", "0.01"));
+				BENCH_EVERY = Integer.getInteger("nn.bench", 100);
+				BENCH_GAMES = 400;
+				PRIOR = 0;
+				SCRIPTED = false;
+				String ref = System.getProperty("nn.reference");
+				if(ref != null)
+					try(var is = Files.newInputStream(Path.of(ref)))
+					{
+						REFERENCE = NeuralNet.read(is).getParams();
+					}
+				Result r =
+					evolve(sizes, xavier(sizes, new Random(42)), gens, false);
+				System.out.println("Best: " + fmt(r.winRates));
+				save(r.params, sizes, out);
+				System.out.println("Saved " + out);
+			}
 			case "resume" ->
 			{
 				// more self-play from a saved net (it becomes the league's
@@ -107,9 +167,14 @@ public final class NeuralTrainer
 				SIGMA = Float.parseFloat(System.getProperty("nn.sigma", "0.1"));
 				LEARNING_RATE =
 					Float.parseFloat(System.getProperty("nn.lr", "0.01"));
-				BENCH_EVERY = 100;
+				BENCH_EVERY = Integer.getInteger("nn.bench", 100);
 				BENCH_GAMES = 400;
 				PRIOR = 0;
+				// -Dnn.scripted=false: pure self-play (the scripted fighters
+				// only as a yardstick, the start net as "OldNet")
+				SCRIPTED = !"false".equals(System.getProperty("nn.scripted"));
+				if(!SCRIPTED)
+					REFERENCE = start.getParams().clone();
 				Result r = evolve(start.getSizes(), start.getParams().clone(),
 					gens, false);
 				System.out.println("Best: " + fmt(r.winRates));
@@ -119,6 +184,38 @@ public final class NeuralTrainer
 			default -> throw new IllegalArgumentException(mode);
 		}
 		POOL.shutdownNow();
+	}
+	
+	/** Simulator speed: the shipped net against itself, one core, then all. */
+	static void bench() throws Exception
+	{
+		NeuralPolicy shipped = NeuralPolicy.get();
+		int[] sizes = shipped.getSizes();
+		float[] params = shipped.getParams();
+		for(int round = 0; round < 3; round++)
+		{
+			long ticks = 0, t0 = System.nanoTime();
+			int fights = 4000;
+			for(int g = 0; g < fights; g++)
+			{
+				PvpSim sim =
+					new PvpSim(g, new NetPolicy(new NeuralNet(sizes, params)),
+						new NetPolicy(new NeuralNet(sizes, params)), MAX_TICKS);
+				sim.run();
+				ticks += sim.tick;
+			}
+			double secs = (System.nanoTime() - t0) / 1e9;
+			System.out.printf(
+				"1 core: %,.0f ticks/s, %,.0f fights/s (%.0f ns a tick)%n",
+				ticks / secs, fights / secs, secs * 1e9 / ticks);
+		}
+		Spec me = netSpec(sizes, params);
+		long t0 = System.nanoTime();
+		int games = 40_000;
+		winRate(me, me, games, 1);
+		double secs = (System.nanoTime() - t0) / 1e9;
+		System.out.printf("%d threads: %,.0f fights/s%n", THREADS,
+			games / secs);
 	}
 	
 	/** The scripted players against each other: sanity and speed. */
@@ -376,9 +473,11 @@ public final class NeuralTrainer
 			for(Future<?> f : jobs)
 				f.get();
 			
-			Backprop.train(sizes, params, data, 6, 0.003F, new Random(round));
+			Backprop.train(sizes, params, data.x, data.y, data.size, 6, 0.003F,
+				new Random(round));
 			System.out.printf("DAgger round %d (beta %.2f): %d samples, %s%n",
-				round, beta, data.size, Backprop.accuracy(sizes, params, data));
+				round, beta, data.size,
+				Backprop.accuracy(sizes, params, data.x, data.y, data.size));
 		}
 		return params;
 	}
@@ -410,6 +509,19 @@ public final class NeuralTrainer
 	static int BENCH_GAMES = 200;
 	static final float WEIGHT_DECAY = 0.001F;
 	static final int HALL_SIZE = 30;
+	/**
+	 * Whether the scripted fighters are in the league. Off in self-play:
+	 * then they're only a yardstick in the benchmark, never trained against.
+	 */
+	static boolean SCRIPTED = true;
+	/** Self-play: a fixed net to measure progress against (the old one). */
+	static float[] REFERENCE;
+	/** Where a run's noise and opponents come from (new each round). */
+	static long SEED = 1234;
+	/** Checked every generation: true ends the run early. */
+	static volatile BooleanSupplier STOP = () -> false;
+	/** Generations the last {@link #evolve} ran (fewer if stopped). */
+	static int GENS_RUN;
 	
 	/** An opponent: a scripted player (index) or a network (params). */
 	record Spec(int scripted, int[] sizes, float[] params)
@@ -434,15 +546,29 @@ public final class NeuralTrainer
 	static Result evolve(int[] sizes, float[] init, int gens, boolean verbose)
 		throws Exception
 	{
+		return evolve(sizes, init, gens, verbose, null);
+	}
+	
+	/**
+	 * @param hall
+	 *            earlier versions of itself to play against, kept and
+	 *            updated across calls (null: a new one, starting with init)
+	 */
+	static Result evolve(int[] sizes, float[] init, int gens, boolean verbose,
+		List<float[]> hall) throws Exception
+	{
 		int n = init.length;
-		int k = ScriptedPolicies.ALL.length;
+		int k = SCRIPTED ? ScriptedPolicies.ALL.length : 0;
 		float[] theta = init.clone();
 		float[] m = new float[n], v = new float[n];
 		
 		// the league: scripted players first, then earlier versions of itself
-		// (the imitation net stays in for good)
-		List<float[]> hall = new ArrayList<>();
-		hall.add(init.clone());
+		// (the first one stays in for good)
+		if(hall == null)
+		{
+			hall = new ArrayList<>();
+			hall.add(init.clone());
+		}
 		double[] wins = new double[k + HALL_SIZE];
 		double[] games = new double[k + HALL_SIZE];
 		
@@ -451,10 +577,19 @@ public final class NeuralTrainer
 		double[] bestRates = null;
 		long fights = 0;
 		long start = System.nanoTime();
-		Random rnd = new Random(1234);
+		Random rnd = new Random(SEED);
+		GENS_RUN = 0;
 		
 		for(int gen = 1; gen <= gens; gen++)
 		{
+			dutyPause();
+			if(STOP.getAsBoolean())
+			{
+				if(bestScore < 0)
+					best = theta.clone();
+				break;
+			}
+			GENS_RUN++;
 			long genSeed = rnd.nextLong();
 			double prior = PRIOR * Math.max(0, 1 - gen / (0.25 * gens));
 			
@@ -580,9 +715,12 @@ public final class NeuralTrainer
 			
 			if(gen % BENCH_EVERY == 0 || gen == gens)
 			{
-				double[] rates =
-					benchmarkRates(sizes, theta, init, BENCH_GAMES, gen);
-				double score = mean(rates);
+				double[] rates = benchmarkRates(sizes, theta,
+					SCRIPTED ? init : REFERENCE, BENCH_GAMES, gen);
+				// self-play picks its best by what it was trained against:
+				// the old net and its own recent versions
+				double score = SCRIPTED ? mean(rates)
+					: selfPlayScore(sizes, theta, hall, rates, gen);
 				if(score > bestScore)
 				{
 					bestScore = score;
@@ -598,6 +736,24 @@ public final class NeuralTrainer
 				System.out.printf("gen %4d  fitness %+.3f%n", gen, mean(fit));
 		}
 		return new Result(sizes, best, init, bestScore, bestRates);
+	}
+	
+	static double selfPlayScore(int[] sizes, float[] theta, List<float[]> hall,
+		double[] rates, int gen) throws Exception
+	{
+		Spec me = netSpec(sizes, theta);
+		double sum = 0;
+		int count = 0;
+		// the last 6 hall entries (the first is the random start)
+		for(int i = Math.max(1, hall.size() - 6); i < hall.size(); i++)
+		{
+			sum += winRate(me, netSpec(sizes, hall.get(i)), 100, gen * 7L + i);
+			count++;
+		}
+		double vsHall = count == 0 ? 0.5 : sum / count;
+		if(REFERENCE == null)
+			return vsHall;
+		return (vsHall + rates[rates.length - 1]) / 2;
 	}
 	
 	static float[] noise(long genSeed, int pair, int n)
@@ -682,25 +838,30 @@ public final class NeuralTrainer
 		}
 	}
 	
+	/**
+	 * A network fighter, adapting during the fight like in game
+	 * ({@link FightAdapter}; {@code -Dnn.adapt=false} turns that off).
+	 */
 	static final class NetPolicy implements Policy
 	{
-		final NeuralNet net;
-		final float[] in = new float[NeuralObservation.SIZE];
+		final OnlineLearner.NetPolicy policy;
 		
 		NetPolicy(NeuralNet net)
 		{
-			this.net = net;
+			policy = new OnlineLearner.NetPolicy(net.getSizes(),
+				net.getParams(), ADAPT);
 		}
 		
 		@Override
 		public void reset(SplittableRandom random)
-		{}
+		{
+			policy.reset(random);
+		}
 		
 		@Override
 		public void act(SimFighter me, NeuralObservation o, NeuralAction out)
 		{
-			o.encode(in);
-			out.decode(net.forward(in));
+			policy.act(me, o, out);
 		}
 	}
 	
@@ -751,7 +912,7 @@ public final class NeuralTrainer
 		for(int i = 0; i < rates.length; i++)
 		{
 			String name = i < ScriptedPolicies.NAMES.length
-				? ScriptedPolicies.NAMES[i] : "Imitation";
+				? ScriptedPolicies.NAMES[i] : SCRIPTED ? "Imitation" : "OldNet";
 			sb.append(String.format("%s %.0f%% ", name, rates[i] * 100));
 		}
 		return sb.toString().trim();

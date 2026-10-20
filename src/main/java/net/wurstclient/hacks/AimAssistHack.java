@@ -62,7 +62,9 @@ import net.wurstclient.Category;
 import net.wurstclient.hacks.aimassist.OpponentModel;
 import net.wurstclient.hacks.aimassist.neural.NeuralAction;
 import net.wurstclient.hacks.aimassist.neural.NeuralObservation;
+import net.wurstclient.hacks.aimassist.neural.NeuralNet;
 import net.wurstclient.hacks.aimassist.neural.NeuralPolicy;
+import net.wurstclient.hacks.aimassist.neural.OnlineLearner;
 import net.wurstclient.events.MouseUpdateListener;
 import net.wurstclient.events.MouseUpdateListener.MouseUpdateEvent;
 import net.wurstclient.events.PacketInputListener;
@@ -291,18 +293,45 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ " W/S, A/D, jump, sprint, sneak and when to hit - with no"
 			+ " reaction delay (a human needs 4-5 ticks) - from what it sees:"
 			+ " both reaches, both players' movement, both attack charges,"
-			+ " hurt times, sprint states and health.\n\n"
-			+ "Trained in a sword PvP simulator with vanilla's rules, millions"
-			+ " of fights at ~50,000x real time: first copying Beast's own"
-			+ " combo tactics (sprint resets, W/S-taps, jump resets, spacing"
-			+ " out of their reach), then playing against itself, earlier"
-			+ " versions of itself and scripted fighters (combo player, crit"
-			+ " trader, aggressor, spam clicker, counter-puncher), rewarded"
-			+ " for winning, sprint hits, crits and combos.\n\n"
+			+ " hurt times, sprint states and health. No preset styles:"
+			+ " §lCombat style§r isn't used.\n\n"
+			+ "Trained by playing against itself and earlier versions of"
+			+ " itself in a sword PvP simulator with vanilla's rules, millions"
+			+ " of fights at ~50,000x real time, rewarded for winning, sprint"
+			+ " hits, crits and combos. With §lLearn in game§r it keeps"
+			+ " learning while you play (see there).\n\n"
 			+ "Hits are sprint hits or crits the server can verify, like"
 			+ " §lAuto combo§r's. The aim stays AimAssist's humanized aim."
 			+ " About a thousand multiply-adds a tick: no measurable CPU.",
 		false);
+	
+	private final CheckboxSetting neuralLearn = new CheckboxSetting(
+		"Learn in game",
+		"With §lNeural network§r: adapts to every opponent while you fight."
+			+ " Every exchange of hits trains it on the spot: it tries its"
+			+ " key tendencies (walking in, strafing, jumping, sprinting,"
+			+ " sneaking, swinging) a little one way and the other and keeps"
+			+ " whichever landed more hits than it took.\n\n"
+			+ "It also watches how they play (what they see and which keys that"
+			+ " makes them press - read from their movement, jumps, sprint,"
+			+ " sneak and swings) and trains a copy of them; a background"
+			+ " thread then plays thousands of simulated fights against that"
+			+ " copy, with the reach they were seen hitting from, and tunes"
+			+ " the network for that player. The tuned version only plays once"
+			+ " it beats the one before on the same fights, and keeps playing"
+			+ " only while it does better in the real fight (hits landed vs"
+			+ " taken). During and after fights the general network trains"
+			+ " against every opponent copied so far and is kept only if it"
+			+ " still beats its previous version.\n\n"
+			+ "Saved per player in §l.minecraft/wurst/neural/§r, so a rematch"
+			+ " starts adapted. Off: the shipped network, nothing learned.",
+		true);
+	
+	private final SliderSetting neuralLearnCpu =
+		new SliderSetting("Learning CPU",
+			"With §lLearn in game§r: how much of one CPU core the learning"
+				+ " thread may use (lowest priority, only around fights).",
+			0.35, 0.05, 1, 0.05, ValueDisplay.PERCENTAGE);
 	
 	private final CheckboxSetting skipFalling = new CheckboxSetting(
 		"Skip falling targets",
@@ -857,6 +886,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(autoCombo);
 		addSetting(combatStyle);
 		addSetting(neuralNetwork);
+		addSetting(neuralLearn);
+		addSetting(neuralLearnCpu);
 		addSetting(skipFalling);
 		addSetting(jumpReset);
 		addSetting(flyOuts);
@@ -968,7 +999,13 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		resetShieldSwaps();
 		resetDodge();
 		stopMusic();
-		// what was learned stays in opponentModels for a rematch
+		// what was learned stays in opponentModels for a rematch (and in
+		// the online learner's profiles)
+		if(learner != null)
+			learner.setEnabled(false);
+		neuralProfile = null;
+		neuralProfileTarget = null;
+		lastRecordTick = NEVER;
 		model = null;
 		modelTarget = null;
 		lastPlayedStyle = null;
@@ -1080,6 +1117,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		trackTargetMotion();
 		trackSprint();
 		reactToTargetHit();
+		recordOpponent();
 		updateCrouchDodge();
 		
 		// Apply the aim. Server-side keeps the camera still and only rewrites
@@ -2086,6 +2124,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private void noteHitLanded(boolean crit, boolean race)
 	{
 		rollHitSelect();
+		if(isLearning() && neuralProfile != null)
+			neuralProfile.noteResult(crit ? 1.5 : 1);
 		if(model == null)
 			return;
 		model.ourHitLanded(crit, playedStyle());
@@ -2099,6 +2139,11 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	/** The target hit us. */
 	private void noteHitTaken()
 	{
+		if(isLearning() && neuralProfile != null)
+		{
+			neuralProfile.noteResult(-1);
+			neuralProfile.noteTheirReach(theirReachToUs());
+		}
 		if(model == null)
 			return;
 		// our hit was charged and could reach too: a race it won
@@ -3186,7 +3231,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	{
 		double dist = Math.sqrt(EntityUtils.distanceToHitboxSq(target));
 		fillNeuralObservation(dist);
-		NeuralAction act = NeuralPolicy.get().decide(neuralObs);
+		NeuralAction act = decideNeural();
 		
 		if(act.forward > 0)
 		{
@@ -3227,6 +3272,203 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			lastHitTick = tickCount;
 			comboHitCount++;
 		}
+	}
+	
+	/**
+	 * This tick's keys: while learning, against a player the network for
+	 * them plus what it has learned during the fights with them (adapting
+	 * after every exchange), against anything else the general one; the
+	 * shipped one otherwise.
+	 */
+	private NeuralAction decideNeural()
+	{
+		float[] params = null;
+		if(isLearning() && getLearner() != null)
+		{
+			if(neuralProfile != null)
+			{
+				neuralObs.encode(neuralInput);
+				neuralAction.decode(learner.decide(neuralProfile, neuralInput));
+				return neuralAction;
+			}
+			params = learner.generalParams();
+		}
+		if(params == null)
+			return NeuralPolicy.get().decide(neuralObs);
+		
+		if(params != neuralParams)
+		{
+			neuralParams = params;
+			neuralNet = new NeuralNet(learner.getSizes(), params);
+		}
+		neuralObs.encode(neuralInput);
+		neuralAction.decode(neuralNet.forward(neuralInput));
+		return neuralAction;
+	}
+	
+	// ── Learning in game (hacks/aimassist/neural/OnlineLearner)
+	//
+	// Every tick of a fight with a player is written down from that player's
+	// side (what it saw, which keys it pressed); a background thread copies
+	// the player into a network, plays simulated fights against the copy and
+	// tunes a net for that player, which takes over once it beats the old
+	// one - and only stays while real hits say it does better.
+	
+	private OnlineLearner learner;
+	private OnlineLearner.Profile neuralProfile;
+	private Entity neuralProfileTarget;
+	private float[] neuralParams;
+	private NeuralNet neuralNet;
+	private final float[] neuralInput = new float[NeuralObservation.SIZE];
+	private final NeuralAction neuralAction = new NeuralAction();
+	private final NeuralObservation opponentObs = new NeuralObservation();
+	private final Vec3[] opponentPositions = new Vec3[3];
+	private int opponentPosCount;
+	private int lastRecordTick = NEVER;
+	
+	private boolean isLearning()
+	{
+		return isNeural() && neuralLearn.isChecked();
+	}
+	
+	private OnlineLearner getLearner()
+	{
+		if(learner == null)
+			learner =
+				OnlineLearner.get(WURST.getWurstFolder().resolve("neural"));
+		return learner;
+	}
+	
+	@Override
+	public String getStatusText()
+	{
+		if(!isLearning() || neuralProfile == null)
+			return null;
+		int tuned = neuralProfile.playingTunedVersion();
+		return tuned > 0 ? "tuned v" + tuned : "learning";
+	}
+	
+	/**
+	 * Writes down what the target saw this tick and which keys it pressed,
+	 * for the learner's copy of it. Players only (mobs don't play like
+	 * anyone), and only up close - a fight, not someone walking past.
+	 */
+	private void recordOpponent()
+	{
+		if(learner != null)
+			learner.setEnabled(isLearning());
+		if(target == null || !isLearning() || getLearner() == null)
+			return;
+		learner.setDuty(neuralLearnCpu.getValue());
+		
+		if(target != neuralProfileTarget)
+		{
+			neuralProfileTarget = target;
+			neuralProfile = target instanceof Player
+				? learner.profile(target.getUUID()) : null;
+			lastRecordTick = NEVER;
+		}
+		if(!(target instanceof Player opponent) || neuralProfile == null
+			|| EntityUtils.distanceToHitboxSq(target) > 8 * 8)
+		{
+			lastRecordTick = NEVER;
+			return;
+		}
+		
+		// a gap (out of range, another target) starts the recording over
+		if(lastRecordTick != tickCount - 1)
+		{
+			neuralProfile.recorder.reset();
+			opponentPosCount = 0;
+		}
+		lastRecordTick = tickCount;
+		
+		// players are sent every second tick: their movement over two
+		Vec3 pos = target.position();
+		opponentPositions[opponentPosCount++ % 3] = pos;
+		if(opponentPosCount < 3)
+			return;
+		Vec3 old = opponentPositions[(opponentPosCount - 3) % 3];
+		Vec3 motion = pos.subtract(old).scale(0.5);
+		if(motion.horizontalDistanceSqr() > 4)
+		{
+			// a teleport isn't movement
+			neuralProfile.recorder.reset();
+			opponentPosCount = 0;
+			return;
+		}
+		
+		fillOpponentObservation(neuralProfile.getReach());
+		neuralProfile.recorder.record(opponentObs, motion.x, motion.y, motion.z,
+			target.getYRot(), target.onGround(), opponent.hurtTime,
+			target.isSprinting(), target.isCrouching(),
+			targetSwingTick == tickCount, neuralProfile);
+		learner.noteActivity();
+	}
+	
+	/**
+	 * What the target sees - our observation from its side, the way
+	 * PvpSim.observe gives it to the other fighter.
+	 */
+	private void fillOpponentObservation(double reach)
+	{
+		LocalPlayer player = MC.player;
+		LivingEntity them = (LivingEntity)target;
+		NeuralObservation o = opponentObs;
+		o.dist = theirReachToUs();
+		o.theirReach = Math.sqrt(EntityUtils.distanceToHitboxSq(target));
+		o.dy = player.getY() - target.getY();
+		
+		// along the line from them to us
+		double ax = player.getX() - target.getX();
+		double az = player.getZ() - target.getZ();
+		double len = Math.sqrt(ax * ax + az * az);
+		if(len < 1e-4)
+		{
+			ax = 1;
+			az = 0;
+		}else
+		{
+			ax /= len;
+			az /= len;
+		}
+		double sx = -az, sz = ax;
+		Vec3 v = player.getDeltaMovement();
+		o.myAlong = targetMotion.x * ax + targetMotion.z * az;
+		o.mySide = targetMotion.x * sx + targetMotion.z * sz;
+		o.myVy = targetMotion.y;
+		o.opAlong = -(v.x * ax + v.z * az);
+		o.opSide = v.x * sx + v.z * sz;
+		o.opVy = v.y;
+		
+		o.myGround = target.onGround();
+		o.opGround = player.onGround();
+		o.myChargeTicks = targetTicksUntilCharged();
+		o.opChargeTicks = ticksUntilCharged();
+		o.myHurt = them.hurtTime;
+		o.opHurt = player.hurtTime;
+		o.mySprint = target.isSprinting();
+		o.opSprint = player.wasSprinting;
+		o.myHealth = them.getHealth() / Math.max(1, them.getMaxHealth());
+		o.opHealth = player.getHealth() / player.getMaxHealth();
+		o.critReady =
+			!target.onGround() && targetMotion.y < 0 && !target.isSprinting();
+		
+		Vec3 eyes = target.getEyePosition();
+		Vec3 look = target.getViewVector(1);
+		AABB box = player.getBoundingBox();
+		o.canHit = o.dist <= reach && (box.contains(eyes)
+			|| box.clip(eyes, eyes.add(look.scale(reach))).isPresent());
+		Vec3 toUs = box.getCenter().subtract(eyes).normalize();
+		o.aimError =
+			Math.toDegrees(Math.acos(Mth.clamp(look.dot(toUs), -1, 1)));
+		
+		double yaw = Math.toRadians(player.getYRot());
+		o.opFacing =
+			len < 1e-4 ? 1 : -(-Math.sin(yaw) * ax + Math.cos(yaw) * az);
+		o.sinceMyHit = Math.min(1000, tickCount - lastTakenTick);
+		o.sinceTheirHit = Math.min(1000, tickCount - lastHitTick);
+		o.sneaking = target.isCrouching();
 	}
 	
 	/**

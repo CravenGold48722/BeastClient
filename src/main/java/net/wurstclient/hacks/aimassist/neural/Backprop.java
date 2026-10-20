@@ -7,16 +7,17 @@
  */
 package net.wurstclient.hacks.aimassist.neural;
 
+import java.util.Arrays;
 import java.util.Random;
 
-import net.wurstclient.hacks.aimassist.neural.NeuralTrainer.Dataset;
-
 /**
- * Supervised training for the imitation step: mini-batch Adam on
- * cross-entropy - softmax for the W/S and A/D choices, sigmoid for the
- * four keys. Plain loops; the net is small enough that this is fast.
+ * Supervised training: mini-batch Adam on cross-entropy - softmax for the
+ * W/S and A/D choices, sigmoid for the four keys. Plain loops; the net is
+ * small enough that this is fast. The online learner copies opponents with
+ * it in game; a label of -1 means "not known" and that output isn't trained
+ * on that sample.
  */
-final class Backprop
+public final class Backprop
 {
 	private Backprop()
 	{}
@@ -27,8 +28,12 @@ final class Backprop
 		W_SPRINT = 1, W_SNEAK = 0.5F, W_ATTACK = 1;
 	private static final float POS_JUMP = 3, POS_ATTACK = 4;
 	
-	static void train(int[] sizes, float[] params, Dataset data, int epochs,
-		float lr, Random random)
+	/**
+	 * Labels: W/S index (0 = W, 1 = neither, 2 = S), A/D index (0 = A, 1 =
+	 * neither, 2 = D), jump, sprint, sneak, attack (0/1); -1 = unknown.
+	 */
+	public static void train(int[] sizes, float[] params, float[][] x,
+		byte[][] y, int size, int epochs, float lr, Random random)
 	{
 		int n = params.length;
 		float[] m = new float[n], v = new float[n], grad = new float[n];
@@ -43,11 +48,12 @@ final class Backprop
 		}
 		int[] offsets = offsets(sizes);
 		
-		int size = data.size;
 		int[] order = new int[size];
 		for(int i = 0; i < size; i++)
 			order[i] = i;
-		int batch = 256;
+		int batch = Math.min(256, size);
+		if(batch == 0)
+			return;
 		int step = 0;
 		for(int epoch = 0; epoch < epochs; epoch++)
 		{
@@ -60,12 +66,12 @@ final class Backprop
 			}
 			for(int b = 0; b + batch <= size; b += batch)
 			{
-				java.util.Arrays.fill(grad, 0);
+				Arrays.fill(grad, 0);
 				for(int s = b; s < b + batch; s++)
 				{
 					int k = order[s];
-					forward(sizes, params, offsets, data.x[k], z, a);
-					outputDelta(a[layers - 1], data.y[k], delta[layers - 1]);
+					forward(sizes, params, offsets, x[k], z, a);
+					outputDelta(a[layers - 1], y[k], delta[layers - 1]);
 					backward(sizes, params, offsets, z, a, delta, grad);
 				}
 				step++;
@@ -130,6 +136,11 @@ final class Backprop
 	private static void softmaxDelta(float[] out, int from, int label, float w,
 		float[] d)
 	{
+		if(label < 0)
+		{
+			d[from] = d[from + 1] = d[from + 2] = 0;
+			return;
+		}
 		float max = Math.max(out[from], Math.max(out[from + 1], out[from + 2]));
 		float e0 = (float)Math.exp(out[from] - max);
 		float e1 = (float)Math.exp(out[from + 1] - max);
@@ -143,6 +154,11 @@ final class Backprop
 	private static void sigmoidDelta(float[] out, int i, int label, float w,
 		float posWeight, float[] d)
 	{
+		if(label < 0)
+		{
+			d[i] = 0;
+			return;
+		}
 		float p = 1 / (1 + (float)Math.exp(-out[i]));
 		// weighted binary cross-entropy: positives count posWeight times
 		d[i] = w * (label == 1 ? posWeight * (p - 1) : p);
@@ -176,31 +192,29 @@ final class Backprop
 		}
 	}
 	
-	/** How often each head picks what the teacher did. */
-	static String accuracy(int[] sizes, float[] params, Dataset data)
+	/** How often each head picks the label (known labels only). */
+	public static String accuracy(int[] sizes, float[] params, float[][] x,
+		byte[][] y, int size)
 	{
 		NeuralNet net = new NeuralNet(sizes, params);
 		NeuralAction act = new NeuralAction();
-		int[] right = new int[6];
+		int[] right = new int[6], known = new int[6];
 		int[] attackPos = new int[2];
-		int n = Math.min(data.size, 50_000);
+		int n = Math.min(size, 50_000);
 		for(int k = 0; k < n; k++)
 		{
-			act.decode(net.forward(data.x[k]));
-			byte[] y = data.y[k];
-			if(1 - act.forward == y[0])
-				right[0]++;
-			if(1 - act.strafe == y[1])
-				right[1]++;
-			if((act.jump ? 1 : 0) == y[2])
-				right[2]++;
-			if((act.sprint ? 1 : 0) == y[3])
-				right[3]++;
-			if((act.sneak ? 1 : 0) == y[4])
-				right[4]++;
-			if((act.attack ? 1 : 0) == y[5])
-				right[5]++;
-			if(y[5] == 1)
+			act.decode(net.forward(x[k]));
+			byte[] yk = y[k];
+			int[] got = {1 - act.forward, 1 - act.strafe, act.jump ? 1 : 0,
+				act.sprint ? 1 : 0, act.sneak ? 1 : 0, act.attack ? 1 : 0};
+			for(int h = 0; h < 6; h++)
+				if(yk[h] >= 0)
+				{
+					known[h]++;
+					if(got[h] == yk[h])
+						right[h]++;
+				}
+			if(yk[5] == 1)
 			{
 				attackPos[1]++;
 				if(act.attack)
@@ -208,9 +222,15 @@ final class Backprop
 			}
 		}
 		return String.format(
-			"W/S %.0f%%, jump %.0f%%, sprint %.0f%%, sneak %.0f%%, attack %.0f%% (hits %d/%d)",
-			100.0 * right[0] / n, 100.0 * right[2] / n, 100.0 * right[3] / n,
-			100.0 * right[4] / n, 100.0 * right[5] / n, attackPos[0],
+			"W/S %.0f%%, A/D %.0f%%, jump %.0f%%, sprint %.0f%%, sneak %.0f%%, attack %.0f%% (hits %d/%d)",
+			pct(right[0], known[0]), pct(right[1], known[1]),
+			pct(right[2], known[2]), pct(right[3], known[3]),
+			pct(right[4], known[4]), pct(right[5], known[5]), attackPos[0],
 			attackPos[1]);
+	}
+	
+	private static double pct(int a, int b)
+	{
+		return b == 0 ? 0 : 100.0 * a / b;
 	}
 }

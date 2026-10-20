@@ -63,4 +63,10 @@ public final class NeuralPolicy
 	{
 		return net.getSizes();
 	}
+	
+	/** A copy of the shipped weights (the online learner starts there). */
+	public float[] getParams()
+	{
+		return net.getParams().clone();
+	}
 }

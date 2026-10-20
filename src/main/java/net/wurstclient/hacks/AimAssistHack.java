@@ -60,6 +60,9 @@ import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
 import net.wurstclient.hacks.aimassist.OpponentModel;
+import net.wurstclient.hacks.aimassist.neural.NeuralAction;
+import net.wurstclient.hacks.aimassist.neural.NeuralObservation;
+import net.wurstclient.hacks.aimassist.neural.NeuralPolicy;
 import net.wurstclient.events.MouseUpdateListener;
 import net.wurstclient.events.MouseUpdateListener.MouseUpdateEvent;
 import net.wurstclient.events.PacketInputListener;
@@ -280,6 +283,26 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ " crit) as the hit charges, hits from ~3 blocks, then backs off"
 			+ " with a sneak. Never walks into the target's reach to hit.",
 		CombatStyle.values(), CombatStyle.ADAPTIVE);
+	
+	private final CheckboxSetting neuralNetwork = new CheckboxSetting(
+		"Neural network",
+		"With §lAuto attack§r: a neural network trained for Beast fights"
+			+ " instead of §lAuto combo§r's rules. Every tick it decides"
+			+ " W/S, A/D, jump, sprint, sneak and when to hit - with no"
+			+ " reaction delay (a human needs 4-5 ticks) - from what it sees:"
+			+ " both reaches, both players' movement, both attack charges,"
+			+ " hurt times, sprint states and health.\n\n"
+			+ "Trained in a sword PvP simulator with vanilla's rules, millions"
+			+ " of fights at ~50,000x real time: first copying Beast's own"
+			+ " combo tactics (sprint resets, W/S-taps, jump resets, spacing"
+			+ " out of their reach), then playing against itself, earlier"
+			+ " versions of itself and scripted fighters (combo player, crit"
+			+ " trader, aggressor, spam clicker, counter-puncher), rewarded"
+			+ " for winning, sprint hits, crits and combos.\n\n"
+			+ "Hits are sprint hits or crits the server can verify, like"
+			+ " §lAuto combo§r's. The aim stays AimAssist's humanized aim."
+			+ " About a thousand multiply-adds a tick: no measurable CPU.",
+		false);
 	
 	private final CheckboxSetting skipFalling = new CheckboxSetting(
 		"Skip falling targets",
@@ -833,6 +856,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(autoAttack);
 		addSetting(autoCombo);
 		addSetting(combatStyle);
+		addSetting(neuralNetwork);
 		addSetting(skipFalling);
 		addSetting(jumpReset);
 		addSetting(flyOuts);
@@ -913,6 +937,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		shieldBreakStage = 0;
 		shieldBreakPrevSlot = -1;
 		lastCrouchDodgeTick = NEVER;
+		lastTakenTick = NEVER;
+		neuralStrafing = false;
 		comboStrafing = false;
 		shieldBlocking = false;
 		shieldBlockTicks = 0;
@@ -1077,8 +1103,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			aim.invalidate();
 		}else
 		{
+			// (the network moves you relative to the camera too)
 			boolean forceClient =
-				autoAttack.isChecked() && autoCombo.isChecked();
+				autoAttack.isChecked() && (autoCombo.isChecked() || isNeural());
 			
 			// Turning the camera happens every frame in onRender, like a
 			// mouse. Only the silent and packet modes, which have nothing to
@@ -1130,7 +1157,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// falling one gets falling knockback - into the ground - so it lands
 		// and rebuilds its momentum first; now a falling target is waited
 		// for, see isGoodMomentToHit().)
-		if(autoCombo.isChecked())
+		if(isNeural())
+			updateNeural();
+		else if(autoCombo.isChecked())
 			updateAutoCombo();
 		else if(isHitCharged() && EntityUtils.distanceToHitboxSq(target) <= 9
 			&& (isDeflecting() || isGoodMomentToHit()))
@@ -2469,7 +2498,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private void updateCrouchDodge()
 	{
 		if(!crouchDodge.isChecked() || !autoAttack.isChecked()
-			|| !autoCombo.isChecked())
+			|| !autoCombo.isChecked() || isNeural())
 			return;
 		if(tickCount - lastCrouchDodgeTick <= 15 || !isCritDiveIncoming())
 			return;
@@ -3003,7 +3032,12 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// it just attacked, so its cooldown starts over (its swing packet
 		// may come a tick later)
 		targetSwingTick = tickCount;
+		lastTakenTick = tickCount;
 		noteHitTaken();
+		
+		// the network sees the hit (hurt time) and answers it itself
+		if(isNeural())
+			return;
 		
 		boolean combo = autoAttack.isChecked() && autoCombo.isChecked();
 		
@@ -3120,6 +3154,137 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		}
 		releaseForward();
 		releaseBackward();
+		// the network's A/D (a dodge in progress keeps its own key)
+		if(neuralStrafing)
+		{
+			releaseDodgeKeys();
+			neuralStrafing = false;
+		}
+	}
+	
+	// ── Neural network
+	// ─────────────────────────────────────────────────────────
+	//
+	// A small network (hacks/aimassist/neural) trained in a vanilla-rules
+	// sword PvP simulator (src/test: PvpSim, NeuralTrainer) decides the
+	// movement keys and the hits each tick. It plays through the same keys
+	// and the same hit checks as the combo; the camera stays HumanAim's.
+	
+	private final NeuralObservation neuralObs = new NeuralObservation();
+	private boolean neuralStrafing;
+	
+	/** When the target last hit us (tickCount). */
+	private int lastTakenTick = NEVER;
+	
+	private boolean isNeural()
+	{
+		return neuralNetwork.isChecked() && autoAttack.isChecked()
+			&& NeuralPolicy.get() != null;
+	}
+	
+	private void updateNeural()
+	{
+		double dist = Math.sqrt(EntityUtils.distanceToHitboxSq(target));
+		fillNeuralObservation(dist);
+		NeuralAction act = NeuralPolicy.get().decide(neuralObs);
+		
+		if(act.forward > 0)
+		{
+			releaseBackward();
+			holdForward();
+		}else if(act.forward < 0)
+		{
+			releaseForward();
+			holdBackward();
+		}else
+		{
+			releaseForward();
+			releaseBackward();
+		}
+		
+		if(act.strafe != 0)
+		{
+			holdDodge(act.strafe > 0 ? Dodge.LEFT : Dodge.RIGHT);
+			neuralStrafing = true;
+		}else if(neuralStrafing)
+		{
+			releaseDodgeKeys();
+			neuralStrafing = false;
+		}
+		
+		if(act.sprint)
+			pressSprint();
+		else
+			releaseSprint();
+		if(act.jump)
+			KeyPresser.press(MC.options.keyJump);
+		if(act.sneak)
+			KeyPresser.press(MC.options.keyShift);
+		
+		// only a sprint hit or a crit the server can verify, like the combo
+		if(act.attack && dist <= REACH && canLandGoodHit() && attackTarget())
+		{
+			lastHitTick = tickCount;
+			comboHitCount++;
+		}
+	}
+	
+	/**
+	 * What the network sees - exactly what the trainer's simulator gives
+	 * it (see NeuralObservation and PvpSim.observe).
+	 */
+	private void fillNeuralObservation(double dist)
+	{
+		LocalPlayer player = MC.player;
+		NeuralObservation o = neuralObs;
+		o.dist = dist;
+		o.theirReach = theirReachToUs();
+		o.dy = target.getY() - player.getY();
+		
+		double ax = target.getX() - player.getX();
+		double az = target.getZ() - player.getZ();
+		double len = Math.sqrt(ax * ax + az * az);
+		if(len < 1e-4)
+		{
+			ax = 1;
+			az = 0;
+		}else
+		{
+			ax /= len;
+			az /= len;
+		}
+		double sx = -az, sz = ax;
+		Vec3 v = player.getDeltaMovement();
+		o.myAlong = v.x * ax + v.z * az;
+		o.mySide = v.x * sx + v.z * sz;
+		o.myVy = v.y;
+		o.opAlong = -(targetMotion.x * ax + targetMotion.z * az);
+		o.opSide = targetMotion.x * sx + targetMotion.z * sz;
+		o.opVy = targetMotion.y;
+		
+		o.myGround = player.onGround();
+		o.opGround = target.onGround();
+		o.myChargeTicks = ticksUntilCharged();
+		o.opChargeTicks = targetTicksUntilCharged();
+		o.myHurt = player.hurtTime;
+		o.opHurt = target instanceof LivingEntity le ? le.hurtTime : 0;
+		o.mySprint = player.wasSprinting;
+		o.opSprint = target.isSprinting();
+		o.myHealth = player.getHealth() / player.getMaxHealth();
+		o.opHealth = target instanceof LivingEntity le
+			? le.getHealth() / Math.max(1, le.getMaxHealth()) : 1;
+		o.critReady = isCritReady();
+		o.canHit = dist <= REACH && HitCheck.isVerifiable(target);
+		o.aimError = RotationUtils
+			.getAngleToLookVec(target.getBoundingBox().getCenter());
+		
+		double yaw = Math.toRadians(target.getYRot());
+		o.opFacing =
+			len < 1e-4 ? 1 : -(-Math.sin(yaw) * ax + Math.cos(yaw) * az);
+		
+		o.sinceMyHit = Math.min(1000, tickCount - lastHitTick);
+		o.sinceTheirHit = Math.min(1000, tickCount - lastTakenTick);
+		o.sneaking = player.isCrouching();
 	}
 	
 	// ── Dodging
@@ -3172,6 +3337,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	private void updateDodge()
 	{
+		// the network strafes itself
+		if(isNeural())
+			return;
 		if(!dodging.isChecked())
 		{
 			resetDodge();
@@ -3491,7 +3659,11 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	public boolean isHoldingSprintOff()
 	{
-		if(!isEnabled() || !autoAttack.isChecked() || !autoCombo.isChecked())
+		if(!isEnabled() || !autoAttack.isChecked())
+			return false;
+		if(isNeural())
+			return sprintHeldOff;
+		if(!autoCombo.isChecked())
 			return false;
 		
 		return comboPhase != ComboPhase.IDLE || sprintHeldOff;

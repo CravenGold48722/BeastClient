@@ -386,6 +386,19 @@ test {
 	useJUnitPlatform()
 }
 
+// AimAssist's "Neural network": trains it in a sword PvP simulator (src/test
+// .../hacks/aimassist/neural/NeuralTrainer) and writes
+// src/main/resources/assets/wurst/neural/aimassist_pvp.bin.
+// gradlew trainNeuralAim [-PnnArgs="train 26,8,10 2000"] (or "sweep 300" to
+// compare network shapes, "probe" for the scripted fighters).
+tasks.register("trainNeuralAim", JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "net.wurstclient.hacks.aimassist.neural.NeuralTrainer"
+	maxHeapSize = "1g"
+	workingDir = projectDir
+	args((project.findProperty("nnArgs") ?: "train 26,8,10 2000").toString().split(" "))
+}
+
 def getGhVersion() {
 	return version.substring(0, version.indexOf("-MC"))
 }

@@ -200,6 +200,8 @@ public final class AimAssistComboTest extends SingleplayerTest
 				rematchFight();
 			if(part("crit"))
 				critTraderFight();
+			if(part("neural"))
+				neuralFight();
 			if(part("shield"))
 				shieldAndCrouchDodge();
 			
@@ -799,6 +801,54 @@ public final class AimAssistComboTest extends SingleplayerTest
 	}
 	
 	/**
+	 * The "Neural network" setting in the same 300-tick VexBot fight: the
+	 * network (trained in PvpSim, src/test) plays the keys and picks the hits
+	 * - all of them sprint hits or crits - and the score is logged next to
+	 * the combo's.
+	 */
+	private void neuralFight()
+	{
+		startSpot();
+		spawnBot("~ ~ ~-4");
+		context.waitTicks(20);
+		runAsMe("gamemode survival");
+		makeTough("@s");
+		runAsMe("item replace entity " + BOT
+			+ " weapon.mainhand with diamond_sword");
+		runWurstCommand("setcheckbox AimAssist Neural_network on");
+		clearRecording();
+		runAsMe("vexbot attack " + me + " " + BOT);
+		runWurstCommand("t AimAssist on");
+		recordFight("neural_fight", 300);
+		int fightEnd = context.computeOnClient(mc -> forwardDown.size());
+		runWurstCommand("t AimAssist off");
+		runAsMe("vexbot attack stop " + BOT);
+		runWurstCommand("setcheckbox AimAssist Neural_network off");
+		context.waitTicks(3);
+		
+		List<Attack> hits = snapshotAttacks();
+		long taken = context.computeOnClient(
+			mc -> hitsTaken.stream().filter(h -> h.tick() < fightEnd).count());
+		long crits = hits.stream().filter(Attack::crit).count();
+		long neither =
+			hits.stream().filter(h -> !h.sprintHit() && !h.crit()).count();
+		logger.info(
+			"Neural network: score {} hits on the bot, {} taken; {} crits,"
+				+ " {} neither sprint hits nor crits",
+			hits.size(), taken, crits, neither);
+		logFightFlow("Neural network", hits,
+			context.computeOnClient(mc -> List.copyOf(hitsTaken)), fightEnd);
+		removeBot();
+		
+		if(hits.size() < 5)
+			throw new RuntimeException("Neural network: only " + hits.size()
+				+ " hits in a 300-tick fight");
+		if(neither > 0)
+			throw new RuntimeException("Neural network: " + neither
+				+ " hits that were neither sprint hits nor crits");
+	}
+	
+	/**
 	 * Shield block and Crouch dodge (user, 2026-10-17: "doesn't work") against
 	 * a VexBot, set up like the user's game: AutoTotem on (Health 0), a totem
 	 * in the offhand and a shield in the hotbar. Shield source "Shield while
@@ -981,7 +1031,7 @@ public final class AimAssistComboTest extends SingleplayerTest
 	
 	/**
 	 * Only some parts (gametest -parts fight,rematch): still, falling, taps,
-	 * fight, rematch, crit, shield. All without it.
+	 * fight, rematch, crit, neural, shield. All without it.
 	 */
 	private static boolean part(String name)
 	{

@@ -858,6 +858,53 @@ category you didn't sweep.
   MileyCyrus, HeadRoll, ItemGenerator, BuildRandom, ForceOp, CrashChest, AutoLibrarian.
 - `build.gradle` is modified vs. upstream: `withSourcesJar()` removed.
 
+### AimAssist "Neural network" (user, 2026-10-19)
+
+User: "a smart neural network trained by us ... testing it against itself ... as little system
+resources as possible ... STEER IT USING ACTUAL SWORD PVP TACTICS ... speed up the time ...
+reaction speed way faster than a human's ... aim humanized and smooth (but not TOO smooth)".
+Checkbox under Combat style; with Auto attack it replaces Auto combo's rules (`updateNeural`):
+every tick the net picks W/S, A/D, jump, sprint, sneak and attack - through the same keys
+(`holdForward`/`holdDodge`/`KeyPresser`) and the same `canLandGoodHit` + `attackTarget` gate
+(sprint hits or crits, HitCheck) as the combo; no reaction delay (a human needs 4-5 ticks).
+The camera stays HumanAim's (the user's aim settings). Combo-only reactions (jump reset in
+`reactToTargetHit`, crouch dodge, Dodging, shield) stand down while it's on.
+- `hacks/aimassist/neural/` (shipped, no MC classes): `NeuralNet` (MLP, one flat float array,
+  Pade tanh, no allocation per pass), `NeuralObservation` (26 inputs relative to the line to
+  the opponent, scaled ~-1..1, `VERSION` - bump it when inputs change, old weights then refuse
+  to load), `NeuralAction` (3-way W/S, 3-way A/D, 4 keys), `NeuralPolicy` (loads
+  `assets/wurst/neural/aimassist_pvp.bin`). AimAssist's `fillNeuralObservation` must give
+  exactly what `PvpSim.observe` gives (velocities of the target = `targetMotion`'s EMA, hurt
+  time 10 on the tick the hit arrives, `wasSprinting`, ...).
+- `src/test/.../neural/` (not shipped): `PvpSim` - vanilla 26.1.2 rules read with `javap -c`
+  (damage 7 x (0.2 + 0.8 s^2), crit x1.5, knockback 0.4 + 0.5 sprint along the look, attacker
+  x0.6 and sprint off, 10-tick immunity, armor formula, input x0.98 / sneak x0.3 / square
+  rescale, ground 0.1/0.13 friction 0.546, air 0.02/0.026 drag 0.91, gravity, jump 0.42 +
+  0.2 sprint) plus a lagging, noisy camera and 0-2 ticks of view delay; knockback reaches the
+  victim at the start of its next tick (a velocity packet) so jump resets can happen - with it
+  applied in the hit's tick a jump reset was impossible. `PvpSimTest` pins jump peak 1.2522,
+  crit damage, sprint knockback, immunity. ~1.1M ticks/s per core (~54,000x real time),
+  ~16,000 whole fights/s on 7 threads.
+- `NeuralTrainer` (`gradlew trainNeuralAim`, `-PnnArgs="sweep 300"` / `"probe"`): DAgger
+  imitation of `ScriptedPolicies.SprintCombo` (Beast's combo rules), then OpenAI-ES
+  (antithetic pairs sharing opponents and seeds, centered ranks, Adam, cosine lr) in a league:
+  5 scripted fighters + up to 30 past snapshots + itself, sampled by PFSP (AlphaStar: opponents
+  it loses to more often); fitness = damage traded + win + sprint hits/crits/combos, early on
+  + agreement with the teacher (fades by 25%). Best checkpoint by benchmark win rate.
+- Findings: every shape from 8 to 32+16 hidden units plays equally well (sweep, 2026-10-19),
+  so the shipped net is the smallest, 26-8-10 (306 weights, 1.2 KB, ~350 ns a decision).
+  Before the knockback-timing fix ES sat at ~55% vs Sprint combo whatever the population or
+  sigma; after it, 2000 gens from imitation + 2000 resumed (`resume` mode, ~24.6M fights,
+  ~30 min) reached Sprint combo 87%, CritTrader 96%, Aggressor 95%, Spammer 86%, Counter 68%
+  (fresh seeds) and 68% against the 2000-gen version. Still climbing at the end - more
+  `resume` rounds may help.
+- `NeuralPolicyTest` (in `gradlew build`): the shipped net loads, beats every scripted
+  fighter > 55% over 400 fresh fights, mirror match even, < 5 us a decision. Gametest
+  `aimassistcombo -parts neural`: 300-tick VexBot fight (hardest settings), only sprint
+  hits/crits. First run: 16 hits (7 crits) to 14; Adaptive Auto combo in the same run 14:9 -
+  one fight each, not enough to rank them. Sim-to-real gap to watch: VexBot crits from
+  3.05-3.65 (the sim's opponents keep vanilla 3.0).
+
 ### Features ported from other clients (user, 2026-10-18)
 
 User: "ANY features `../UI+Feature_Inpirations` [the CevAPI Wurst fork, MC 26.3] OR

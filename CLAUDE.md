@@ -40,6 +40,18 @@ is done and verified, not mid-task and not for questions/read-only work):
 
 Don't commit unrelated leftovers you didn't make without asking; never force-push.
 
+## Detail docs (read the one you need, not all)
+
+| Working on | Read |
+|---|---|
+| AimAssist turning/combo/VexBot, BowAimbot prediction | `docs/claude/aimassist.md` |
+| Neural network, PvpSim, trainer, `train.ps1` | `docs/claude/neural.md` |
+| MaceAssist | `docs/claude/maceassist.md` |
+| ScaffoldWalk | `docs/claude/scaffoldwalk.md` |
+| ClickGUI look/bar/animations | `docs/claude/gui.md` |
+| Porting from CevAPI/Meteor | `docs/claude/ported-features.md` |
+| Test client, gametest rounds, Grim/Intave tests | `docs/claude/tests.md` |
+
 ## What this repo is
 
 **Beast Client** — a personal fork of [Wurst 7](https://github.com/Wurst-Imperium/Wurst7) by
@@ -287,64 +299,12 @@ Setting names are keyed lowercase inside a feature; duplicates throw at construc
 
 ## GUIs
 
-- **ClickGUI** (`clickgui/`): `ClickGui` owns `Window`s — one per `Category` plus a UI-settings
-  window and Radar's own window — persisted to `windows.json`. Components live in
-  `clickgui/components/` (`CheckboxComponent`, `SliderComponent`, `ComboBoxComponent`,
-  `ColorComponent`, `FeatureButton`, list-edit buttons); pop-out editors in `clickgui/screens/`.
-  Opened by `ClickGuiHack`, which switches itself off immediately after opening the screen.
-  **Look (user, 2026-10-14, "modernize, red, not see-through, don't copy"):** solid panels (the
-  Opacity sliders are gone, `getOpacity()` is 1; hover = `ClickGui.getFillColor(hovering)`, never
-  opacity x 1.5), drop shadow, **no red outlines anywhere** (user: windows, buttons, tooltips,
-  boxes, enabled rows - `ClickGui.drawOutline` is a gray `ROW_BORDER` hairline; the wave stays
-  in text, the enabled bar, slider fills and the tab underline); no pin button (only Radar's
-  window is pinned, always); title bars `BAR_BG` (near black); feature rows left-aligned with a
-  hairline, enabled = dark red row (`SELECTED_TINT`) + gradient bar on the left; checkboxes are
-  square-cornered switches with a square knob (`ClickGuiIcons.drawSwitch`), sliders a slim track
-  filled with the wave up to a white knob (`getKnobColor`'s green/blue is no longer drawn).
-  Inspiration was the CevAPI fork's "modern" ClickGUI (`../UI+Feature_Inpirations`) - ideas only,
-  no code copied.
-  **Important** (that fork's "Favorites"): middle-click a hack -> golden shield
-  (`ClickGuiIcons.drawShield`) and listed in the "Important" dropdown; saved in
-  `important-hacks.json` (`hack/ImportantHacksFile`, `Hack.isImportant/setImportant`).
-  Right-click a row = its settings. Gametest `ClickGuiTest` does all of it with the real mouse
-  (tabs included: dragging Combat's tab onto Render's slot and back, dragging the Combat
-  window and reopening it) and leaves `wurstlogo_inverted.png` / `clickgui_bar.png` /
-  `clickgui_tab_dragged.png` / `clickgui_settings.png` / `clickgui_rows.png` in the
-  screenshots folder; it also fails if a section is shown before its title is clicked, on
-  tabs outside the bar/overlapping, or a dropdown not right below its tab and the bar, not
-  normal size, not one column, or off screen.
-  **Gradient quads:** `RenderUtils.fillHorizontalGradient2D` must send the corners in vanilla's
-  order (TL, BL, BR, TR) - the GUI pipeline culls back faces, and the old order meant every
-  gradient border/bar/scrollbar was silently never drawn (found 2026-10-14).
-  The wave moves with real time, so the gametests call `BeastColors.freezeWave()` first - the
-  HackList in screenshots was a random shade of red and templates failed now and then.
-  **Bar (user, 2026-10-14):** a near-black bar along the top, one row of equal slots (screen
-  width / 10), one tab per bar window (`Window.isInBar`: the categories, Important, UI
-  Settings). Default order from the middle out by `ClickGui.BY_IMPORTANCE` (Important in the
-  middle; Chat/Fun/UI Settings at the ends); titles too wide for a slot are drawn smaller. Tabs
-  stay put except when you drag one: it follows the mouse and on release swaps with the tab in
-  the slot it's over, both sliding into place; the order is saved (`windows.json` `"_layout":
-  {"version": 3, "order": [...]}`; older files open all closed, docked, default order). A tab
-  click (on release, no drag) opens/closes its window and brings it to the front. Bar windows
-  have their own title bar again (no buttons) and are **one column with a scrollbar**, at most
-  "Max height" (slider back, on-screen pixels) and never past the bottom of the screen.
-  **Like the inspiration's top bar (user, latest):** every section is hidden until its title
-  is clicked, and an open one is a normal window at its normal size and text - free to
-  overlap others. (Before: all ten fitted side by side, shrunk or squeezed into equal slots -
-  the user dropped that. `Window.getScale` / `getDisplayWidth`, the scaled drawing and the
-  mouse conversion (`toWindowX/Y`) are still in place but the scale is always 1;
-  `ClickGui.pushFittedText` still fits tab/window titles and too-long rows.) `windows.json`
-  layout version 4: older files start with every section hidden (version 3 keeps its tab
-  order).
-  Docked (default) they open right below their tab (touching the bar); dragging one by its
-  title bar undocks it (`Window.isDocked`, saved) and it reopens where it was left - its tab doesn't move.
-  **Animations** (`util/Anim`: exponential glide by real time, first update snaps;
-  `Anim.ease` = smoothstep): bar windows slide open/closed (scissor reveal, the mouse doesn't
-  reach a closing one), tabs slide between slots, the little gradient line under a tab grows
-  from the middle and shows **only under the front-most open bar window**, enabled hack rows
-  fade their tint/text and grow the left bar, switches slide their knob and fade the wave in.
-  Gametests call `Anim.setInstant(true)` (no half-finished animation in a screenshot), so the
-  animations themselves are only checked by eye.
+- **ClickGUI** (`clickgui/`): `ClickGui` owns one `Window` per `Category` plus UI-settings,
+  Important and Radar windows (`windows.json`, layout version 4). Solid red/black theme, a top bar
+  of tabs, no red outlines, `util/Anim` animations, gametest `ClickGuiTest`. Rules that bit:
+  `RenderUtils.fillHorizontalGradient2D` sends corners in vanilla's order (TL, BL, BR, TR - back
+  faces are culled); gametests call `BeastColors.freezeWave()` and `Anim.setInstant(true)`.
+  **Read `docs/claude/gui.md` before touching the ClickGUI's look, bar, tabs or animations.**
 - **Font:** Beast's own UI (ClickGUI, Navigator, TabGUI, HackList, logo text) draws with
   `util/BeastFont.get()`, never `MC.font`: a second `Font` over vanilla's glyph cache that maps the
   default font to `wurst:beast` (`assets/wurst/font/beast.json`: ASCII from the BeastFont
@@ -412,222 +372,15 @@ does it. When writing or touching a hack:
   is on, so `.jump` from chat fires right after the chat closes.
   Only movement cheats that can't be done with keys (Flight, Jetpack, Speed, NoClip…) keep velocity
   edits.
-- **Aiming at entities:** use the shared engine, never a hand-rolled turn. `util/HumanAim` is
-  the math (reaction delay, critically damped ease-in/out, drifting speed, curve, tremor,
-  tracking a moving target; unit-tested in `HumanAimTest`), `util/CameraAim` drives it per
-  frame from `onRender` (or per tick for silent aim). Used by AimAssist, MaceAssist, BowAimbot,
-  Killaura (Client-side), KillauraLegit, FightBot, Protect. AimAssist's smooth aim uses `HumanAim.pidStep`
-  instead of `humanStep`: a PID with gain scheduling on how deep inside the hitbox the aim is
-  (error / angular tolerance from `getAimTolerance`; full pull at the edge and beyond, gentle
-  inside, no correction deep inside), an integral that only builds near the hitbox and never
-  while closing fast (no windup overshoot), filtered D, and setpoint feed-forward (the wanted
-  angle's own rate, measured per frame) - that last part is what keeps it on A/D strafers;
-  the per-tick tracking estimate alone lags each reversal. `PidAimTest` compares it with the old
-  aim (strafer 40°/s: 96% vs 81% on target). Within "Smooth aim distance" (once caught up, and
-  not right after your mouse moved it) it snaps; "Smooth aim speed" 360-2000 overrides
-  the PID with a fixed top speed (old humanStep/linearStep), its top end "auto" (the value reads "auto") = PID.
-  **Turning like the reference video (user, 2026-10-16, `../whataimassistturningshouldbelike.mp4`
-  "Sensitivity Based Aim-Assist"; ideas from Kclient/Raven's AimAssist in
-  `../AimAssistTurning Inspirations`, no code). Watched at 20-30 fps and measured from the
-  zombie's position per frame (`motion.py` in a scratchpad, FOV 70 assumed):** the aim pulls
-  the camera onto the target by itself AND your mouse still works - pulling away the crosshair
-  first only creeps (0.4-2°/frame at 30 fps), a flick breaks free, and once you stop it comes
-  straight back: the clean 45° return goes 44.9 42.5 31.4 19.9 9.5 5.2 2.4 1.2 0.6 -0.1 (every
-  1/30 s): ~11°/frame (~340°/s), then half of what's left per frame (k ~21/s), no overshoot.
-  A first try ("Turning: Sticky", a mouse-only friction/magnetism/tracking mode) was wrong -
-  the user: "i didn't mean a new setting that doesn't even turn towards it automatically" -
-  removed. Now: `HumanAim` KP_OFF 21 / KP_ON 16 (were 12/6), the humanized hand response is
-  critically damped with the current gain (`1/(4 kp)`; the fixed HAND_RESPONSE tuned for the
-  old gain overshot), the integral only builds for a moving target (it swung small turns past
-  a still one), auto speed `max(340, 8 x angle left)` (was a flat 720; 180° in < 0.5 s).
-  `VideoAimTest` replays the 45° return (20 seeds, within 3° per frame) and checks no overshoot.
-  **Mouse:** no longer zeroed - `onMouseUpdate` slows it near the target (`util/AimFriction`,
-  "Stickiness" 75%: full while leaving the aim point, half at the hitbox edge growing to full at
-  the aim point while closing, fading out 5° outside the hitbox; applied in 0.25° slices along
-  the movement - all of a big per-frame burst at the start position's factor kept a 60° flick
-  at 5°; whole mouse counts with the fraction carried), and `absorbMouseMovement` shifts the
-  aim by what the mouse did (`HumanAim.shift`, `clearIntegral`, `smoothCatchUp` so it doesn't
-  snap back) - the aim continues from there. Gametest `AimAssistTurningTest` (the user's
-  settings; a per-frame "virtual hand" `MouseUpdateListener` added first - the test's
-  `moveCursor` arrives once a tick, bursts the pull undoes between ticks): 45° -> on in 4 ticks,
-  no swing past; still = no movement; 100°/s pull creeps 1.5°, stays on; 1200°/s flick 72°
-  off, back 4 ticks after; sliding husk within 0.1°. Sweep `AimAssist (pulled away)` flicks
-  the same way (`FeatureTestKit.flickMouse`, 1200°/s for 2 ticks; a 60° `moveCursor` sweep in
-  3 bursts never got off a husk 2.5 blocks away - ±13° hitbox at 75% stickiness): clean on
-  both, off and back.
-  **Jitter (user: "aimassist is jittery in the tests"):** Aim at: Auto used `AimAtSetting`'s
-  closest point from the **tick** eye position inside the per-frame aim - it jumped once a
-  tick while moving and the aim chased it (camera zig-zag on 9-11% of a VexBot fight's frames,
-  the bot's own 1%); now `frameAimPoint` from this frame's eyes: 0.1%. `AimAssistComboTest`
-  records every frame and fails over 2% zig-zag. The AimAssist tests run with the user's own
-  settings (`gametest/UserSettings`, a copy of their settings.json from 2026-10-16 - Aim at
-  Center, Auto combo, Sprint sweeps...; tests override only what they must, e.g. Auto attack
-  off for the turning test, Auto combo off for PacketBudget - it walks in and out, every step
-  a new angle, a rotation every tick; the fight allows sprint-sweep hits when that's on, up to
-  80% chances let by with Hops/Baits on (they hold hits back on purpose: 36/54 with them,
-  14/34 without; 65% otherwise), and only counts hits taken while AimAssist was still on).
-  While AimAssist has a target and turns the camera your mouse is slowed, never zeroed
-  (the old "you moved the mouse >1.5° = steering" release made it let go of targets). Gate attacks on the crosshair actually
-  being on the target while turning. All three steps lead the target's motion by one frame
-  (`leadDt`: the previous step's dt), never by the current dt - after a 150 ms lag spike that
-  put the aim 23° ahead of a fast target (`noFlickAfterFrameHitch`); and the hand stops once
-  past the aim point while still moving away. Only one hack turns the camera at a time:
-  MaceAssist's mace aim yields while `AimAssist.isTurningCamera()` (both at once flicked the view
-  up and sideways while falling). AimAssist hits are sprint hits or crits, never sweeps (user,
-  2026-10-03; crits allowed 2026-10-15): `attackTarget` waits for `isSprinting() && wasSprinting`
-  (what the server has - the attack goes out before this tick's sprint update), or `isCritReady`
-  (vanilla `canCriticalAttack` with the server's state: fallDistance > 0, not on ground/ladder/
-  water/riding, not blind, `!isSprinting && !wasSprinting`), unless sprinting is impossible
-  right now (hunger, blindness, item use, sneaking, riding, gliding, water). **Auto combo** (user, 2026-10-15, from two
-  combo guides - `../howtocombotranscript*.txt`): a hit as soon as vanilla gives sprint knockback
-  (`Player.attack`: strength at +0.5 tick > 0.9 - fired a tick past that, 12 ticks with a sword
-  instead of 13); hold W, hit, release W - between hits it stays out of **their** reach
-  (user, 2026-10-17: knocked up and back, "the hypotenuse is always longer than the leg" -
-  `theirReachToUs()` = their eyes to our hitbox, so a target in the air has to come closer
-  than we do) with S while that's under 3.0 + `THEIR_REACH_MARGIN` 1.0 and they aren't backing
-  off, coasts otherwise, and sets off with W + sprint only `SPRINT_LEAD_TICKS` (3) +
-  `approachTicks(dist)` before the charge, so it arrives as the hit charges (it chased from
-  3.0 and backed off under 2.0: a VexBot landed 11 of its 16 hits during our cooldown from
-  0.3-2.4 blocks; score 18:16 -> 19:10; the fight logs every hit taken with both reaches);
-  Hops only replace backing off when too close (they hopped at any distance from 1.5);
-  **Combat style** (user, 2026-10-17, "HT1 bot" = Minecraft Combat AI's ECHO v29 in Janus's
-  video `Wkz9kOb3mt0`, beat HT1s 45:18; its on-screen overlay shows distance, phase
-  closing/opening/holding, its 3x3 movement keys and JUMP/SPRT/HIT/SNEAK per frame - read at
-  10 fps): Sprint combo (default) or **Crit trader** = ECHO's rules - at the reach edge
-  strafing, no W inside it, jump whenever the charge is <= 6 ticks away (falls = crit as it
-  charges), hit from ~3 blocks, S + sneak 3 ticks after the hit. Against VexBot (which sticks
-  at 0.5-1.7 blocks) Sprint combo 20:13, Crit trader 10 (7 crits):13 - roughly even in damage;
-  `AimAssistComboTest.critTraderFight` logs both; **Adaptive** (default, user 2026-10-17
-  "adapt to who it's fighting"; then "as fast as possible and as smart as possible"):
-  `hacks/aimassist/OpponentModel` (no MC classes; `OpponentModelTest`), one per opponent
-  **UUID for the session** (`opponentModels`; a rematch starts adapted; `forgetOpponents()`
-  for tests). Learns on every hit either way: a discounted UCB1 bandit (discount 0.88,
-  2-exchange dwell) picks the style from hits landed (crit 1.5) minus taken - credited to the
-  style actually played, so fixed-style play counts too - nudged by what the opponent showed;
-  EMA rates (alpha 0.35, the first sample replaces the 0.5 prior) of countering our hit within
-  6 ticks, shrugging our knockback (< 0.8 blocks after 3 ticks = jump reset), and winning
-  races; Adaptive then backs off with S + sneak after hits against a counterer/shrugger and
-  waits 0.6-1.4 blocks outside their reach (by races lost) instead of the fixed 1.0. (The
-  first version, 120-tick windows, only chose after 12 s; an adaptive VexBot learns too.)
-  `AimAssistComboTest.rematchFight` fights the same bot again and logs both openings.
-  **VexBot's playbook, from its jar** (user, 2026-10-17: Vex was combo-locking AimAssist): its
-  crits land from up to attackRange + 1 (a server-side bot, never reach-checked - measured
-  3.05-3.65 eye-to-hitbox), it jump-resets **before** your hit (your charge >= 0.85, facing
-  it), holds W through your knockback and crits on the way down, jumps when being comboed,
-  hit-selects 45% of cycles, feints. Copying its moves as checkboxes - Landing punish, Hit
-  select (both off), Early crits (on), Dive bait (`DIVE_BAIT` false) - made AimAssist WORSE
-  against it (23:31 with all on, 26:24 with the measured set); spacing on its learned longer
-  reach made it passive (the model still learns `maxReach`/`diveRate`). The test's VexBot had
-  kept the still-bot part's knockback resistance 1 and jump strength 0 through respawns (same
-  UUID, saved attributes) - every fight before 2026-10-17 was against a bot taking no
-  knockback; `spawnBot` resets both.
-  **Races** (both charged, both in reach): `isChargedToStrike` strikes on
-  vanilla's 0.9 threshold a tick sooner against a target that swung in the last 40 ticks, and
-  falling with the hit charged and the target in reach keeps sprint (letting go for a crit
-  left a tick of neither - the server still had us sprinting). VexBot fight (hardest
-  settings, 600 ticks): 30:27 -> 36:25, longest combo ours 7 / theirs 4; the remaining lost
-  races all had our look not verifiable (the sent rotation off a strafing bot at 2.6-3.0).
-  **VexBot as hard as it gets** (user: "absolute highest difficulty ... excluding gear"):
-  from its jar - difficulty PERFECT (no misses, 0-tick reactions, perfect crit timing, full
-  reach; `vexbot_settings.json` sets it, `vexbot difficulty <preset>` doesn't exist - that
-  command takes knobs), `vexbot settings jumpresetchance 100` / `counterstunchance 100`
-  (defaults 50/30), `strafeincombo true`, `vexbot playstyle adaptive Vex` (style first;
-  hardest of aggressive/adaptive/default); reach stays vanilla 3.0 (up to 6 = a reach hack).
-  The user saw the first seconds of every fight go to AimAssist ("Vex isn't doing anything")
-  and then VexBot lock it in combos - so the fight logs hits per 100 ticks and the longest
-  combo each side, and records one screenshot every 2 ticks (`recordFight`; the harness keeps
-  client and server in lockstep) for an mp4; sprint reset = W-tap, or S-tap when still under 2.3 after the hit; **every chance at a
-  sprint hit or crit is taken** (user, 2026-10-16: "100% of the time, unless a setting says
-  not to" - `isHitChance` runs before the ground combo's tricks and in every combo phase; only
-  Baits, Aura-Farming on the ground, Shield breaker and Skip falling targets hold one back;
-  `AimAssistComboTest` records every tick a sprint hit/crit would land and HitCheck passes
-  and fails on any missed: 17 of 17 taken); **Skip falling targets** (checkbox, off by
-  default - user; all "ticks since X" timers start at `NEVER`
-  = -1,000,000: with `Integer.MIN_VALUE`, `tickCount - lastX` overflowed and Crouch dodge,
-  Fly-outs and Weak hits never fired - found 2026-10-17; Crouch dodge now runs before the
-  look-away gate in every phase, skipped only for a hit that can go out now): no hit on a
-  falling target (falling knockback sends them into the ground and
-  they rebuild momentum first - `isFalling(Entity)` from `getY() - yo`, other players' motion
-  isn't sent) unless they're 200+ ms laggy (`PlayerInfo.getLatency`); a **deflection** (hit back whatever the spacing within
-  4 ticks after the target hits you); **in the air** (a jump reset, Aura-Farming's jump, a drop)
-  W + sprint while rising, both let go once falling, then a **crit** (punish crit); against
-  **their** jump resets no guessing (user): a target on the ground or still rising is hit at
-  once - an early jump gets them launched - and a falling one waited for (the random "Delayed
-  hits" hold-back of hit 2-4 was removed, 2026-10-15);
-  **Jump reset** (jump in the tick the target's hit arrives: `hurtTime == hurtDuration` at the
-  UpdateEvent, which runs before `baseTick` and before the input is read; with the combo it
-  holds W + sprint for it). **Everything else from both guides** (user, 2026-10-15: "implement
-  every non-unrelated feature"), each its own checkbox: the sprint reset by the target's
-  movement (S-tap when it comes at you, W-tap when it backs off, distance otherwise - from
-  `trackTargetMotion`, positions over ticks smoothed like VexBot's; `x - xo` read 0 after a
-  position snap); S-tap deflection when hit from under 2 blocks (instead of a jump reset);
-  Fly-outs (S + jump into their hit when it's due before ours plus the deflection window -
-  from their last swing (`swinging`/`swingTime`) and their weapon's attack speed
-  (`ItemAttributeModifiers.compute(ATTACK_SPEED, 4, MAINHAND)`); only against a target that
-  swung in the last 40 ticks, 20 ticks apart; flying out whenever theirs came first let a
-  VexBot combo us for 67 ticks); Sprint crits (W stays down falling when sprint already ended);
-  Hop crits (hop after a ground deflection); Uppercuts (just out of reach, not approaching);
-  Lunges (target backing off 3.5-6 blocks, after 10 ticks of sprinting); combined ping 200+ =
-  hit stacking; opt-in: Double crits, Hops, Baits (random), Sprint sweeps and Weak hits (the
-  last two are the only non-sprint/crit hits - off by default because of the user's "never
-  sweeps"). Not added: delayed sprint hits (the user replaced them with "no guessing").
-  **From VexBot's AI** (user: "decompile vexbot, add what it does better, except aiming";
-  Vineflower on its combat classes - ideas only, no code): Punish openings (hit at once when the
-  target just swung or lowered its shield), Shield breaker (axe from the hotbar: switch, hit
-  next tick, switch back with `PacketOrder`; never hit a raised shield otherwise), Crouch dodge
-  (sneak 3 ticks against an incoming crit dive), no walking into a cobwebbed target (crits it),
-  no S into a wall (MeleeWallGuard), opt-in Combo strafe and Shield block (**Shield source**,
-  user 2026-10-17 - AutoTotem holds the offhand: Shield while healthy (default; a hotbar shield
-  into the offhand right after our hit via select + swap-hands key + back, while in a fight -
-  target or a hit in the last 3 s - and health >= "Shield swap health" (+1 heart to swap in);
-  AutoTotem yields while `isKeepingShieldInOffhand()`), Hotbar shield (main-hand shield to
-  block, weapon back after - every switch restarts the cooldown), Always totem, Always
-  shield; tested in `AimAssistComboTest` with the user's setup: shield in the offhand 292 of
-  307 ticks, totem back after). Its mace/crystal/
-  elytra/pearl/potion/loot AIs are outside AimAssist. Also fixed: the combo reset (and let go
-  of W) whenever the crosshair slipped off the target for a tick, so the next hit came 2+ ticks
-  late - now only looking 45°+ away resets it; and no attack while using an item. Gametest `AimAssistComboTest` fights a **VexBot** (user,
-  2026-10-15: a server-side Fabric PvP bot mod, `../vexbot-3.0.14mc26.1.2.jar`, MIT; it
-  w-taps, strafes, jumps, crits and jump-resets): a frozen bot with jump strength 0 and
-  knockback resistance 1 (12-tick gaps, sprint hits, W let go - a frozen VexBot still jumps out
-  of a combo and takes knockback, so it isn't still otherwise; **the bot respawns with the
-  same UUID and its saved attributes** - every later fight had knockback resistance 1 and
-  jump strength 0 until 2026-10-17, user: "it looks like vex is taking no KB"; `spawnBot`
-  logs and resets both to vanilla, and the jitter limit is the bot's own zig-zag + 1 point
-  (min 2%) since a bot that really bounces zig-zags itself), a bot dropped from 6 blocks (no
-  hit while it falls), and a 300-tick real fight in survival, both with diamond swords and
-  resistance 3 + regeneration 4 (only sprint hits/crits, no non-deflection/punish hit on a
-  falling bot, every hit taken on the ground answered with a jump reset or S (fly-out / S-tap
-  deflection), at least one crit, at most 65% of the "chances" - charged, bot under the
-  crosshair within 2.8, not falling - let go by; with the guide + VexBot features: 22 hits,
-  19 of 41 chances let go); plus a tap-choice part (the test teleports the bot 0.12 a tick
-  toward/away - VexBot's `goto` and `control ... move` didn't move it - S-tap toward, W-tap
-  away; Uppercuts/Lunges off there). Jumps are read from `input.keyPresses.jump()` one tick
-  after the hit (knockback lifts you too). VexBot traps: it's a player, so `runCommand`'s `execute as @p`
-  can pick **the bot** (it got our sword) - the test names us (`runAsMe`); spawning is async
-  (~1 s, i.e. ~60 ticks at the test tick rate); a bot that dies leaves the server (give it
-  regeneration). `build.gradle`'s `prepareVexbot` copies the jar (`-PvexbotJar`) into the
-  test client's mods after `deleteGameTestRunDir` and writes `vexbot_settings.json`
-  `{"global":{"statsOn":false}}` - VexBot posts usage stats to its author's server every few
-  seconds by default; its `/vexbot extensions` commands download add-ons (never used). The
-  anticheat sweep's `AimAssist (Auto combo)` fights a VexBot **on Grim** (`anticheat.gradle`
-  puts the jar and the same settings file on the Grim server; `comboAgainstVexBot`, 200
-  ticks, counted in an UpdateListener - sampled between ticks a hit's full hurt time is
-  already gone) and still a husk on Intave (VexBot is Fabric-only, Intave is Paper). First Grim
-  run (2026-10-15): clean, 9 hits, 9/9 jump resets. Grim checks the bot too: only flag lines
-  naming `Wurst-Bot` count (`AnticheatServer.CLIENT_NAME`), others are logged as "another
-  player". `set("AimAssist", "Auto combo", true)` must come before that branch (it fought
-  without the combo once: never sprinted, so never hit). BowAimbot's lead comes from `util/BallisticSolver`
-  (vanilla projectile physics, tested in `BallisticSolverTest`) plus `util/TargetPredictor`:
-  Robocode-style pattern matching (replays the most similar past moments of the target's
-  movement, relative to the shooter), aims at the densest spot of those replays within the hit
-  width rather than their average, and runs virtual guns (pattern / averaged / linear / still)
-  scored on practice shots. It starts from the server position (`EntitySpeedTracker
-  .getLatestServerPos`), fills in the ticks between the server's every-2nd-tick updates, and looks
-  ahead by flight + 0.5 tick (the hit is checked on whole ticks) + ping. `TargetPredictorTest`
-  shoots simulated vanilla arrows at simulated A/D strafers: steady rhythms 93-100% hits (linear
-  lead: 0-50%); random 5-15-tick rhythms about 50% at 30 blocks, where perfect knowledge of the
-  random rule would get 52%. Never go back to plain velocity lead for strafers.
+- **Aiming at entities:** use the shared engine, never a hand-rolled turn: `util/HumanAim` (the
+  math; `HumanAimTest`, `PidAimTest`, `VideoAimTest`) driven per frame by `util/CameraAim` (from
+  `onRender`, or per tick for silent aim). Used by AimAssist, MaceAssist, BowAimbot, Killaura
+  (Client-side), KillauraLegit, FightBot, Protect. Only one hack turns the camera at a time
+  (MaceAssist yields while `AimAssist.isTurningCamera()`). Lead a target by the previous frame's
+  dt, never the current one. AimAssist hits are sprint hits or crits only, never sweeps.
+  BowAimbot leads with `util/BallisticSolver` + `util/TargetPredictor` - never plain velocity
+  lead. **Read `docs/claude/aimassist.md` before changing AimAssist (turning, mouse friction,
+  Auto combo, Combat style / Adaptive, VexBot fights) or BowAimbot's prediction.**
 - **MaceAssist aim** also rounds to the real mouse step (both Humanize and snappy); humanize jitter is
   whole mouse counts. KillauraLegit moves via MouseUpdateEvent deltas, so vanilla applies sensitivity.
 - **Mouse-step rotations:** every Wurst-made rotation (client via `Rotation.applyToClientPlayer`,
@@ -683,61 +436,11 @@ does it. When writing or touching a hack:
   `PacketOrder.canChangeSlotNow()` and wait a tick if false (MaceAssist does), or the action goes
   out with the old item. `PacketBudgetTest` counts violations independently (MaceAssist swap-back
   scenario: 9/9 violations without the guard, 0 with it).
-- **ScaffoldWalk Client-side = a real godbridge, any direction** (user, 2026-10-03; Hypixel
-  bridging guide, LiquidBounce's GodBridge technique). Keys only move in 45° steps relative to
-  the camera, so the camera faces bridge + 180 + 45k: straight bridges at 45° with S + A/D (pitch
-  ~75.4, players 75.0-75.8), diagonals straight back with S only, other angles a staircase. A face
-  is only clickable from in front, so the look must point back along both axes the staircase
-  steps on. `KeyboardInputMixin` → `ScaffoldWalkHack.modifyInput` remaps the keys (your W keeps
-  meaning the direction you faced; the server's input packet shows S+D/S like a player's) and
-  sets sneak; the camera turns per frame with `CameraAim` and back when you stop. Clicks only on
-  the real crosshair hit, and only when the sent rotation (`yRotLast/xRotLast`) hits the same face.
-  `util/Godbridge` does the planning; things that each cost a round of falls to learn:
-  - the window is ~1 tick per block (crosshair clears the top edge ~0.3 past it, where you fall) -
-    a fixed pitch falls within 30 blocks (why humans jump every 8-10); the planner predicts tick
-    positions with vanilla's movement (step = last * 0.546 + 0.098) and raycasts candidate pitches;
-  - place where support runs out (any cell under the predicted hitbox, margin 0.05), not a fixed
-    path; moving off a block's corner needs a stepping stone first, placed only from the edge;
-  - you start falling in a tick only if nothing is under you **after** that tick's click
-    (vertical movement is resolved first, at the tick-start position);
-  - commit a click early, re-check every tick that it still hits **and** lands no later than the
-    predicted support loss; one tick ahead only the rotation already aimed for works (yaw and
-    pitch kept); 2+ ticks ahead the steered yaw has time to be sent; a yaw that changes between
-    the sent and the current rotation misses near corners (yaw nudges per click: 500+ sim falls);
-  - sneak edge protection shortens the step, not the velocity - predict from
-    `getDeltaMovement() / 0.546`, never from the distance moved (slid off when sneak ended);
-  - no window at all: sneak to the edge and plan there; still none near the edge: look straight
-    at a face (rescue); shift the line sideways so it doesn't run along block corners
-    (`chooseAnchor`); pick the stance by simulating each a few blocks ahead (`chooseStance`, ~2 ms
-    once per bridge; planning ~0.02 ms/tick); keep planning while sliding after you let go.
-  - smooth aim (user, 2026-10-03): corrections < 12° follow a critically damped spring
-    (`Godbridge.spring`, omega 50/s; exact closed form), big turns stay humanized. The planner
-    **predicts the camera** with that spring (`Cam.at`): a click at tick k needs the camera at k
-    and at k-1 (= the rotation sent) on the face. Assuming an instant camera with omega 35 gave
-    488 sim falls; the humanized ease-out took 4+ ticks for a few degrees. The "turn around before
-    walking" gate is only for the start (during a rescue turn it dropped sneak mid-slide);
-  - jumps like a godbridger (Hypixel: every 8-10 blocks, placing in the air): jump key via the
-    input, right after a placement, only in rhythm (no sneak/rescue for 6 ticks), only if
-    `jumpSafe` (a 3-block simulation from here) and the plan made with the jump has a click that
-    catches the landing (`hasPlan`); `Body` models vanilla air movement (jump 0.42, gravity 0.08,
-    drag 0.98, air accel 0.0196, friction 0.91, landing decided at the tick-start position, crouch
-    eyes 1.27); the horizon is 14 ticks while jumping/in the air (8 on the ground - 14 everywhere
-    made walking worse); stepping stones may be placed mid-air (on the ground only from the edge);
-  - the gametest also fails on any packet type a bridging player wouldn't send, swings != block
-    clicks, too many clicks, or no jump on the straight bridge;
-  - found with an in-game flight recorder (2026-10-06): the planner must predict the camera
-    **rounded to whole mouse steps** (`Cam.shownYaw/shownPitch`, the sim rounds to 0.15 too) -
-    0.03° off the exact spring angle missed a block's edge; a kept plan must still be allowed
-    (a stepping stone planned mid-jump was kept after landing and walked off); the sneak
-    slowdown follows the crouching flag vanilla sets from the **previous** tick's sneak key
-    (`Body.step` uses `crouching`), edge protection the current one; planned clicks must still
-    hit with ±0.015 blocks of position (`SLACK`) - at 81° pitch 0.01 blocks moves the hit 0.07
-    down the face. Still open: the 200° gametest bridge falls in ~1 of 2 runs near its end,
-    apparently after W is released (the recorder didn't catch it while bridging);
-  `GodbridgeTest` simulates every degree 0-359 from random offsets (0 falls, ~14% sneak ticks at
-  odd angles, 0 for straight/diagonal); `ScaffoldWalkHackTest` (gametest) bridges north,
-  north-east and 200° from a ledge in the air. Gametest tp: `"%d.5"` is the wrong block for
-  negative coordinates - format `Vec3.atBottomCenterOf(pos)`.
+- **ScaffoldWalk Client-side = a real godbridge, any direction** (`util/Godbridge`,
+  `GodbridgeTest`, gametest `ScaffoldWalkHackTest`): camera at bridge + 180 + 45k, keys remapped
+  in `KeyboardInputMixin`, clicks only on the real crosshair hit with the sent rotation on the
+  same face. **Read `docs/claude/scaffoldwalk.md` before touching it** - every rule there cost a
+  round of falls.
 - **Chat / server commands:** `ChatUtils.sendAsPlayer("/cmd …")` — same normalisation and chat
   history as typing it; doesn't fire `ChatOutputEvent`, so it can't loop.
 - **Changing a default:** `settings.json` stores defaults too, so add an entry to
@@ -860,305 +563,27 @@ category you didn't sweep.
 
 ### AimAssist "Neural network" (user, 2026-10-19)
 
-User: "a smart neural network trained by us ... testing it against itself ... as little system
-resources as possible ... STEER IT USING ACTUAL SWORD PVP TACTICS ... speed up the time ...
-reaction speed way faster than a human's ... aim humanized and smooth (but not TOO smooth)".
-Checkbox under Combat style; with Auto attack it replaces Auto combo's rules (`updateNeural`):
-every tick the net picks W/S, A/D, jump, sprint, sneak and attack - through the same keys
-(`holdForward`/`holdDodge`/`KeyPresser`) and the same `canLandGoodHit` + `attackTarget` gate
-(sprint hits or crits, HitCheck) as the combo; no reaction delay (a human needs 4-5 ticks).
-The camera stays HumanAim's (the user's aim settings). Combo-only reactions (jump reset in
-`reactToTargetHit`, crouch dodge, Dodging, shield) stand down while it's on.
-- `hacks/aimassist/neural/` (shipped, no MC classes): `NeuralNet` (MLP, one flat float array,
-  Pade tanh, no allocation per pass), `NeuralObservation` (26 inputs relative to the line to
-  the opponent, scaled ~-1..1, `VERSION` - bump it when inputs change, old weights then refuse
-  to load), `NeuralAction` (3-way W/S, 3-way A/D, 4 keys), `NeuralPolicy` (loads
-  `assets/wurst/neural/aimassist_pvp.bin`). AimAssist's `fillNeuralObservation` must give
-  exactly what `PvpSim.observe` gives (velocities of the target = `targetMotion`'s EMA, hurt
-  time 10 on the tick the hit arrives, `wasSprinting`, ...).
-- `PvpSim` (shipped since in-game learning uses it; `Backprop` too) - vanilla 26.1.2 rules read with `javap -c`
-  (damage 7 x (0.2 + 0.8 s^2), crit x1.5, knockback 0.4 + 0.5 sprint along the look, attacker
-  x0.6 and sprint off, 10-tick immunity, armor formula, input x0.98 / sneak x0.3 / square
-  rescale, ground 0.1/0.13 friction 0.546, air 0.02/0.026 drag 0.91, gravity, jump 0.42 +
-  0.2 sprint) plus a lagging, noisy camera and 0-2 ticks of view delay; knockback reaches the
-  victim at the start of its next tick (a velocity packet) so jump resets can happen - with it
-  applied in the hit's tick a jump reset was impossible. `PvpSimTest` pins jump peak 1.2522,
-  crit damage, sprint knockback, immunity. ~1.1M ticks/s per core (~54,000x real time),
-  ~16,000 whole fights/s on 7 threads (22-25k/s on 8 after the speedups).
-- `NeuralTrainer` (src/test, not shipped) (`gradlew trainNeuralAim`, `-PnnArgs="sweep 300"` / `"probe"`): DAgger
-  imitation of `ScriptedPolicies.SprintCombo` (Beast's combo rules), then OpenAI-ES
-  (antithetic pairs sharing opponents and seeds, centered ranks, Adam, cosine lr) in a league:
-  5 scripted fighters + up to 30 past snapshots + itself, sampled by PFSP (AlphaStar: opponents
-  it loses to more often); fitness = damage traded + win + sprint hits/crits/combos, early on
-  + agreement with the teacher (fades by 25%). Best checkpoint by benchmark win rate.
-- Findings: every shape from 8 to 32+16 hidden units plays equally well (sweep, 2026-10-19),
-  so the shipped net is the smallest, 26-8-10 (306 weights, 1.2 KB, ~350 ns a decision).
-  Before the knockback-timing fix ES sat at ~55% vs Sprint combo whatever the population or
-  sigma; after it, 2000 gens from imitation + 2000 resumed (`resume` mode, ~24.6M fights,
-  ~30 min) reached Sprint combo 87%, CritTrader 96%, Aggressor 95%, Spammer 86%, Counter 68%
-  (fresh seeds) and 68% against the 2000-gen version. Still climbing at the end - more
-  `resume` rounds may help.
-- `NeuralPolicyTest` (in `gradlew build`): the shipped net loads, beats every scripted
-  fighter > 55% over 400 fresh fights, mirror match even, < 5 us a decision. Gametest
-  `aimassistcombo -parts neural`: 300-tick VexBot fight (hardest settings), only sprint
-  hits/crits. First run: 16 hits (7 crits) to 14; Adaptive Auto combo in the same run 14:9 -
-  one fight each, not enough to rank them. Sim-to-real gap to watch: VexBot crits from
-  3.05-3.65 (the sim's opponents keep vanilla 3.0).
-
-**No preset styles, learning all the time** (user, 2026-10-19: "remove those [Sprint combo,
-Crit trader...] and make it just adapt to every opponent it faces in real time ... even IN-GAME
-it's actively TRAINING"; then "it should adapt WHILE FIGHTING, in real-time, even when it's
-only training (against itself), and fighting against real opponents should also be TRAINING
-it remembers"). With Neural network on, Combat style isn't used. Three layers of learning:
-- **Inside a fight, every exchange - `FightAdapter`** (shipped, no MC classes): an offset on
-  the 10 output biases (the key tendencies). Each test plays 4 reward events with +sigma x eps
-  and 4 with -sigma x eps (Rademacher eps, sigma 0.1), reward +1 our hit / +1.5 crit / -1 hit
-  taken, then moves the offset by `LR 0.1 x diff x eps` (decay 0.995, cap 0.6). Hidden biases
-  too was worse (noise of ~15 hits a fight). No allocation; ~600 ns a decision with it.
-  **The same adapter plays in every simulated fight of the training, both sides**
-  (`OnlineLearner.NetPolicy`, `-Dnn.adapt=true` default), so the weights evolve to work with
-  it; copies of real players (below) don't adapt. In game: `OnlineLearner.decide(profile,
-  input)` on the client thread, `Profile.noteResult` (from AimAssist's `noteHitLanded`/
-  `noteHitTaken`) feeds the reward; the offset is kept per opponent and saved.
-  Honest numbers: `FightAdapterTest` (series of 8 fights per opponent, offset carried over)
-  adapting vs fixed 77.7% vs 77.8% with v6, 79.2 vs 79.0 before - neutral in the simulator
-  (~15 hit events a fight is little signal); a big config sweep found nothing better
-  (76.9-79.3% everything). It's there because the user asked; it must never cost more than
-  2 points (the test's assert).
-- **During the fight, per opponent - `OnlineLearner`** (with "Learn in game", default on;
-  "Learning CPU" 35% of one core, one min-priority thread): `OpponentRecorder` infers the
-  opponent's keys from their movement/jumps/sprint/sneak/swings and the observation they had;
-  after 150 samples `Backprop` trains a clone of them, then ES tunes a copy of the net against
-  that clone (reach as seen); the tuned net plays only once it beats the previous one on the
-  same seeds and only while it does better in the real fight. The general net trains against
-  every copied opponent **every 3rd slice during fights and after them** (`generalSlice`,
-  150 gens a round, kept only if it beats its base >= 50% and doesn't do worse vs the copies;
-  `adoptNewerGeneral` picks up the nightly trainer's newer champion).
-  Files in `.minecraft/wurst/neural/`: `opponents/<uuid>.bin` (format BOP2: magic, shipped
-  hash, reach, samples seen, clone net, tuned net, the FightAdapter offset; BOP1 still loads),
-  `aimassist_learned.bin` (shipped net's hash, general net, version - a different shipped net
-  = ignored). Saved 30 s after the last fight (never in the tick), at most 32 opponents.
-  `OnlineLearnerTest`: copy fidelity, tuned beats general vs the copy by 2+ points on the same
-  seeds (80 -> 84%; vs the real opponent 74 -> 76%), the in-fight offset survives save/load.
-- **Offline, self-play only - `ContinuousTrainer`** (src/test, `NeuralTrainer forever <dir>
-  [HH:mm]`): rounds of 300 ES gens in a league (`trainer/hall.bin`, up to 30 past champions +
-  itself, PFSP), 128 pairs x 24 games; the candidate duels the champion over 4000 games:
-  >= 53% = new champion (written to `aimassist_learned.bin`, AimAssist takes it at the next
-  start or after its next fight), >= 47% = keep training from it, else back to the champion.
-  **No more teacher** unless it's doing something terribly wrong: yardstick vs the scripted
-  fighters (400 games, fixed seed) mean < 60% or any < 40% -> one guided round; a candidate
-  that drops 5+ points on the yardstick isn't promoted (forgetting gate). Stops on
-  `trainer/stop`, at the given time, or Ctrl+C; one trainer at a time (`trainer/lock`, `pid`).
-  Log: `trainer/train.log`.
-  **Commands** (repo root; `scripts/train.ps1`, the jar is `gradlew neuralTrainerJar` ->
-  `build/neural/beast-trainer.jar`, copied to `trainer/beast-trainer.jar`, rebuilt at each start
-  and the old one kept if the build fails): `train` (all cores, below-normal priority, 1 GB),
-  `train -Until 07:00`, **`train lite`** (user: "super lightweight ... practically no system
-  resources ... in the background while I'm doing other stuff": 1 thread, `-Dnn.duty=0.1` =
-  works 10% of the time and sleeps 9x as long as it worked after every generation and around
-  the duel/yardstick (`NeuralTrainer.dutyPause`), 16 pairs x 12 games, idle priority,
-  `-Xmx128m` SerialGC - measured 1.3% of the PC's CPU, 54 MB, ~670 fights/s), `stoptrain`
-  (= `train stop`: stop file, waits for the round check, kills after 60 s), `train status`,
-  `train install` / `uninstall`.
-  **Nightly** (user: 22:30-07:30): scheduled task "Beast Client nightly training", daily 22:30,
-  start-when-available, 9.5 h limit, runs `train.ps1 nightly`: skips (noted in
-  `trainer/nightly.log`) if already training, Minecraft running, < 2 GB RAM free, CPU > 30%
-  over 10 s, or on battery; trains at idle priority until 07:30 and stops within 30 s if
-  Minecraft starts. Minecraft is detected by window title (`^Minecraft\*? \d` - the launcher's
-  is "Minecraft Launcher") and, where readable, the java command line (here it's empty for
-  processes of other sessions).
-- **Shipped net v6 (2026-10-19)**: the self-play champion after ~7 rounds with the adapter in
-  the loop. Head to head (4000 fights) 61% vs the first shipped net and 59% vs the one before
-  it, but **lower against the scripted fighters** (Sprint combo 76% vs 88%, Counter 75% vs
-  67%; `NeuralPolicyTest` numbers) - self-play optimises beating itself, not the scripts.
-  Shipping a new `aimassist_pvp.bin` changes the shipped hash: learned files from the old one
-  are ignored and the trainer's champion restarts at v0 from it (the hall stays).
-- **Reaction speed** (user asked for "100 times a tick"): a decision is ~350 ns (~600 ns with
-  the adapter, ~1.2 us while the trainer loads every core) = about 1/40,000 of a tick, made in
-  the UpdateEvent with the state of that tick - a 0-tick reaction. The game reads keys and
-  sends attacks once per tick and the server sees nothing in between, so deciding more often
-  wouldn't change a single packet; the camera aim already runs every frame.
+AimAssist's "Neural network" checkbox (`hacks/aimassist/neural/`): a small MLP picks the keys
+every tick, trained by self-play in `PvpSim` (vanilla rules), learning in game per opponent
+(`OnlineLearner`, `FightAdapter`) and offline (`ContinuousTrainer`, `scripts/train.ps1`).
+`NeuralObservation.VERSION`/`SIZE` and `NeuralAction.OUTPUTS` must match the shipped
+`assets/wurst/neural/aimassist_pvp.bin` (`ShippedNetFitsTest`) - change them only together with
+a retrain. **Read `docs/claude/neural.md` before any neural, PvpSim or trainer work.**
 
 ### Features ported from other clients (user, 2026-10-18)
 
-User: "ANY features `../UI+Feature_Inpirations` [the CevAPI Wurst fork, MC 26.3] OR
-`../Feature_Inpirations+Additions` [Meteor Client] have that beast doesn't should be added to
-beast, if it has some that we also have, DO NOT REPLACE OURS WITH THEIRS". Done in batches,
-each built, smoke-tested and shipped. Rules that came out of it:
-- **Never bulk-copy unread code** (the auto-mode classifier blocks it): scan each batch for
-  network/token/exec/file-delete use, read what's flagged, copy only the dependency closure.
-- **Duplicates of Beast features are skipped, not merged**: AutoMace and AttributeSwap
-  (= MaceAssist), SurfaceXray (user: "we already have xray"), HideWurst (= RecordingMode),
-  PacketDelay (= Blink), GlobalToggle (only drives CevAPI's own ESP pipeline). SpearAssist
-  went **into MaceAssist** as its "Spear" setting group (`hacks/maceassist/SpearAssist`;
-  user: "integrate spearassist into maceassist, remember we already have lunge-swapping") -
-  without its "pass" mode, which needed CevAPI's AimAssist/Flight hooks.
-- CevAPI's categories Intel/Tools/Creative-Op map to Render/Other/Other (the ClickGUI bar
-  has exactly ten slots).
-- 26.3 -> 26.1.2: `MC.gui.setScreen/screen()` -> `MC.setScreen/screen`, SDL input ->
-  GLFW (`util/SdlUtils` reimplemented), `FirstPersonHandsAndItemsRenderer` ->
-  `ItemInHandRenderer` (`ViewmodelItemInHandRendererMixin`), `swing(hand, anim, false)` ->
-  `swing(hand)`, `ServerboundPunchPacket` doesn't exist, `ServerboundMoveVehiclePacket` is
-  a (Vec3, yRot, xRot, onGround) record, sign text uses booleans not `SignTextSlot`.
-- Their shared-class additions became **additive shims**, never replacements:
-  `RenderUtils` (flash colors, tracer/curve widths, octahedrons, circles, labels - drawn
-  through Beast's buffers and RecordingMode), chunk-search readiness/version
-  (`AbstractChunkCoordinator`), `Setting.isVisibleInGui`/`resetToDefault`, `SettingGroup`
-  (Beast-styled popup row), `Hack(name, description, false)` for plain-English
-  descriptions, `Hack.getStatusText()` (HackList suffix), `TimerManager` (a hack's timer
-  request beats the Timer hack while it lasts), `NiceWurstModule` is a pass-through stub.
-- Their hooks inside mixins Beast also has go into **new mixin classes** (RenderAdjust*,
-  FunCreepers*, AntiBlast*, ContainerOverlayHooksMixin for every container-screen overlay
-  and click, BlockAndItemHooksGameModeMixin, ...) or as small additions to ours.
-  Netty-thread callbacks only set flags (ServerObserver -> AntiCheatDetect via
-  `MC.execute`); ChestRecorder's per-snapshot `new Timer()` threads became one scheduler
-  that runs on the client thread.
-- Gametest `PortedFeaturesTest` (`gametest ported`) switches every ported hack on and off
-  (looking at the sky), opens a chest and the inventory with ChestSearch/EnchantmentHandler
-  on, and must end clean. Add each new batch to its list.
-- **Nothing built to disrupt or grief servers** (user, 2026-10-18: "excluding
-  server-disrupting stuff is fine"): BundleDupe (packet flood), VillagerDupe, ChatSpam,
-  CommandSpam, and CevAPI's Creative/Op kit except NBTEditor (AutoCommand's default macro deops everyone and ops you) (Airstrike,
-  Boom, ExplosionAura, Voider, HandOfGod, ServerKill, MultiverseAnnihilator, UUIDBan,
-  ForceTP, ForceOP book/sign, the advert text/title/display/name spawners).
-- Also left out: ForceAllowChats (overrides the account's Mojang/Microsoft chat, Realms and
-  multiplayer flags - on a child account those are the family settings), AltSwitch/AltBot
-  (park accounts as protocol bots), CevAPI's NBT preset pack (wide-range TNT/Wither
-  spawners, silverfish infestation, wands, OP kits - NBTEditor's built-in list is empty,
-  your own presets in `wurst/nbt-presets` still load), XPGUI's wallpaper downloads from
-  wallpaperaccess.com (its theme buttons use the bundled `background.png`; a URL you type
-  still loads).
-- Batch F (OTFs, commands, GUIs): AltGUI and XPGUI are extra screens next to Beast's
-  ClickGUI (CevAPI's "Favorites" = Beast's Important), ClientChatOverlay
-  (`hud/ClientMessageOverlay`, `ClientChatOverlayMixin` on `addClientSystemMessage`;
-  `ChatUtils.component` marks Beast's own lines), PerformanceOverlay (Update/Render/
-  GUIRender events time each hack only while it's on), CommandPrefix
-  (`CmdProcessor.getPrefix()`), PacketFirewall (in both send hooks; with vanilla-only off it
-  changes nothing; can pause hacks on an anticheat detection - `Hack.setEnabled`,
-  `EnabledHacksFile`, AntiCheatDetect), PacketTools (events only), Anti-Fingerprint
-  (`net.cevapi.*`, `AntiFingerprintPackMixin` after vanilla's thread check), ConnectionLog
-  overlay (log4j appender, drawn on the connect/disconnected screens), DiscordRPC (off by
-  default; still CevAPI's Discord application ID, so Discord shows their app name),
-  Presets (`presets/PresetManager`: one folder per preset holding Beast's own settings /
-  enabled-hacks / keybinds / TooManyHax profiles), `.panic restore` (what the last panic
-  turned off, this session), `.search <block>` (Beast's Search has no query mode),
-  `.autobuild "text" <height>` (a generated template that isn't a file), `.aboveground`.
-  Also wired: NbtFilter's packet hooks (`PacketDecoderMixin`, `ConnectionMixin.onSend` -
-  they were missing since it was ported), CustomTotem's `customtotem/` assets, AutoClicker's
-  StaffMonitor/SimulationSonar pauses.
-- Still open: HideModMenu (needs ModMenu mixins against modmenu 18.0.0-alpha.8 plus a
-  mixin plugin to skip them without ModMenu), the ClientChatOverlay extras that need more
-  ChatScreen/tab-list hooks (command colouring, tab-list colours), AutoFly's path
-  anti-hunger (an onGround rewrite at the connection level - not wired).
+Features of CevAPI (`../UI+Feature_Inpirations`) and Meteor (`../Feature_Inpirations+Additions`)
+that Beast lacks get ported; **never replace a Beast feature with theirs**, never bulk-copy
+unread code, nothing server-disrupting. Gametest `PortedFeaturesTest` lists every ported hack.
+**Read `docs/claude/ported-features.md` before porting more** (skipped duplicates, the 26.3 ->
+26.1.2 API map, shims, what was left out and why).
 
 ### MaceAssistHack (COMBAT)
 
-A port of the standalone **BetterMaceSwap** mod (`C:\Users\rbnst\BetterMaceSwap`, package
-`com.ritesh`, keybind-driven with an AutoConfig screen) into one Wurst hack — every mod keybind
-became a checkbox, every config value a slider or dropdown. Implements `UpdateListener`,
-`RenderListener`, `PlayerAttacksEntityListener`, `LeftClickListener`, `RightClickListener`.
-
-Features: attribute swapping (best Density/Breach mace, smart switch, swap-back delay, swap scope),
-stun slam (axe shield break + queued mace slam + follow-up), pearl catching (pitch lock + wind
-charge, return slot Previous/Sword/Axe/Elytra/**Pearl**), wind-on-right-click, air pots, lunge
-swapping (spear flick), mace aim assist (now the shared per-frame `CameraAim` / `HumanAim` engine, the
-same one AimAssist uses; "Humanize aim" switches the human-like curve on), mace trigger bot, auto
-chestplate.
-
-Design points that were deliberate, don't "fix" them blindly:
-- **Trigger bot = real geometry, once per tick, in the tick.** It used to check sub-tick slices with
-  both positions moved ahead along their velocities, plus once per rendered frame - hits on positions
-  the server never saw (Grim "HITBOX: hit without any intersection", user report 2026-10-02). Now
-  `isCrosshairOnTarget`: current eyes, current look, min(Trigger range, `entityInteractionRange()`),
-  hitbox + pick radius, block line of sight. Don't bring the prediction back.
-- **Mace aim = yaw only, smooth (user, 2026-10-12, second pass).** It never touches pitch (the
-  player aims up/down). A PID onto the 3D hitbox with yaw-first, flick-on-urgent and aiming from
-  predicted eyes was tried first and made macing *worse than off* ("snapping, off target"):
-  urgent flicks up to 3600°/s, aiming from where the eyes would be (looks off on screen), tremor.
-  Now `HumanAim.springYawStep` (via `CameraAim.turnYawSmoothly`): accel-limited (full speed in
-  1/12 s - a plain critically damped spring starts at full speed on a big turn, its pull grows
-  with the gap: 0 -> 126°/s in one frame at 180°/s), brakes in time (sqrt profile), last bit like
-  a spring (omega = speed/15, 6..60/s), lands without overshoot, feed-forward of the target's
-  sideways motion; Humanize = reaction delay on a new target only. `YawSpringTest` checks no
-  overshoot, pitch untouched, no speed jump > speed/3 per frame, 90° in < 0.2 s at 1800,
-  following a 40°/s target within 2°. On target = your horizontal direction crosses the
-  footprint 0.1 inside its sides (directly above: always); held still there; a turn starts
-  once off it, aims for the footprint's middle third, and ends once settled and the target isn't
-  sliding > 5°/s across the view (hysteresis - stopping at the edge made it stop-start). Aim speed
-  0.5-1800. **Approach target**: more than 3 blocks away sideways and reachable before you fall to
-  its height (vanilla air physics) -> W held until within 3.
-- **Fast dives (riptide, long falls):** the hit goes out from the eyes the server has at the next
-  tick, and the rotation sent the tick before must hit from there too - with yaw-only aim the
-  player's pitch decides that. Falling onto a target, aim range counts sideways and the "in front"
-  filter is skipped (a 10k-block drop is never within 15 blocks in the air). Too fast to ever be
-  in reach in the air (gravity 1: ~49 blocks/tick) the hit lands the tick after landing - a
-  normal hit, no smash (the server resets fall distance on the landing packet), and only with
-  "Trigger while falling only" off. The gravity attribute is capped at 1 by vanilla (`base set
-  50` = 1). `HitCheck`'s post-move check ignores the downward pull while on the ground (with
-  gravity 1 it put the eyes a block low). Gametest `MaceTriggerTest` (the test sets the pitch, Aim
-  speed 1800): 40-block 3.5 blocks/tick dive from 1.5 blocks to the side facing 90° away (one
-  tick in reach, hits in the air), a 10,000-block drop at max gravity 2 blocks to the side facing
-  away (hits after landing), and the cobweb. Test mobs need `PersistenceRequired` - hostile mobs
-  despawn instantly >128 blocks (3D) from players.
-- **Pearl catch, solved exactly** (user, 2026-10-17: "calculates the EXACT trajectory of the
-  pearl ... and the angle you need to throw the wind-charge"; `util/PearlCatchSolver`,
-  `PearlCatchSolverTest`). The catch = the **pearl** hitting your own wind charge (wind
-  charges are pickable, pearls aren't) - you land at the pearl's position before that move,
-  **keeping your velocity**. Vanilla, read from 26.1.2 and checked against server traces in
-  the gametest (every predicted wind spawn = the server's; 5 of 5 traced throws predicted
-  right):
-  - both throws: `shootFromRotation` - float-trig direction (`Mth`), normalized, + random
-    `triangle(0, 0.0172275)` per axis (server-side, unknowable), x1.5, + the thrower's
-    **known movement** = the last movement packet's position change (`handleMovePlayer`
-    `clientDeltaMovement`; ZERO if a tick had none), its y only if not on the ground; the
-    server uses the rotation in the use packet (wrapped). The use goes out at tick start, so
-    the known movement is the last tick's.
-  - pearl from feet x/z, eye y - 0.1F: velocity -0.03 y, x0.99F, move; wind charge from eye
-    height, constant velocity. Pearl's spawn packet comes **inside a bundle** (missed it at
-    first: never exact, never fired) - it gives the exact start incl. the spread.
-  - hit: the pearl's move must **enter** the wind charge's box (0.3125, from 0.15 below its
-    position) grown by `clamp((tickCount - 2)/20, 0, 0.3)` - `getEntityHitResult` is
-    `bb.clip(from, to)` only, starting inside misses (counting "inside" rated angled shots
-    90%+ that missed). The pearl ticks first; the wind charge is at its previous position.
-  The solver: every fire tick x meeting point, aimed centred, plus straight up and at the
-  camera's yaw (no turn), only shots the camera can turn to in time (yaw+pitch distance -
-  near straight up a yaw swing counted as 9 ticks made every shot late), rated by **hit
-  rate over 200 spread samples x the server a tick early/on time/late** (client ticks vs
-  server ticks; head-on meetings with the falling pearl miss on a tick, chases don't).
-  Highest catch with 85%+, else the best rate. MaceAssist locks a plan (re-checked every
-  tick; a new plan each tick made the camera chase), fires on the actual rotation's rate.
-  Throws: steeper than 45° waits for a jump, flatter for a sprint-jump, thrown on the first
-  airborne tick (the jump in the pearl's speed). Launch first waits for its own wind charge
-  cooldown (<= 2 ticks) before throwing - the sure window is 2-4 ticks after the pearl.
-  Gametest `MaceTriggerTest` (`gametest mace -parts catch` runs it alone, first): straight
-  up 5/5 (~35 blocks), 70° 4/5, Launch first 3/5 (33); 30°/10° 0/5 in game though the
-  simulation says ~95% - not found yet. A solve is ~1.7 ms. **Chaining** (checkbox, off):
-  catch after catch until a fresh right-click of yours.
-- **Cobweb on right click** (default on): a fresh right-click on a block with a sword puts a
-  cobweb there from the hotbar (offhand: vanilla does it, the sword has no use), before Wind on
-  right click. Placed the tick after the click and switched back the tick after that (vanilla's
-  own sword click goes out in the click's tick; `PacketOrder`). Fresh clicks are `keyUse` held now
-  but not last tick **or** a `RightClickEvent` this tick - polling `isDown` alone missed taps
-  shorter than a tick (wind charges had the same blind spot).
-- Item detection uses `ItemTags.SWORDS/AXES/SPEARS/CHEST_ARMOR` (the mod used
-  `item.toString().contains("sword")`).
-- **Mannequins**: `net.minecraft.world.entity.decoration.Mannequin extends Avatar`, and in 26.1.2
-  `Player extends Avatar` too — so `instanceof Player` does **not** match a mannequin. Targeting is
-  explicit checkboxes: players / mannequins / hostile (`instanceof Enemy`) / passive `Mob` /
-  `ArmorStand`.
-- `slamAttacking` is a re-entrancy guard for the stun slam's own `MC.gameMode.attack` calls only.
-  Trigger-bot hits deliberately flow through `onPlayerAttacksEntity` so they get the same swaps a
-  manual click gets.
-- Trigger-bot clicks run `tryLungeSwap()` only when `Attribute swapping` is off (otherwise the spear
-  switch would throw away the lined-up mace hit). Manual clicks always lunge-swap.
-- `Swap scope` (All / Weapons only) gates **both** the mace swap and the stun slam's axe swap.
-- Auto chestplate records the slot, uses the chestplate, and switches back inline in the same call
-  (packet order: SetCarriedItem → UseItem → SetCarriedItem).
-- `selectSlot()` sets `inventory.setSelectedSlot(slot)` and then calls
-  `IMC.getInteractionManager().syncSelectedSlot()` (vanilla's own sync), so the slot is sent once,
-  immediately, and vanilla doesn't send it again on the next attack or tick.
-- Aim-assist sliders step 0.5; `Min fall distance` defaults to 1.5 and gates on `player.fallDistance`
-  (the mod only checked downward velocity).
+A port of the **BetterMaceSwap** mod into one hack (attribute swapping, stun slam, pearl catch,
+wind charges, lunge swap, yaw-only mace aim, trigger bot, auto chestplate, cobweb on right
+click). Trigger bot = current geometry once per tick, no prediction; the aim is yaw only.
+**Read `docs/claude/maceassist.md` before changing it** - its design points are deliberate.
 
 ## 26.1.2 API notes (things that changed and cost time)
 
@@ -1203,183 +628,7 @@ To confirm any vanilla signature without guessing, the deobfuscated jar is at
   spring) runs on `util/GameClock` - ticks that actually ran + the frame's partial tick, 50 ms each -
   not `System.nanoTime`; the test client runs at most one tick per frame, so real time x tick rate
   would be wrong too. New per-frame aim code must use `GameClock.nanoTime()`.
-- **Test client = performance mods + lowest graphics + tuned JVM (user, 2026-10-16).**
-  `preparePerfMods` (build.gradle, after `deleteGameTestRunDir`) copies - never moves - the
-  performance mods from `-PperfModsDir` (default the user's `.minecraft/mods`: Sodium, Sodium
-  Extra, ImmediatelyFast, EntityCulling, MoreCulling, CullLeaves, BetterBlockEntities, Particle
-  Core, FerriteCore, ModernFix, SmoothJoin, Lithium, BadOptimizations, Debugify,
-  Krypton, Ixeris, Fast IP Ping + cloth-config, fzzy_config, fabric-language-kotlin) and writes
-  an `options.txt` with the lowest graphics, except what tested features change or need to show
-  (vignette, bobbing, hurt tilt, screen/FOV effects, gamma, FOV, GUI scale). Left out: Dynamic
-  FPS (throttles a background window; the client runs at most one tick per frame) and Moonrise
-  (closing the test world deadlocked the harness on the first run). `-PnoPerfMods` /
-  `gametest -noperfmods` runs without them; the screenshot templates are recorded with them.
-  Sodium 0.9.2 threw "Global terrain uniforms have not been updated" on every Fabric test
-  screenshot (the screenshot's extra `GameRenderer.render` skips the extract step where Sodium
-  re-arms its uniforms) - gametest `SodiumUniformsMixin` re-arms them at the end of each frame.
-  JVM (user, 2026-10-17: "set a memory limit, it was using 5GB"): client `-Xms512M -Xmx2G`,
-  G1 (pause 50 ms), `UseCompactObjectHeaders` (JDK 25), string dedup, unused heap given back
-  (`MinHeapFreeRatio=10`, `MaxHeapFreeRatio=25`, `G1PeriodicGCInterval=10000`), code cache
-  192M; the Gradle daemon gives heap back too - peaks 1.4 GB client + 1.0 GB Gradle.
-  Not lite-cpu either: it throttles chunk rebuilds whatever its config says ("profile:
-  aggressive"). Screenshots still raced Sodium's own chunk rebuilds after a block change
-  ("all drawn" before the rebuild was scheduled): `assertScreenshotEquals` retries a
-  mismatch twice 10 ticks apart and records templates only after 20 ticks; `in_game` also
-  waits for the wall's block to reach the client.
-- **Quick rounds:** `gametest aimassistcombo -parts fight,rematch` (parts: still, falling,
-  taps, fight, rematch, crit, shield; `gametest mace -parts catch` = the pearl catch test
-  alone) and `-record` for fight screenshots (off by default - ~900 a run). A round is ~2.5
-  min, ~1.5 of it game startup. Wait loops must not match their own command line (a
-  `Get-CimInstance ... -match 'gametest.ps1'` loop found itself and never ended), and a `cut`
-  in a Monitor pipe buffers (no events).
-- `PacketBudgetTest` counts packets, swings per attack and aim settling in singleplayer; feel and
-  accuracy still need a launch of the client.
-- **Real anticheats (`AnticheatTest`, user, 2026-10-13).** The gametests also join two real
-  servers, each its own process, and collect every flag: **GrimAC** on a Fabric 26.1.2 server
-  (source `../Testing`) and **Intave** on Paper 26.1.2 (source `../Testing2`). `gradle/anticheat.gradle`
-  builds both from source (only when it changed; Intave's build needs git - a stub repo in
-  `build/anticheat/intave-git` via `GIT_DIR`), downloads the Fabric server launcher / Paper 26.1.2
-  (pinned, sha256), and prepares `build/anticheat/{grim,intave}` (fresh world each run, offline mode,
-  flat, ports 25571/25572, nobody op - Intave gives ops its bypass trust factor; Grim verbose to
-  console; Intave kick/ban commands emptied; bStats and update checks off). `-PnoAnticheat` /
-  `-PgrimDir` / `-PintaveDir`; `gametest grim|intave|anticheat` runs just those. `AnticheatServer`
-  starts the process, sends console commands (`query` waits for an answer line, e.g. a husk's
-  health), reads Grim flags from the console ("Grim » X failed Check") and Intave's from
-  `plugins/Intave/logs` ("(DET)" lines - Intave never prints them). Scenarios: baseline (no hacks,
-  must stay clean), control (Flight, must flag - proves flags arrive), Killaura, MaceAssist,
-  ScaffoldWalk; each reports what it did (husk damage, blocks placed) and the tick pacing.
-  Things that cost a round each:
-  - Grim **can't run in the integrated server**: packetevents attaches to every connection in the
-    JVM, including the client's end of the singleplayer link, and its client side misreads the
-    configuration packets (and its 26.x build has no client chain entrypoint - it crashed on an
-    immutable list). Separate processes are the only accurate setup anyway.
-  - Grim's bundled cloud-fabric asks for MC >=26.2; the test copy rewrites that to 26.1.2
-    (`GrimJarPatch`; Groovy reads backslash-u escapes even inside regexes - normalise the JSON's
-    `>` first). Grim then runs without commands (cloud fails at runtime) - fine, console
-    commands are vanilla.
-  - **Timer/TimerLimit flags at the join are server lag, not the client**: a fresh server goes
-    silent for ~1 s after the first join; the client keeps ticking evenly (measured by
-    `PacketTrace`: tick-end packets out, any packet in), and the timer check, whose clock is its
-    own pings, sees the client ahead. A run with Wurst switched off also got them. So the join is
-    its own report line (after a 5 s settle) and the baseline ignores timer flags only in a window
-    where the server was silent > 500 ms while the client stayed <= 22 ticks/s.
-  - Fabric's gametest harness can **deadlock closing the singleplayer world** while another heavy
-    process starts (render thread in the deferred disconnect -> `IntegratedServer.halt`, server
-    thread parked in the harness phaser): the servers are awaited before that world is created.
-    It also hit 3 of 5 `gametest grim` runs (2026-10-15), where the world closed moments after
-    it opened (setting the tick rate back to 20 first didn't help): when every `only` term just
-    picks anticheat servers, no singleplayer world is made (`WurstTest.isAnticheatOnly`).
-    `gametest.ps1` has a watchdog (no game log output for 4 min -> jstack to
-    `build/gametest-hang.txt`, kill, FAILED), and the gametest `ConnectionMixin` logs every
-    disconnect reason and connection exception (a silent disconnect used to hang the run).
-  First results (2026-10-13): Killaura, MaceAssist (mace hit) and ScaffoldWalk clean on both;
-  Intave once noted "halting game ticks" (+0 VL) after the Flight setbacks.
-- **Every feature on both anticheats (`AnticheatFeatureSweep`, user, 2026-10-13):** each hack
-  and command has its own test built for what it does (a pool for Jesus, a ladder for FastLadder,
-  ores for VeinMiner, a still 1024-health husk for the auras...) **and a check that it did it**
-  (husk lost health, bot stayed on the water, vein gone, packets of the right kind sent, server's
-  copy of an item changed, the screen changed). A failed check is "DIDN'T WORK" in the report
-  next to the flags - a clean feature that never acted means nothing. Only the four core
-  scenarios fail the run. `FeatureTestKit` holds the helpers; rules that each cost a round:
-  - Speed: a test runs until its effect shows (timeout), builds only its own scene, and the next
-    test's `begin()` undoes only what this one dirtied (arena, inventory, effects, game mode,
-    time, weather, camera, settings via `set()` restored from JSON). 8 ticks after each for late
-    flags. ~6.5 min for all 204 per server. The first server is started in Fabric's
-    **preLaunch** (`AnticheatServers`), so it boots with the client; settled = 8 quick answers.
-  - Flags before the feature starts (its first `on()`/typed command) are setup (teleports, the
-    last test's leftovers): set aside and listed as "set aside as setup", not counted.
-  - Code inside `waitUntil`/`maxOver` lambdas runs on the client thread: use `rel(mc)`, never
-    `pos()`/`client()` (those call `computeOnClient` and throw there).
-  - `at()` waits for the client's AcceptTeleportation, not the position (in the air it falls at
-    once). Mobs killed by cleanup linger client-side while dying: only count `isAlive()` ones.
-  - Render hacks: `screenChange` = two screenshots off, one on (all with HUD list and toggle
-    messages hidden, toasts and particles cleared); on must differ by > 1.3 x the off/off noise.
-    Both "off" shots come before enabling - Fullbright fades out after it's off. Rain fades for
-    seconds, so NoWeather runs last and cleanup waits for it.
-  - Commands that change items in creative are checked on the **server's** copy too.
-  - **Walking probe** before every test (4 ticks of W): some features leave the anticheat
-    rejecting every move afterwards (Grim after ArrowDMG's packet burst: client normal, every
-    step a Simulation setback) and every later test inherited it. A failed probe notes "couldn't
-    walk after <test>" with the client's state, and the bot reconnects (`AnticheatTest.reconnect`).
-  - Setup must not trip the anticheat itself: rebuild the arena with the bot **outside** it
-    (floor changes reach Grim's world copy and the client a tick apart = 0.0784 Simulation
-    setback), let the bot stop before teleporting (momentum = 0.6 setback), and wait for 3
-    on-ground ticks in a row (a late setback lifted it: "Can't jump/build in mid-air").
-  - Cleanup always re-selects slot 0 **with the sync** (after AutoSwitch the server held another
-    slot: Throw/AirPlace clicked with an empty hand). Keys for jumps are held >= 2 ticks
-    (`pressKey` is press+release inside one tick - never seen as held). Measure an effect while
-    it happens (`maxOver` from the action on): a setback a tick later erased jumps measured
-    afterwards. Many targeting hacks skip hostile mobs by default (AnchorAura, CrystalAura,
-    Follow, RemoteView: "Filter hostile mobs") - set it for the husk.
-  - Failed non-render tests save `ac_<server>_fail_<test>.png` - look before guessing.
-    A failed check with flags reads "DIDN'T WORK (flagged - the anticheat likely undid it)".
-  - **Clean record per feature:** anticheats hold a grudge - Intave reports a movement only once
-    the player's physics VL is past 50, and after the Flight control it sat around 400, so every
-    0.0784 mis-prediction of later features became a flag and a setback. After a test that
-    flagged, the next one reconnects first (`AnticheatTest.lastFlagged`). Results no longer
-    depend on test order.
-  - `lookAt()` turns with real mouse movement (`moveCursor`, whole mouse steps); the server's
-    `/rotate` made the client send an extra rotation packet mid-tick (Grim AimDuplicateLook /
-    TickTimer, Intave "2 packets without client tick end", blamed on the feature). The first
-    mouse move of a run can get lost: it falls back to `Rotation.applyToClientPlayer`.
-  - `-Pfeatures=a,b` / `gametest grim -features a,b`: only those features' tests (plus baseline
-    and control) - ~2-3 min per server instead of ~11. Never compile while a run is loading
-    classes (NoClassDefFoundError mid-run).
-  Found and fixed (2026-10-13/14, verified on both servers):
-  - SkinDerp never told the server (26.1's `Options.setModelPart` only sets the option): now
-    `broadcastOptions()`, and it restores your own skin parts instead of turning all on.
-  - NameProtect didn't hide names already in chat (lines are laid out when they arrive): it
-    re-lays the chat out on toggle (`IChatComponent.refreshTrimmedMessages`).
-  - NoShieldOverlay never moved the raised shield: the blocking hook targeted
-    `applyItemArmTransform` ordinal 3, which in 26.1.2 is the riptide spin - now ordinal 1 (the
-    transform before the `getUseAnimation()` switch).
-  - `.potion/.rename/.author/.enchant` changed the item on the client only: now
-    `InventoryUtils.setCreativeStack` like `.repair`.
-  - `.sv` crashed when the server wasn't joined from the server list: `ConnectScreenMixin`
-    remembers every join (Quick Play, Reconnect, other mods), `.sv` errors instead of throwing.
-    The test joins via `ConnectScreen.startConnecting` and exercises that.
-  - Criticals Mini/Full Jump faked movement (Mini: velocity push) or only jumped after the hit:
-    now the clicked hit is held back (`LeftClickEvent` cancelled), the jump key pressed, and the
-    hit sent on the way down - from the **2nd** falling tick (the hit precedes the tick's
-    movement packet, so on the 1st the server still has you at the peak: no critical on
-    Paper/Intave). Full Jump also waits for a full recharge. Clean criticals on both servers.
-  - Blink held only movement: now everything at the connection level
-    (`ConnectionPacketOutputListener`), switching right after a tick end, released all at once
-    on the next tick - indistinguishable from a lag spike. Clean on both (hack and `.blink`).
-  - Instacart did everything in one tick (two turns the server never saw; the cart went out with
-    the rail selected because `PacketOrder` holds a slot change after a click): now one step per
-    tick - turn + rail slot, rail, cart slot + cart, back. Clean on both. (The test's
-    `tnt_minecart 4` was refused: minecarts stack to 1.)
-  Found and fixed (2026-10-16 sweep):
-  - Grim WrongBreak (`CANCELLED_DIGGING, last=null`) once per mining hack: Nuker, AutoFarm,
-    AutoLibrarian, TreeBot, Tunneller and VeinMiner forced `isDestroying = true` before
-    `stopDestroyBlock()` on disable - an abort for a dig the server never had. Gone.
-  - Intave interactionraytrace ("broke X, but looking at a different block"): the break went
-    out in the tick the camera turned to the block, before the movement packet with that turn.
-    `BlockBreaker.isTurnPending(pos)` in every mining hack and CrystalAura's placing: the
-    first tick on a new block only turns, then it breaks once the last sent rotation is on it
-    too (an "old look within 3 degrees" rule instead kept `.excavate` waiting forever while it
-    walked up close; just "the old look reaches it" broke the wheat behind a just-broken one,
-    which Intave still had in front); line of sight is now the crosshair's (OUTLINE shapes,
-    first block hit = the target) instead of collision shapes. AutoFarm 17 -> 0 flags.
-  - CrystalAura placed and hit in the tick it turned (Grim RotationPlace "post-flying"; on
-    one run it never hurt the husk): placing waits for the turn, hits for `HitCheck`.
-  - AntiWobble: 26.1's wobble is max(portal lerp, `getEffectBlendFactor(NAUSEA)`) - the mixin
-    only zeroed the portal part, so nausea still wobbled; now both.
-  - Test scenes that couldn't show the effect: NameTags (CustomNameVisible = vanilla shows
-    it anyway; husk off the crosshair at 7 blocks, Scale 3), Overlay (obsidian by hand barely
-    started - a pumpkin), NewChunks (only marks chunks where liquid starts flowing: a water
-    source, and its own counter decides - the water's animation is 20% screen noise),
-    NoFireOverlay (burn damage tilted the view in every shot - damage tilt off), `.dig`
-    (the area starts at your own head's block: `dig 3 2 2` reaches 8 stone).
-  - NukerLegit called `startDestroyBlock` itself, skipping vanilla's 5-tick `destroyDelay`
-    (Grim FastBreak, Intave "started breaking too quickly") - only `continueDestroyBlock` now.
-  - FightBot (Range 4.25 -> Grim Reach at 4.19) and Protect (any look within 7 -> Intave
-    "attacked out of sight") gate hits on `HitCheck.isVerifiable`.
-  - RainbowUI only changed the old `acColor`, which the Beast UI doesn't draw with - it now
-    turns `BeastColors.gradientAt`'s wave into a moving rainbow.
-  - Test fixes: BunnyHop's default "Jump if" is Sprinting (the test only held W); NoVignette
-    can't show on screenshots (the test client's `vignette.png` is blank on purpose).
-  Grim's every-step setbacks of the path-AI walk (FightBot, Protect, AntiAFK) were its grudge
-  from earlier tests: with a clean record they walk and fight on Grim too. Still open: Kaboom,
-  SpeedNuker and `.damage` get the bot kicked (packet spam by design).
+- **More test details** - the perf-mod test client and JVM flags, quick `gametest` rounds, the
+  real-anticheat tests (`AnticheatTest`, Grim + Intave) and the per-feature sweep
+  (`AnticheatFeatureSweep`) with every trap and finding: **`docs/claude/tests.md`**. Read it
+  before running or changing gametests or anticheat tests.

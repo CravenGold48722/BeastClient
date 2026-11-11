@@ -111,6 +111,7 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 		movement();
 		blocks();
 		items();
+		inventoryOpeners();
 		render();
 		chatAndOther();
 		commands();
@@ -125,8 +126,11 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 			return names;
 		});
 		for(String hack : hacks)
-			if(!tests.containsKey("hack " + hack) && !SKIPPED.contains(hack)
-				&& !CORE.contains(hack))
+			if(!tests.containsKey("hack " + hack)
+				// "hack XCarry (with AutoArmor)" is XCarry's test
+				&& tests.keySet().stream()
+					.noneMatch(t -> t.startsWith("hack " + hack + " ("))
+				&& !SKIPPED.contains(hack) && !CORE.contains(hack))
 				tests.put("hack " + hack,
 					() -> FAIL + "no test written for it yet");
 		Set<String> known = new HashSet<>(hacks);
@@ -194,6 +198,281 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 	private void cmd(String name, Supplier<String> body)
 	{
 		tests.put("cmd ." + name, body);
+	}
+	
+	// ── Hacks that open the inventory to move items ──
+	
+	/**
+	 * Every hack that clicks items around in the inventory without a screen
+	 * open - InventoryOpener opens the real inventory for it and closes it 3
+	 * ticks after the last click (the moment PvP Legacy kicked the bot's
+	 * owner for "invalid packets" three times, then banned them,
+	 * 2026-10-28/29). Each one's item starts in the main inventory, so it has
+	 * to. The report's "sent ContainerClick xN, ContainerClose xN" shows it.
+	 */
+	private void inventoryOpeners()
+	{
+		hack("AntiBreak", () -> {
+			give("armor.chest", "diamond_chestplate[damage=527]");
+			give("inventory.0", "diamond_chestplate");
+			awaitItems();
+			on("AntiBreak");
+			boolean swapped = waitUntil(mc -> {
+				var chest = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+				return itemId(chest).equals("diamond_chestplate")
+					&& chest.getDamageValue() == 0;
+			}, 40);
+			return check(swapped,
+				"swapped the worn-out chestplate for the inventory's fresh one",
+				"kept wearing the worn-out one");
+		});
+		
+		hack("ShieldSwing", () -> {
+			give("inventory.0", "shield");
+			awaitItems();
+			set("ShieldSwing", "Auto equip shield", true);
+			on("ShieldSwing");
+			boolean equipped = waitUntil(
+				mc -> itemId(mc.player.getOffhandItem()).equals("shield"), 40);
+			return check(equipped, "moved the shield to the offhand",
+				"left it in the inventory");
+		});
+		
+		hack("SoulChalice", () -> {
+			give("weapon.offhand",
+				"totem_of_undying[custom_name=\"Soul Chalice Souls 20/20\"]");
+			give("inventory.0",
+				"totem_of_undying[custom_name=\"Soul Chalice\"]");
+			awaitItems();
+			set("SoulChalice", "Enable AutoTotem when full", false);
+			on("SoulChalice");
+			boolean swapped = waitUntil(mc -> {
+				String name =
+					mc.player.getOffhandItem().getHoverName().getString();
+				return name.contains("Soul Chalice") && !name.contains("20/20");
+			}, 40);
+			return check(swapped,
+				"swapped the full chalice in the offhand for the empty one",
+				"kept the full one");
+		});
+		
+		hack("ChorusFruit", () -> {
+			give("inventory.0", "chorus_fruit 4");
+			awaitItems();
+			vulnerable();
+			set("ChorusFruit", "On damage from all", true);
+			set("ChorusFruit", "Health", 20);
+			on("ChorusFruit");
+			context.waitTicks(2);
+			server.command("damage " + BOT + " 2");
+			boolean ate =
+				waitUntil(mc -> countItemOn(mc, "chorus_fruit") < 4, 80);
+			return check(ate, "ate a chorus fruit from the inventory when hurt",
+				"never ate one");
+		});
+		
+		hack("JoinDrop", () -> {
+			give("inventory.0", "writable_book");
+			awaitItems();
+			set("JoinDrop", "Book & quills", true);
+			// (drops on being turned on in a world too)
+			on("JoinDrop");
+			boolean dropped =
+				waitUntil(mc -> countItemOn(mc, "writable_book") == 0, 60);
+			return check(dropped, "dropped the book and quill", "kept it");
+		});
+		
+		hack("ElytraInfo", () -> {
+			give("armor.chest", "elytra[damage=430]");
+			give("inventory.0", "elytra");
+			awaitItems();
+			set("ElytraInfo", "Auto swap low durability", true);
+			on("ElytraInfo");
+			boolean swapped = waitUntil(mc -> {
+				var chest = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+				return itemId(chest).equals("elytra")
+					&& chest.getDamageValue() == 0;
+			}, 40);
+			return check(swapped,
+				"swapped the 2-durability elytra for a fresh one",
+				"kept the worn-out one");
+		});
+		
+		hack("ElytraWalk", () -> {
+			give("inventory.0", "elytra");
+			awaitItems();
+			set("ElytraWalk", "Auto elytra", true);
+			on("ElytraWalk");
+			boolean worn = waitUntil(
+				mc -> itemId(mc.player.getItemBySlot(EquipmentSlot.CHEST))
+					.equals("elytra"),
+				40);
+			if(!worn)
+			{
+				off("ElytraWalk");
+				return check(false, "", "never put the elytra on");
+			}
+			
+			// walking forward, it bounces: jumps and opens the elytra on
+			// every hop, with keys only
+			Vec3 start = pos();
+			hold(W);
+			int glided = 0;
+			for(int i = 0; i < 40; i++)
+			{
+				if(client(mc -> mc.player.isFallFlying()))
+					glided++;
+				context.waitTick();
+			}
+			release(W);
+			double moved = horizontal(start, pos());
+			off("ElytraWalk");
+			return check(glided >= 10,
+				fmt("put on the elytra from the inventory, bounced %.1f blocks"
+					+ " in 2 s, gliding %d of 40 ticks", moved, glided),
+				fmt("glided %d of 40 ticks, %.1f blocks", glided, moved));
+		});
+		
+		// XCarry cancels the inventory's close packet: with it on, the
+		// server never sees InventoryOpener's inventory close again
+		hack("XCarry (with AutoArmor)", () -> {
+			give("inventory.0", "diamond_chestplate");
+			awaitItems();
+			on("XCarry");
+			on("AutoArmor");
+			boolean worn = waitUntil(
+				mc -> itemId(mc.player.getItemBySlot(EquipmentSlot.CHEST))
+					.equals("diamond_chestplate"),
+				80);
+			// a few steps "with the inventory open" as the server sees it
+			holdFor(GLFW.GLFW_KEY_W, 10);
+			context.waitTicks(10);
+			return check(worn,
+				"AutoArmor put the chestplate on; XCarry kept it \"open\"",
+				"AutoArmor never put it on");
+		});
+		
+		hack("BookBot", () -> {
+			give("inventory.0", "writable_book");
+			awaitItems();
+			set("BookBot", "Drop after write", false);
+			set("BookBot", "Auto-craft", false);
+			on("BookBot");
+			boolean signed =
+				waitUntil(mc -> countItemOn(mc, "written_book") > 0, 100);
+			long edits = countSent(
+				net.minecraft.network.protocol.game.ServerboundEditBookPacket.class);
+			return check(signed || edits > 0,
+				"wrote the book from the inventory", "never wrote it");
+		});
+		
+		hack("AutoLoot", () -> {
+			give("armor.chest", "leather_chestplate");
+			give("inventory.0", "diamond_chestplate");
+			awaitItems();
+			set("AutoLoot", "Inventory transfers", true);
+			set("AutoLoot", "Auto equip", true);
+			on("AutoLoot");
+			boolean equipped = waitUntil(
+				mc -> itemId(mc.player.getItemBySlot(EquipmentSlot.CHEST))
+					.equals("diamond_chestplate"),
+				60);
+			return check(equipped, "put on the inventory's better chestplate",
+				"kept the leather one");
+		});
+		
+		hack("AutoSpawnProofer", () -> {
+			give("inventory.0", "torch 16");
+			awaitItems();
+			set("AutoSpawnProofer", "Auto place", true);
+			on("AutoSpawnProofer");
+			boolean placed = waitUntil(mc -> countItemOn(mc, "torch") < 16, 60);
+			return check(placed, "placed torches from the inventory",
+				"never placed one");
+		});
+		
+		hack("ShearAura", () -> {
+			mob("sheep", 0, 0, 2, "");
+			awaitEntities(net.minecraft.world.entity.animal.sheep.Sheep.class,
+				1);
+			give("inventory.0", "shears");
+			awaitItems();
+			on("ShearAura");
+			boolean sheared = waitUntil(mc -> {
+				for(var e : mc.level.entitiesForRendering())
+					if(e instanceof net.minecraft.world.entity.animal.sheep.Sheep s
+						&& s.isSheared())
+						return true;
+				return false;
+			}, 60);
+			return check(sheared,
+				"sheared the sheep with the inventory's shears",
+				"never sheared it");
+		});
+		
+		hack("SourceFill", () -> {
+			block(0, -1, 2, "water");
+			awaitBlock(0, -1, 2, Blocks.WATER);
+			give("inventory.0", "cobblestone 16");
+			awaitItems();
+			set("SourceFill", "Auto fill", true);
+			set("SourceFill", "Auto-enable Jesus", false);
+			on("SourceFill");
+			boolean filled = waitUntil(
+				mc -> !mc.level.getBlockState(p(0, -1, 2)).is(Blocks.WATER),
+				60);
+			return check(filled, "filled the water source with cobblestone",
+				"left the water");
+		});
+		
+		hack("AreaNuker", () -> {
+			give("inventory.0", "diamond_pickaxe");
+			awaitItems();
+			fill(-1, 0, 2, 1, 1, 2, "stone");
+			awaitBlock(1, 1, 2, Blocks.STONE);
+			set("AreaNuker", "Auto switch tool", true);
+			on("AreaNuker");
+			selectBlock(-1, 0, 2);
+			selectBlock(1, 1, 2);
+			boolean gone = waitUntil(
+				mc -> countBox(mc, Blocks.STONE, -1, 0, 2, 1, 1, 2) == 0, 200);
+			int left = count(Blocks.STONE, -1, 0, 2, 1, 1, 2);
+			return check(gone,
+				"dug out the 3x2 area with the inventory's pickaxe",
+				fmt("%d of 6 blocks left", left));
+		});
+		
+		hack("FastFill", () -> {
+			// stone = FastFill's default "Blocks"; short grass is replaceable
+			// but can be clicked, so the selection lands on it (on air it hit
+			// the floor behind, and "Replace" broke the floor; snow layers
+			// aren't replaceable without a placing context)
+			give("inventory.0", "stone 16");
+			awaitItems();
+			fill(-1, -1, 2, 1, -1, 2, "grass_block");
+			fill(-1, 0, 2, 1, 0, 2, "short_grass");
+			awaitBlock(1, 0, 2, Blocks.SHORT_GRASS);
+			on("FastFill");
+			selectBlock(-1, 0, 2);
+			selectBlock(1, 0, 2);
+			boolean filled = waitUntil(
+				mc -> countBox(mc, Blocks.STONE, -1, 0, 2, 1, 0, 2) > 0, 100);
+			return check(filled, "filled the box with the inventory's stone",
+				"placed nothing");
+		});
+		
+		hack("PearlIntercept", () -> {
+			give("inventory.0", "ender_pearl 4");
+			awaitItems();
+			on("PearlIntercept");
+			// someone else's pearl flying past at eye height
+			mob("ender_pearl", 6, 1.6, 6, "Motion:[-0.6d,0.1d,-0.1d]");
+			boolean thrown =
+				waitUntil(mc -> countItemOn(mc, "ender_pearl") < 4, 60);
+			return check(thrown,
+				"threw a pearl from the inventory to intercept",
+				"never threw one");
+		});
 	}
 	
 	// ── Shared scenes ──
@@ -1064,6 +1343,22 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 				"stopped at the wall");
 		});
 		
+		hack("ClutchFall", () -> {
+			vulnerable();
+			give("hotbar.0", "water_bucket");
+			awaitItems();
+			// (the water it places)
+			messy();
+			at(0, 16, 0, 0, 0);
+			on("ClutchFall");
+			waitUntil(mc -> mc.player.onGround() || mc.player.isInWater(), 80);
+			context.waitTicks(4);
+			double health = data("@a[name=" + BOT + ",limit=1]", "Health");
+			return check(health >= 19.9,
+				"fell 16 blocks into its own water without damage (vanilla: 13)",
+				fmt("health %.1f after the fall", health));
+		});
+		
 		hack("NoFall", () -> {
 			vulnerable();
 			at(0, 10, 0, 0, 0);
@@ -1744,7 +2039,11 @@ final class AnticheatFeatureSweep extends FeatureTestKit
 	/** TemplateTool: look at a block, right-click it, press enter. */
 	private void selectBlock(int dx, int dy, int dz)
 	{
-		lookAt(Vec3.atCenterOf(p(dx, dy, dz)));
+		// a hand never lands on the exact center: going back to a block by
+		// the very same turn was Grim DuplicateRotPlace (TemplateTool's test)
+		java.util.Random r = new java.util.Random();
+		lookAt(Vec3.atCenterOf(p(dx, dy, dz)).add((r.nextDouble() - 0.5) * 0.4,
+			(r.nextDouble() - 0.5) * 0.4, (r.nextDouble() - 0.5) * 0.4));
 		holdMouse(RIGHT);
 		context.waitTicks(2);
 		releaseMouse(RIGHT);

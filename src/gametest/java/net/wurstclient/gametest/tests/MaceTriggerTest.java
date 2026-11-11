@@ -17,11 +17,17 @@ import org.lwjgl.glfw.GLFW;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ServerboundAttackPacket;
+import net.minecraft.network.protocol.game.ServerboundClientTickEndPacket;
+import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.monster.zombie.Husk;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.wurstclient.gametest.PacketTrace;
 import net.wurstclient.gametest.SingleplayerTest;
+import net.wurstclient.hacks.maceassist.StunSlamPlan;
 
 /**
  * MaceAssist's aim and trigger bot on dives too fast to see coming:
@@ -53,15 +59,162 @@ public final class MaceTriggerTest extends SingleplayerTest
 	@Override
 	protected void runImpl()
 	{
-		// (user, 2026-10-17: the pearl catch test first, and alone - gametest
-		// mace -parts catch - until it works)
-		testPearlCatchHeight();
-		if(onlyCatch())
-			return;
-		testRiptideDive();
-		testHeavyFall();
-		testCobweb();
-		testPearlChain();
+		// (user, 2026-10-17: the pearl catch test first - gametest mace
+		// -parts catch runs it alone). -parts picks any of catch, riptide,
+		// heavy, cobweb, stun, chain; without it, all of them in this order.
+		String parts = System.getProperty("wurst.test.parts");
+		if(part(parts, "catch"))
+			testPearlCatchHeight();
+		if(part(parts, "riptide"))
+			testRiptideDive();
+		if(part(parts, "heavy"))
+			testHeavyFall();
+		if(part(parts, "cobweb"))
+			testCobweb();
+		if(part(parts, "stun"))
+		{
+			testStunSlam(true);
+			testStunSlam(false);
+		}
+		if(part(parts, "chain"))
+			testPearlChain();
+	}
+	
+	private static boolean part(String parts, String name)
+	{
+		return parts == null || parts.isBlank() || parts.contains(name);
+	}
+	
+	/**
+	 * A stun slam onto a husk holding up a shield, the two-tick way (XCOW,
+	 * Corzen01): the trigger bot's hit goes out with the axe - the shield
+	 * drops - and the mace smashes the tick after; you end up holding the
+	 * sword you started with. From behind the shield (facingYou false) there
+	 * is no axe: the mace goes straight in and the shield stays up.
+	 */
+	private void testStunSlam(boolean facingYou)
+	{
+		logger.info("Testing MaceAssist stun slam, shield facing {}",
+			facingYou ? "you" : "away");
+		BlockPos ground =
+			context.computeOnClient(mc -> mc.player.blockPosition());
+		BlockPos target = ground.offset(6, 0, -6);
+		Vec3 spot = Vec3.atBottomCenterOf(target);
+		AABB area = new AABB(target).inflate(3);
+		float yaw = facingYou ? 180 : 0;
+		
+		try
+		{
+			clearInventory();
+			runCommand("item replace entity @s hotbar.0 with diamond_sword");
+			runCommand("item replace entity @s hotbar.2 with netherite_axe");
+			runCommand("item replace entity @s hotbar.7 with mace");
+			context
+				.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
+			runCommand(String.format(Locale.ROOT,
+				"summon husk %.1f %d %.1f {NoAI:1b,Silent:1b,"
+					+ "PersistenceRequired:1b,Health:%.0ff,Rotation:[%.0ff,0f],"
+					+ "attributes:[{id:\"minecraft:max_health\",base:%.0f}],"
+					+ "equipment:{offhand:{id:\"minecraft:shield\",count:1}}}",
+				spot.x, target.getY(), spot.z, HEALTH, yaw, HEALTH));
+			context.waitTicks(2);
+			server.runOnServer(s -> s.overworld()
+				.getEntitiesOfClass(Husk.class, area, h -> true).forEach(h -> {
+					h.setYHeadRot(yaw);
+					h.setYBodyRot(yaw);
+					h.startUsingItem(InteractionHand.OFF_HAND);
+				}));
+			// the shield only blocks after 5 ticks raised
+			context.waitTicks(10);
+			
+			runWurstCommand("setcheckbox MaceAssist Mace_trigger_bot on");
+			runWurstCommand("setcheckbox MaceAssist Mace_aim_assist on");
+			runWurstCommand("setcheckbox MaceAssist Attribute_swapping on");
+			runWurstCommand("setcheckbox MaceAssist Stun_slam on");
+			runWurstCommand("t MaceAssist on");
+			
+			// 1.2 blocks north of it, 12 up, looking at it 60 degrees down:
+			// in reach for ~3 blocks of the fall, at ~1.3 blocks per tick
+			PacketTrace.start();
+			PacketTrace.takeSent();
+			runCommand(String.format(Locale.ROOT, "tp @s %.1f %d %.1f 0 60",
+				spot.x, target.getY() + 12, spot.z - 1.2));
+			context.waitFor(mc -> !mc.player.onGround(), 20);
+			context.waitFor(mc -> mc.player.onGround(), 100);
+			context.waitTicks(5);
+			String wire = summarize(PacketTrace.takeSent());
+			PacketTrace.stop();
+			
+			float health = getTargetHealth(target);
+			boolean stillBlocking = server.computeOnServer(s -> s.overworld()
+				.getEntitiesOfClass(Husk.class, area, h -> true).stream()
+				.anyMatch(Husk::isUsingItem));
+			int slot = context.computeOnClient(
+				mc -> mc.player.getInventory().getSelectedSlot());
+			logger.info(
+				"Stun slam ({}): target health {} of {}, shield still up: {},"
+					+ " held slot {}, sent: {}",
+				facingYou ? "shield facing you" : "from behind", health, HEALTH,
+				stillBlocking, slot, wire);
+			
+			// (S<n> = slot change, A = attack, | = tick end)
+			int attacks = wire.split("A", -1).length - 1;
+			if(facingYou)
+			{
+				// A mob's shield never gets disabled (only Player overrides
+				// blockUsingItem with BlocksAttacks.disable), so the husk
+				// keeps blocking both hits - what's checked is the timing:
+				// the axe in one tick, the mace in a later one, nothing else.
+				int axe = wire.indexOf("S2 A |");
+				int mace = wire.indexOf("S7 A |");
+				if(axe < 0 || mace < axe || attacks != 2)
+					throw new RuntimeException(
+						"Not one axe hit then one mace hit: " + wire);
+				int ticksApart =
+					wire.substring(axe, mace).split("\\|", -1).length - 1;
+				if(ticksApart > StunSlamPlan.GIVE_UP_TICKS)
+					throw new RuntimeException(
+						"The mace came " + ticksApart + " ticks late: " + wire);
+				logger.info("Mace hit {} tick(s) after the axe hit",
+					ticksApart);
+			}else
+			{
+				// a smash from ~9 blocks is 20+
+				if(wire.contains("S2") || attacks != 1)
+					throw new RuntimeException(
+						"Expected one mace hit and no axe: " + wire);
+				if(health > HEALTH - 15)
+					throw new RuntimeException("No mace smash landed (health "
+						+ health + " of " + HEALTH + ")");
+				if(!stillBlocking)
+					throw new RuntimeException("The shield went down");
+			}
+			if(slot != 0)
+				throw new RuntimeException(
+					"Left holding slot " + slot + " instead of the sword");
+			
+		}finally
+		{
+			PacketTrace.stop();
+			cleanUp(ground);
+		}
+	}
+	
+	/** Sent packets in short: "S2" slot 2, "A" attack, "|" tick end. */
+	private static String summarize(List<PacketTrace.Sent> sent)
+	{
+		StringBuilder sb = new StringBuilder();
+		for(PacketTrace.Sent s : sent)
+		{
+			Object p = s.packet();
+			if(p instanceof ServerboundSetCarriedItemPacket c)
+				sb.append('S').append(c.getSlot()).append(' ');
+			else if(p instanceof ServerboundAttackPacket)
+				sb.append("A ");
+			else if(p instanceof ServerboundClientTickEndPacket)
+				sb.append("| ");
+		}
+		return sb.toString().trim();
 	}
 	
 	/**
@@ -72,12 +225,6 @@ public final class MaceTriggerTest extends SingleplayerTest
 	 * many were caught. Steep throws must be caught every time - the solver
 	 * only takes shots that hit with any of vanilla's random spread.
 	 */
-	private static boolean onlyCatch()
-	{
-		String parts = System.getProperty("wurst.test.parts");
-		return parts != null && parts.contains("catch");
-	}
-	
 	private void testPearlCatchHeight()
 	{
 		logger.info("Testing MaceAssist pearl catch height");

@@ -63,6 +63,21 @@ public enum HitCheck
 	public static boolean isVerifiable(Entity target)
 	{
 		LocalPlayer player = WurstClient.MC.player;
+		if(player == null)
+			return false;
+		
+		return isVerifiable(target, player.entityInteractionRange());
+	}
+	
+	/**
+	 * With a reach other than your interaction range - the attack range of
+	 * the item you held at the start of the tick (a spear's 4.5 blocks), which
+	 * vanilla's crosshair and Grim's Reach use for a hit right after
+	 * switching away from it.
+	 */
+	public static boolean isVerifiable(Entity target, double reach)
+	{
+		LocalPlayer player = WurstClient.MC.player;
 		if(player == null || target == null)
 			return false;
 		
@@ -70,8 +85,6 @@ public enum HitCheck
 		double margin =
 			Math.min(SIDE_MARGIN, Math.min(box.getXsize(), box.getZsize()) / 4);
 		AABB inner = box.deflate(margin, 0, margin);
-		
-		double reach = player.entityInteractionRange();
 		
 		// in the tick, before moving: where the last movement packet put you
 		Vec3 eyes = RotationUtils.getEyesPos();

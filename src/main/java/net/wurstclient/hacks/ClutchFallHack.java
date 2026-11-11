@@ -31,9 +31,9 @@ import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.EnumSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
+import net.wurstclient.util.BlockBreaker;
 import net.wurstclient.util.BlockPlacer;
 import net.wurstclient.util.InventoryUtils;
-import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
 
 @SearchTags({"clutch fall", "fall clutch", "water clutch", "MLG"})
@@ -206,17 +206,9 @@ public final class ClutchFallHack extends Hack implements UpdateListener
 		if(slot < 0)
 			return;
 		
-		if(!candidate.predicate().test(MC.player.getMainHandItem()))
-		{
-			// This also swaps an item from the main inventory into the selected
-			// hotbar slot. The actual placement waits for the next update.
-			InventoryUtils.selectItem(slot);
-			return;
-		}
-		
-		boolean waterBucket = isWaterBucket(MC.player.getMainHandItem());
-		boolean sweetBerries =
-			MC.player.getMainHandItem().is(Items.SWEET_BERRIES);
+		ItemStack stack = MC.player.getInventory().getItem(slot);
+		boolean waterBucket = isWaterBucket(stack);
+		boolean sweetBerries = stack.is(Items.SWEET_BERRIES);
 		BlockHitResult hit;
 		if(waterBucket || sweetBerries)
 			hit = getWaterPlacement(target.below());
@@ -229,7 +221,25 @@ public final class ClutchFallHack extends Hack implements UpdateListener
 			hit = placement.toHitResult();
 		}
 		
-		if(RotationUtils.getEyesPos()
+		// The use goes out before this tick's movement packet, so the server
+		// must have the look on the block already: turn it in this tick's
+		// movement packet (a separate look packet made two in one tick - Grim
+		// TickTimer) and use once the last one sent is on it.
+		boolean lookSent =
+			!autoAim.isChecked() || BlockBreaker.isLookingAt(hit.getBlockPos(),
+				MC.player.yRotLast, MC.player.xRotLast);
+		if(autoAim.isChecked())
+			WURST.getRotationFaker().faceVectorPacket(hit.getLocation());
+		
+		if(!candidate.predicate().test(MC.player.getMainHandItem()))
+		{
+			// This also swaps an item from the main inventory into the selected
+			// hotbar slot. The actual placement waits for the next update.
+			InventoryUtils.selectItem(slot);
+			return;
+		}
+		
+		if(!lookSent || RotationUtils.getEyesPos()
 			.distanceToSqr(hit.getLocation()) > getMaxPlaceDistanceSq())
 			return;
 		
@@ -239,14 +249,11 @@ public final class ClutchFallHack extends Hack implements UpdateListener
 		{
 			if(autoAim.isChecked())
 			{
-				Rotation needed =
-					RotationUtils.getNeededRotations(hit.getLocation());
-				// sendPlayerLookPacket() only updates the server's rotation.
-				// The
-				// local game-mode interaction also needs the temporary client
-				// rotation, otherwise buckets work only while looking down.
-				needed.applyToClientPlayer();
-				needed.sendPlayerLookPacket();
+				// the local use (the bucket's own raycast, the rotation in the
+				// use packet) with the look the server already has; the
+				// camera gets its own back right after
+				MC.player.setYRot(MC.player.yRotLast);
+				MC.player.setXRot(MC.player.xRotLast);
 				MC.hitResult = hit;
 			}
 			

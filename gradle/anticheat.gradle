@@ -6,12 +6,19 @@
 //             ../Testing (-PgrimDir=...)
 //   Intave  - Intave on a Paper 26.1.2 server, built from its source in
 //             ../Testing2 (-PintaveDir=...)
+//   Windfall - Windfall on Paper 26.1.2 (with the packetevents plugin), built
+//             with Maven from ../Testing3 (-PwindfallDir=...)
+//   Shard   - Shard on Paper 26.1.2, built from ../Testing4 (-PshardDir=...),
+//             its AI check off (it needs Shard's paid API) and nothing sent to
+//             Shard's panel
 //
 // A source folder that isn't there leaves its server out; -PnoAnticheat
-// leaves both out. Each server lives in build/anticheat/<name>; its world is
-// made fresh every run, the downloaded game files are kept. The test bot
-// isn't op on either (Intave gives ops its bypass trust factor), and neither
-// kicks or bans - the servers only log.
+// leaves them all out. Each server lives in build/anticheat/<name>; its world
+// is made fresh every run, the downloaded game files are kept. The test bot
+// isn't op (Intave gives ops its bypass trust factor) - except on Windfall,
+// which exempts nobody for it and only logs a player's flags to the console
+// after they turned their own alerts off (/windfall alerts, an op command).
+// None of them kicks or bans - the servers only log.
 
 def anticheatDir = layout.buildDirectory.dir("anticheat").get().asFile
 def noAnticheat = providers.gradleProperty("noAnticheat").isPresent()
@@ -19,9 +26,69 @@ def grimSource = file(providers.gradleProperty("grimDir").getOrElse("../Testing"
 def intaveSource = file(providers.gradleProperty("intaveDir").getOrElse("../Testing2"))
 def useGrim = !noAnticheat && grimSource.isDirectory()
 def useIntave = !noAnticheat && intaveSource.isDirectory()
+def windfallSource = file(providers.gradleProperty("windfallDir").getOrElse("../Testing3"))
+def shardSource = file(providers.gradleProperty("shardDir").getOrElse("../Testing4"))
+def useWindfall = !noAnticheat && windfallSource.isDirectory()
+def useShard = !noAnticheat && shardSource.isDirectory()
+// a plain server (Fabric's launcher, no mods = vanilla) for VanillaSpoof
+def useVanilla = !noAnticheat
 
 def grimPort = 25571
 def intavePort = 25572
+def vanillaPort = 25573
+def windfallPort = 25574
+def shardPort = 25575
+
+// ── Strictest settings (user, 2026-11-04: "make sure all of them are set to
+// as aggressive as possible, ABSOLUTE MAX AGGRESSIVENESS") ──
+// Detection, setbacks and cancels at their strictest; kicks and bans stay off
+// (they'd only end the session - the flags are what the tests read).
+
+// Grim: offsets flagged from 0.0001 blocks (0.001), setback/cancel on the
+// first violation, no VL decay, no timer drift allowance, no reach
+// expansion + the extra post-tick reach probe, experimental checks, no
+// sprint-jumping with an elytra (vanilla netcode Grim calls an exploit), no
+// building on ghost blocks
+// -PgrimTimerAllowance keeps Grim's timer drift/ping allowance at the
+// default (diagnosis): with 0 ms, scheduling and network jitter alone flag
+// Timer on any client (97 flags on joining, 2026-11-04), and each flag's
+// setback then shows up as Simulation/AntiKB flags in whatever runs next.
+def grimKeepsTimerAllowance = providers.gradleProperty("grimTimerAllowance").isPresent()
+def grimMaxAggressive = { String yml ->
+	if(!grimKeepsTimerAllowance)
+		yml = yml.replaceAll(/(?m)^(\s+drift:) \d+/, "\$1 0")
+			.replaceAll(/(?m)^(\s+ping-abuse-limit-threshold:) \d+/, "\$1 0")
+	yml.replaceAll(/(?m)^(\s+threshold:) 0\.001\s*$/, "\$1 0.0001")
+		.replaceAll(/(?m)^(\s+immediate-setback-threshold:) [0-9.]+/, "\$1 0.0001")
+		.replaceAll(/(?m)^(\s+max-advantage:) [0-9.]+/, "\$1 0.0001")
+		.replaceAll(/(?m)^(\s+max-ceiling:) [0-9.]+/, "\$1 0.0001")
+		.replaceAll(/(?m)^(\s+setback-decay-multiplier:) [0-9.]+/, "\$1 1")
+		.replaceAll(/(?m)^(\s+setbackvl:) \d+/, "\$1 0")
+		.replaceAll(/(?m)^(\s+cancelvl:) \d+/, "\$1 0")
+		.replaceAll(/(?m)^(\s+decay:) [0-9.]+/, "\$1 0")
+		.replaceAll(/(?m)^(\s+threshold:) 0\.0005\s*$/, "\$1 0")
+		.replaceAll(/(?m)^(\s+enable-post-packet:) false/, "\$1 true")
+		.replaceAll(/(?m)^(\s+allow-sprint-jumping-when-using-elytra:) true/, "\$1 false")
+		.replaceAll(/(?m)^(\s+allow-building-on-ghostblocks:) true/, "\$1 false")
+		.replaceAll(/(?m)^(\s+distance-to-check-if-ghostblocks:) \d+/, "\$1 4")
+		.replaceAll(/(?m)^experimental-checks: false/, "experimental-checks: true")
+		.replaceAll(/(?m)^(max-ping-out-of-flying:) \d+/, "\$1 50")
+		.replaceAll(/(?m)^(max-ping-firework-boost:) \d+/, "\$1 50")
+}
+
+// Intave (advanced config): AGGRESSIVE physics mitigation (default
+// BARELY), placement timings checked, the lowest rotation and blink limits,
+// every detection logged (verbose ALL, not only mitigated ones); its kick/ban
+// macros become log entries
+def intaveMaxAggressive = { String yml ->
+	yml.replaceAll(/(?m)^(\s+mitigation:) \S+/, "\$1 AGGRESSIVE")
+		.replaceAll(/(?m)^(\s+check_timings:) false/, "\$1 true")
+		.replaceAll(/(?m)^(\s+rotation-limit:) \d+/, "\$1 1500")
+		.replaceAll(/(?m)^(\s+blink-limit:) \d+/, "\$1 1")
+		.replaceAll(/(?m)^(\s+verbose-mode:) \S+/, "\$1 ALL")
+		.replace('$kick$', 'intave internals storelog {player} {check} {vl}')
+		.replace('$ban$', 'intave internals storelog {player} {check} {vl}')
+}
 
 def windows = System.getProperty("os.name").toLowerCase().contains("windows")
 def gradlewIn = { File dir ->
@@ -50,7 +117,9 @@ def buildIntave = tasks.register("buildIntave", Exec) {
 	onlyIf { useIntave }
 	workingDir intaveSource
 	commandLine(gradlewIn(intaveSource))
-	args("shadowJar", "--console=plain", "-q")
+	// (gradle/geyser-snapshot-init.gradle: a Geyser snapshot that's gone)
+	args("shadowJar", "--console=plain", "-q", "--no-configuration-cache",
+		"--init-script", file("gradle/geyser-snapshot-init.gradle").absolutePath)
 	environment("GIT_DIR", new File(intaveGit, ".git").absolutePath)
 	inputs.files(fileTree(intaveSource) {
 		include "src/main/**", "*.gradle.kts", "gradle.properties", "gradle/**"
@@ -65,6 +134,44 @@ def buildIntave = tasks.register("buildIntave", Exec) {
 			"commit", "-q", "--allow-empty", "-m", "stub for Intave's build"]
 			.execute(null, intaveGit).waitFor()
 	}
+}
+
+// Windfall builds with Maven, which isn't installed: a pinned copy here
+def mavenHome = new File(anticheatDir, "maven/apache-maven-3.9.9")
+def unpackMaven = tasks.register("unpackMaven", Copy) {
+	onlyIf { useWindfall }
+	dependsOn "downloadMaven"
+	from({ zipTree(new File(anticheatDir, "downloads/apache-maven-3.9.9-bin.zip")) })
+	into new File(anticheatDir, "maven")
+}
+def buildWindfall = tasks.register("buildWindfall", Exec) {
+	onlyIf { useWindfall }
+	dependsOn unpackMaven
+	workingDir windfallSource
+	commandLine(windows
+		? ["cmd", "/c", new File(mavenHome, "bin/mvn.cmd").absolutePath]
+		: [new File(mavenHome, "bin/mvn").absolutePath])
+	// no "obfuscate" profile: ProGuard only renames
+	args("-B", "-q", "package", "-DskipTests")
+	environment("JAVA_HOME", System.getProperty("java.home"))
+	inputs.files(fileTree(windfallSource) { include "src/main/**", "pom.xml" })
+	outputs.file(new File(windfallSource, "target/Windfall.jar"))
+}
+
+// Shard's Floodgate API snapshot needs a Geyser snapshot no repository has
+// any more - gradle/geyser-snapshot-init.gradle leaves it out (Shard's
+// folder untouched)
+def buildShard = tasks.register("buildShard", Exec) {
+	onlyIf { useShard }
+	workingDir shardSource
+	commandLine(gradlewIn(shardSource))
+	args("shadowJar", "--console=plain", "-q", "--no-configuration-cache",
+		"--init-script", file("gradle/geyser-snapshot-init.gradle").absolutePath)
+	inputs.files(fileTree(shardSource) {
+		include "src/main/**", "src/packetevents/**", "*.gradle.kts",
+			"gradle.properties", "gradle/**", "buildSrc/src/**"
+	})
+	outputs.dir(new File(shardSource, "build/libs"))
 }
 
 // ── Server software ──
@@ -104,13 +211,29 @@ abstract class DownloadFile extends DefaultTask
 }
 
 def downloadFabricServer = tasks.register("downloadFabricServer", DownloadFile) {
-	onlyIf { useGrim }
+	onlyIf { useGrim || useVanilla }
 	url = "https://meta.fabricmc.net/v2/versions/loader/${project.minecraft_version}/${project.loader_version}/1.1.2/server/jar"
 	destination = new File(anticheatDir, "downloads/fabric-server-${project.minecraft_version}-${project.loader_version}.jar")
 }
 
+tasks.register("downloadMaven", DownloadFile) {
+	onlyIf { useWindfall }
+	url = "https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.zip"
+	// (the file matched Apache's published sha512, 2026-11-03)
+	sha256 = "4ec3f26fb1a692473aea0235c300bd20f0f9fe741947c82c1234cefd76ac3a3c"
+	destination = new File(anticheatDir, "downloads/apache-maven-3.9.9-bin.zip")
+}
+
+// Windfall needs packetevents as its own plugin (Shard bundles its own)
+def downloadPacketEvents = tasks.register("downloadPacketEvents", DownloadFile) {
+	onlyIf { useWindfall }
+	url = "https://cdn.modrinth.com/data/HYKaKraK/versions/h0ncTpUP/packetevents-spigot-2.13.0.jar"
+	sha256 = "6d9ece0d87ee727a79a20b7ffbd432021609c6f52bafcb654fc2d3e9b6f064c5"
+	destination = new File(anticheatDir, "downloads/packetevents-spigot-2.13.0.jar")
+}
+
 def downloadPaperServer = tasks.register("downloadPaperServer", DownloadFile) {
-	onlyIf { useIntave }
+	onlyIf { useIntave || useWindfall || useShard }
 	url = "https://fill-data.papermc.io/v1/objects/1d70b1dab9cf4a6de615209a536f3a45a2186240253c428213ce2188ab95e5f7/paper-26.1.2-74.jar"
 	sha256 = "1d70b1dab9cf4a6de615209a536f3a45a2186240253c428213ce2188ab95e5f7"
 	destination = new File(anticheatDir, "downloads/paper-26.1.2-74.jar")
@@ -277,12 +400,14 @@ def prepareGrimServer = tasks.register("prepareGrimServer", PrepareTestServer) {
 		"config/bStats/config.yml": "enabled: false\n",
 		"plugins/bStats/config.yml": "enabled: false\n",
 		"vexbot_settings.json": '{"global": {"statsOn": false}}\n',
-		// every flag in the console, not only alerts past a threshold
+		// every flag in the console, not only alerts past a threshold;
+		// every check at its strictest (user, 2026-11-04: "ABSOLUTE MAX
+		// AGGRESSIVENESS") - see grimMaxAggressive
 		"config/GrimAC/config.yml": useGrim
-			? new File(grimSource, "common/src/main/resources/config/en.yml")
+			? grimMaxAggressive(new File(grimSource, "common/src/main/resources/config/en.yml")
 				.getText("UTF-8").replaceFirst(/(?m)^verbose:\s*\n(\s*)print-to-console: false/,
 					"verbose:\n\$1print-to-console: true")
-				.replaceFirst(/(?m)^check-for-updates: true/, "check-for-updates: false")
+				.replaceFirst(/(?m)^check-for-updates: true/, "check-for-updates: false"))
 			: ""
 	]
 	outputs.upToDateWhen { false }
@@ -306,19 +431,133 @@ def prepareIntaveServer = tasks.register("prepareIntaveServer", PrepareTestServe
 		// no usage statistics sent from test runs
 		"config/bStats/config.yml": "enabled: false\n",
 		"plugins/bStats/config.yml": "enabled: false\n",
-		// logging only: no kicks, no bans
+		// logging only: no kicks, no bans; the advanced config (below) is the
+		// one in force
 		"plugins/Intave/config.yml": useIntave
 			? new File(intaveSource, "src/main/resources/config.yml")
 				.getText("UTF-8")
 				.replaceFirst(/(?ms)^kick-commands:\s*\n(\s+-[^\n]*\n)+/, "kick-commands: []\n")
 				.replaceFirst(/(?ms)^ban-commands:\s*\n(\s+-[^\n]*\n)+/, "ban-commands: []\n")
+				.replaceFirst(/(?m)^config:\s*\S+/, "config: ADVANCED")
+				.replaceFirst(/(?m)^physics-mm:\s*\S+/, "physics-mm: AGGRESSIVE")
+			: "",
+		// strictest (user, 2026-11-04: "ABSOLUTE MAX AGGRESSIVENESS")
+		"plugins/Intave/advanced.yml": useIntave
+			? intaveMaxAggressive(new File(intaveSource, "src/main/resources/advanced.yml")
+				.getText("UTF-8"))
+			: "",
+		// Intave's strictest trust level for everyone (it takes the first
+		// intave.trust.* permission a player has; the bot isn't op)
+		"permissions.yml": "intave.trust.darkred:\n  default: true\n"
+	]
+	outputs.upToDateWhen { false }
+}
+
+// offline mode: the bot's UUID comes from its name
+def botUuid = UUID.nameUUIDFromBytes("OfflinePlayer:Wurst-Bot".getBytes("UTF-8"))
+
+def prepareWindfallServer = tasks.register("prepareWindfallServer", PrepareTestServer) {
+	dependsOn buildWindfall, downloadPaperServer, downloadPacketEvents
+	useServer = useWindfall
+	serverDir = new File(anticheatDir, "windfall")
+	serverJar.from(downloadPaperServer.flatMap { it.destination })
+	serverJarName = "paper.jar"
+	addons.from(new File(windfallSource, "target/Windfall.jar"))
+	addons.from(downloadPacketEvents.flatMap { it.destination })
+	addonDir = "plugins"
+	patchGrim = false
+	freshDirs = ["world", "world_nether", "world_the_end", "logs",
+		"plugins/Windfall"]
+	textFiles = [
+		"eula.txt": "eula=true\n",
+		"server.properties": serverProperties(windfallPort, "Wurst test (Windfall)"),
+		// op only for /windfall alerts (see the top) - Windfall's checks
+		// don't look at op or permissions
+		"ops.json": """[{"uuid": "${botUuid}", "name": "Wurst-Bot", "level": 4, "bypassesPlayerLimit": false}]\n""",
+		// no usage statistics sent from test runs
+		"config/bStats/config.yml": "enabled: false\n",
+		"plugins/bStats/config.yml": "enabled: false\n",
+		"plugins/packetevents/config.yml": "check-for-updates: false\n",
+		// logging only: no kicks, no bans (setbacks stay, like Grim's);
+		// strictest: setback on the first violation, its severity system at
+		// the top tier from VL 0 ("Higher total VL = stricter checking")
+		"plugins/Windfall/config.yml": useWindfall
+			? new File(windfallSource, "src/main/resources/config.yml")
+				.getText("UTF-8")
+				.replaceFirst(/(?m)^(punishments:\s*\n\s*enabled:)\s*true/, "\$1 false")
+				.replaceAll(/(?m)^(\s+setback-vl:)\s*\d+/, "\$1 1")
+				.replaceAll(/(?m)^(\s+(?:moderate|high|extreme)-vl:)\s*\d+/, "\$1 0")
 			: ""
 	]
 	outputs.upToDateWhen { false }
 }
 
+def prepareShardServer = tasks.register("prepareShardServer", PrepareTestServer) {
+	dependsOn buildShard, downloadPaperServer
+	useServer = useShard
+	serverDir = new File(anticheatDir, "shard")
+	serverJar.from(downloadPaperServer.flatMap { it.destination })
+	serverJarName = "paper.jar"
+	addons.from(fileTree(new File(shardSource, "build/libs")) {
+		include "Shard-*.jar"
+		exclude "*-thin.jar"
+	})
+	addonDir = "plugins"
+	patchGrim = false
+	freshDirs = ["world", "world_nether", "world_the_end", "logs",
+		"plugins/Shard"]
+	def shardConfig = { String name ->
+		useShard ? new File(shardSource, "src/main/resources/" + name)
+			.getText("UTF-8") : ""
+	}
+	textFiles = [
+		"eula.txt": "eula=true\n",
+		"server.properties": serverProperties(shardPort, "Wurst test (Shard)"),
+		"ops.json": "[]\n",
+		"config/bStats/config.yml": "enabled: false\n",
+		"plugins/bStats/config.yml": "enabled: false\n",
+		// its AI check needs Shard's paid API (user: don't enable it); no
+		// telemetry or punishment sync with Shard's panel either
+		"plugins/Shard/config.yml": shardConfig("config.yml")
+			.replaceFirst(/(?m)^(ai:\s*\n(?:\s*#[^\n]*\n)*\s*enabled:)\s*true/, "\$1 false")
+			.replaceFirst(/(?m)^(telemetry:\s*\n(?:\s*#[^\n]*\n)*\s*enabled:)\s*true/, "\$1 false")
+			.replaceFirst(/(?m)^(\s+punishments:)\s*sync/, "\$1 off"),
+		// logging only: no kicks, no bans
+		"plugins/Shard/punishments.yml": shardConfig("punishments.yml")
+			.replaceAll(/(?m)^\s*- "(kick|tempban|ban)\b[^"]*"\s*\n/, ""),
+		// strictest mitigation rules: act on any AI signal at once. (Moot
+		// with the AI check off - every rule reads its probability, buffer
+		// and score - but set anyway.)
+		"plugins/Shard/mitigations.yml": shardConfig("mitigations.yml")
+			.replaceAll(/(probability: \{ above: )[0-9.]+/, "\$10.01")
+			.replaceAll(/(\b(?:buffer|score|answers): \{ above: )[0-9.]+/, "\$10")
+			.replaceAll(/(for-seconds: )\d+/, "\$10")
+			.replaceAll(/(delay-seconds: )\d+/, "\$10")
+	]
+	outputs.upToDateWhen { false }
+}
+
+// no mods at all: what a vanilla server sees of the client (VanillaSpoof)
+def prepareVanillaServer = tasks.register("prepareVanillaServer", PrepareTestServer) {
+	dependsOn downloadFabricServer
+	useServer = useVanilla
+	serverDir = new File(anticheatDir, "vanilla")
+	serverJar.from(downloadFabricServer.flatMap { it.destination })
+	serverJarName = "fabric-server.jar"
+	addonDir = "mods"
+	patchGrim = false
+	freshDirs = ["world", "logs"]
+	textFiles = [
+		"eula.txt": "eula=true\n",
+		"server.properties": serverProperties(vanillaPort, "Wurst test (vanilla)"),
+		"ops.json": "[]\n"
+	]
+	outputs.upToDateWhen { false }
+}
+
 tasks.named("runClientGameTest") {
-	dependsOn prepareGrimServer, prepareIntaveServer
+	dependsOn prepareGrimServer, prepareIntaveServer, prepareVanillaServer,
+		prepareWindfallServer, prepareShardServer
 }
 
 loom {
@@ -328,9 +567,23 @@ loom {
 				vmArg("-Dwurst.test.grimServer=${new File(anticheatDir, "grim").absolutePath}:${grimPort}")
 			if(useIntave)
 				vmArg("-Dwurst.test.intaveServer=${new File(anticheatDir, "intave").absolutePath}:${intavePort}")
+			if(useVanilla)
+				vmArg("-Dwurst.test.vanillaServer=${new File(anticheatDir, "vanilla").absolutePath}:${vanillaPort}")
+			if(useWindfall)
+				vmArg("-Dwurst.test.windfallServer=${new File(anticheatDir, "windfall").absolutePath}:${windfallPort}")
+			if(useShard)
+				vmArg("-Dwurst.test.shardServer=${new File(anticheatDir, "shard").absolutePath}:${shardPort}")
 			// every hack and command takes ~10 min per server
 			if(providers.gradleProperty("noFeatureSweep").isPresent())
 				vmArg("-Dwurst.test.noFeatureSweep=true")
+			// -PfromInventory: test items in the main inventory, not the
+			// hotbar (hacks open the inventory to fetch them)
+			if(providers.gradleProperty("fromInventory").isPresent())
+				vmArg("-Dwurst.test.fromInventory=true")
+			// training pauses while the test client runs (TrainerHold);
+			// -PkeepTraining leaves it running
+			if(!providers.gradleProperty("keepTraining").isPresent())
+				vmArg("-Dwurst.test.trainScript=${file("scripts/train.ps1").absolutePath}")
 			// -Pfeatures=blink,criticals: only those features' tests
 			def features = providers.gradleProperty("features").getOrNull()
 			if(features)

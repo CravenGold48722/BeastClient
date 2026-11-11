@@ -273,8 +273,16 @@ public final class AutoBuildHack extends Hack
 				return;
 			}
 			
-			MC.rightClickDelay = 4;
 			faceTarget.face(params.hitVec());
+			// The click goes out before this tick's movement packet: only once
+			// the rotation the server has is on that block (Grim RotationPlace
+			// "post-flying" when it went out in the tick of the turn; a turn
+			// between clicks also keeps two of them out of one Grim tick -
+			// MultiPlace)
+			if(BlockBreaker.isTurnPending(params.neighbor()))
+				return;
+			
+			MC.rightClickDelay = 4;
 			InteractionSimulator.rightClickBlock(params.toHitResult(),
 				swingHand.getSelected());
 			return;

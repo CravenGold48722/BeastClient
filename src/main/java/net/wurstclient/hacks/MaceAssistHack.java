@@ -60,6 +60,9 @@ import net.wurstclient.settings.EnumSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.settings.filters.FilterSpeedSetting;
+import net.wurstclient.events.MouseUpdateListener;
+import net.wurstclient.events.MouseUpdateListener.MouseUpdateEvent;
+import net.wurstclient.util.AimFriction;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.CameraAim;
 import net.wurstclient.util.EntityUtils;
@@ -71,6 +74,8 @@ import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
 import net.wurstclient.events.PacketOutputListener;
 import net.wurstclient.hacks.maceassist.SpearAssist;
+import net.wurstclient.hacks.maceassist.StunSlamPlan;
+import net.minecraft.world.item.component.AttackRange;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 
 /**
@@ -81,9 +86,10 @@ import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 @SearchTags({"mace assist", "MaceAssist", "better mace swap", "mace swap",
 	"attribute swap", "pearl catch", "lunge swap", "mace aim assist",
 	"mace trigger bot", "auto chestplate", "stun slam", "wind charge"})
-public final class MaceAssistHack extends Hack implements UpdateListener,
-	RenderListener, PlayerAttacksEntityListener, LeftClickListener,
-	RightClickListener, PacketInputListener, PacketOutputListener
+public final class MaceAssistHack extends Hack
+	implements UpdateListener, RenderListener, PlayerAttacksEntityListener,
+	LeftClickListener, RightClickListener, PacketInputListener,
+	PacketOutputListener, MouseUpdateListener
 {
 	// ── Attribute swapping ───────────────────────────────────────────────
 	
@@ -120,12 +126,34 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 			SwapScope.values(), SwapScope.ALL);
 	
 	private final CheckboxSetting stunSlam = new CheckboxSetting("Stun slam",
-		"When the target is blocking, hits them with an axe to break the"
-			+ " shield and follows up with a mace slam.\n\n"
+		"When the target's shield would block you, your hit goes out with an"
+			+ " axe to break the shield, and if you're falling far enough for"
+			+ " a smash, the mace hits the very next tick - the two-tick"
+			+ " timing XCOW and Corzen01 teach. The mace waits for a hit the"
+			+ " server can verify and gives up when the smash can't happen"
+			+ " any more.\n\n"
+			+ "From behind the shield (more than 90° off where the target"
+			+ " looks, with a margin) there's nothing to break: the mace goes"
+			+ " straight in (the \"backstab\").\n\n"
 			+ "Works with any item - a sword, a wind charge, a carrot, an"
 			+ " empty hand - and puts that item straight back in your hand"
 			+ " afterwards, as long as §lSwap scope§r is set to §lAll§r.",
 		true);
+	
+	private final CheckboxSetting spearStunSlam =
+		new CheckboxSetting("Spear stun slam",
+			"With a spear held since the tick before, the trigger bot starts a"
+				+ " stun slam from the spear's reach (4.5 blocks): the axe hit"
+				+ " right after switching away from the spear still counts the"
+				+ " spear's range - in vanilla's crosshair and in Grim's Reach"
+				+ " check. One tick earlier on a fast dive, so the mace hit"
+				+ " the tick after is still in reach (Corzen01, #15).\n\n"
+				+ "By hand it's vanilla: press your axe key with the click (a"
+				+ " plain click with a spear goes out as a stab).\n\n"
+				+ "Off by default: a vanilla server accepts it and Grim's Reach"
+				+ " code models it, but it hasn't been tested against a real"
+				+ " anticheat server yet (Paper, Intave unknown).",
+			false);
 	
 	private final CheckboxSetting swapOnPlayers =
 		new CheckboxSetting("Swap on players",
@@ -226,12 +254,26 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		false);
 	
 	private final SliderSetting aimSpeed = new SliderSetting("Aim speed",
-		"How fast the camera turns toward the target, in degrees per second -"
-			+ " the top speed, and how quickly it settles (faster = firmer).\n\n"
+		"The fastest the camera turns toward the target, in degrees per"
+			+ " second. Below that it turns like AimAssist: quick at first,"
+			+ " then easing onto the target (8x the degrees left per second, at"
+			+ " least 340), never past it.\n\n"
 			+ "On top of this it moves as fast as the target moves across your"
 			+ " view, so once it's on the target it stays there.\n\n"
-			+ "AimAssist turns at 720.",
+			+ "Drag your mouse against it and it lets go almost completely"
+			+ " until you stop.",
 		15, 0.5, 1800, 0.5, ValueDisplay.DECIMAL);
+	
+	private final SliderSetting aimStickiness = new SliderSetting(
+		"Aim stickiness",
+		"While the aim assist turns your camera, how much your own mouse is"
+			+ " slowed down while it closes in on the target, so the crosshair"
+			+ " settles on it instead of sliding past. Never while pulling"
+			+ " away - that stays as easy as without it.\n\n"
+			+ "0%: your mouse always turns the camera at full speed.",
+		0.5, 0, 0.9, 0.05, ValueDisplay.PERCENTAGE);
+	
+	private final AimFriction friction = new AimFriction();
 	
 	private final SliderSetting aimRange = new SliderSetting("Aim range",
 		"How far away a target can be before aim assist ignores it.", 15, 0.5,
@@ -322,7 +364,8 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 	private final SliderSetting triggerHitsPerFall = new SliderSetting(
 		"Trigger hits per fall",
 		"How many times the trigger bot may attack before you touch the ground"
-			+ " again.",
+			+ " again - or get launched up again (a wind charge, Wind Burst):"
+			+ " that's a new fall.",
 		2, 1, 10, 1, ValueDisplay.INTEGER);
 	
 	private final SliderSetting triggerCooldown =
@@ -361,15 +404,18 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 	private int swapBackTimer;
 	private boolean maceSwapped;
 	
-	private Entity slamTarget;
-	private int slamMaceSlot = -1;
-	private int slamReturnSlot = -1;
-	private boolean slamPending;
+	/**
+	 * Degrees past the shield's 90° that still count as blockable - the
+	 * target's head yaw you see is a little behind the server's (council:
+	 * 15-20).
+	 */
+	private static final double BACKSTAB_MARGIN = 20;
 	
-	private Entity slamFollowUpTarget;
-	private int slamFollowUpSlot = -1;
-	private int slamFollowUpDelay;
-	private boolean slamFollowUpPending;
+	/** The mace half of a stun slam, from the tick after the axe hit. */
+	private final StunSlamPlan slamPlan = new StunSlamPlan();
+	private Entity slamTarget;
+	/** PacketOrder.ticksEnded() when the axe hit went out. */
+	private long slamAxeTick;
 	
 	private int pearlReturnSlot = -1;
 	
@@ -517,6 +563,8 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 	private Entity aimOffsetTarget;
 	/** A turn is under way (until it has settled); otherwise the aim holds. */
 	private boolean turning;
+	/** The aim assist ran last frame (its mouse friction applies). */
+	private boolean aimEngaged;
 	
 	/** Turning sideways toward the target and holding W, see Approach. */
 	private boolean approaching;
@@ -550,6 +598,20 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 	private int triggerHitsThisFall;
 	private int triggerCooldownTimer;
 	private boolean wasInAir;
+	private double lastVy;
+	/** The fastest upward speed since you last went down or landed. */
+	private double riseSpeed;
+	/** A jump starts at 0.42 blocks per tick; a wind charge, Wind Burst... */
+	private static final double LAUNCH_SPEED = 0.6;
+	/** Consecutive ticks the selected slot has stayed the same. */
+	private int sameSlotTicks;
+	private int lastTickSlot = -1;
+	/**
+	 * To notice a new world or a respawn (state from before is stale) -
+	 * identity hashes, so the old world isn't kept alive.
+	 */
+	private int lastPlayerId;
+	private int lastLevelId;
 	private boolean chestplateEquipped;
 	
 	public MaceAssistHack()
@@ -563,6 +625,7 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		addSetting(swapBackDelay);
 		addSetting(swapScope);
 		addSetting(stunSlam);
+		addSetting(spearStunSlam);
 		addSetting(swapOnPlayers);
 		addSetting(swapOnMobs);
 		
@@ -586,6 +649,7 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		addSetting(minFallDistance);
 		addSetting(aimMode);
 		addSetting(humanizeAim);
+		addSetting(aimStickiness);
 		addSetting(approachTarget);
 		addSetting(checkLOS);
 		
@@ -620,6 +684,7 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		EVENTS.add(RightClickListener.class, this);
 		EVENTS.add(PacketInputListener.class, this);
 		EVENTS.add(PacketOutputListener.class, this);
+		EVENTS.add(MouseUpdateListener.class, this);
 	}
 	
 	@Override
@@ -632,6 +697,8 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		EVENTS.remove(RightClickListener.class, this);
 		EVENTS.remove(PacketInputListener.class, this);
 		EVENTS.remove(PacketOutputListener.class, this);
+		EVENTS.remove(MouseUpdateListener.class, this);
+		friction.reset();
 		
 		if(MC.player != null)
 		{
@@ -651,6 +718,18 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 	{
 		if(MC.player == null || MC.level == null)
 			return;
+			
+		// a new world or a respawn: nothing queued from before applies (a
+		// slot to go back to, a target that no longer exists...)
+		int playerId = System.identityHashCode(MC.player);
+		int levelId = System.identityHashCode(MC.level);
+		if(playerId != lastPlayerId || levelId != lastLevelId)
+		{
+			if(lastPlayerId != 0)
+				fullReset();
+			lastPlayerId = playerId;
+			lastLevelId = levelId;
+		}
 		
 		clock++;
 		
@@ -658,6 +737,8 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		int currentSlot = inventory.getSelectedSlot();
 		if(!inventory.getItem(currentSlot).is(Items.ENDER_PEARL))
 			lastSelectedSlot = currentSlot;
+		sameSlotTicks = currentSlot == lastTickSlot ? sameSlotTicks + 1 : 0;
+		lastTickSlot = currentSlot;
 		
 		boolean inAir = !MC.player.onGround();
 		if(wasInAir && !inAir)
@@ -667,8 +748,25 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		}
 		wasInAir = inAir;
 		
+		// a new fall without landing - the top of a wind charge's, a wind
+		// burst's or a smash's bounce - counts as a new fall for the trigger
+		// (not the mace's own 0.01 hop after a smash - MaceItem.hurtEnemy -
+		// nor the few ticks of it: only a real launch, faster than a jump)
+		double vy = MC.player.getDeltaMovement().y;
+		if(!inAir || vy <= 0)
+		{
+			if(inAir && lastVy > 0 && riseSpeed > LAUNCH_SPEED)
+				triggerHitsThisFall = 0;
+			riseSpeed = 0;
+		}else
+			riseSpeed = Math.max(riseSpeed, vy);
+		lastVy = vy;
+		
 		if(triggerCooldownTimer > 0)
 			triggerCooldownTimer--;
+		
+		// first: the stun slam's mace hit is due the tick after the axe
+		tickStunSlam();
 		
 		tickLungeSwap();
 		spear.onUpdate();
@@ -691,8 +789,6 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		// a cobweb, when one can go down, comes before the wind charge
 		if(usePressedNow && !startCobweb() && windOnRightClick.isChecked())
 			tickWindRightClick();
-		
-		tickStunSlam();
 		
 		if(maceSwapped && --swapBackTimer <= 0)
 			restoreOriginalSlot();
@@ -761,6 +857,7 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 	@Override
 	public void onRender(PoseStack matrixStack, float partialTicks)
 	{
+		aimEngaged = false;
 		if(MC.player == null || MC.level == null)
 			return;
 			
@@ -825,6 +922,7 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		// the sides (directly above it, any direction does).
 		AABB band = inset(footprint, ON_TARGET_MARGIN, ON_TARGET_SHARE);
 		boolean onTarget = isRayOn(eyes, look, band);
+		aimEngaged = true;
 		
 		// Held still while on it. A turn starts once the crosshair has slid
 		// off, and runs until it has settled near the middle - so it neither
@@ -849,8 +947,12 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		}
 		Vec3 point = aimZone.getCenter().add(aimOffset);
 		
-		cameraAim.turnYawSmoothly(lockedTarget, point.subtract(drawnOffset),
-			partialTicks, humanizeAim.isChecked(), aimSpeed.getValue());
+		// turned like AimAssist (the reference video), giving way to your
+		// mouse (user, 2026-11-03: "smooth, EXTREMELY human, and easy to pull
+		// away from")
+		cameraAim.assistYaw(lockedTarget, point.subtract(drawnOffset),
+			partialTicks, yawTolerance(footprint, eyes, point),
+			humanizeAim.isChecked(), aimSpeed.getValue());
 		
 		// Settled once there and the target isn't sliding across your view;
 		// while it is, the aim keeps following it smoothly instead of
@@ -862,6 +964,63 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 			HumanAim.relativeVelocity(lockedTarget, MC.player))[0]);
 		if(left < SETTLED_YAW && sliding < STILL_RATE)
 			turning = false;
+	}
+	
+	/**
+	 * How far (degrees) your yaw can be from the point and still be on the
+	 * footprint: its half width as seen from here.
+	 */
+	private static double yawTolerance(AABB footprint, Vec3 eyes, Vec3 point)
+	{
+		double horizontal =
+			Math.max(Math.hypot(point.x - eyes.x, point.z - eyes.z), 0.1);
+		return Math.toDegrees(
+			Math.atan(Math.min(footprint.getXsize(), footprint.getZsize()) / 2
+				/ horizontal));
+	}
+	
+	/**
+	 * While the aim assist turns your camera, your mouse still does too -
+	 * slowed down while it closes in on the target (Aim stickiness), so the
+	 * crosshair settles on it, never while pulling away (see AimFriction).
+	 * Sideways only, like the aim.
+	 */
+	@Override
+	public void onMouseUpdate(MouseUpdateEvent event)
+	{
+		LocalPlayer player = MC.player;
+		Entity target = lockedTarget;
+		if(player == null || target == null || !aimEngaged
+			|| aimStickiness.getValue() <= 0 || MC.screen != null
+			|| !MC.mouseHandler.isMouseGrabbed() || MC.options.smoothCamera
+			|| player.isScoping())
+		{
+			friction.reset();
+			return;
+		}
+		
+		float partialTicks =
+			MC.getDeltaTracker().getGameTimeDeltaPartialTick(true);
+		Vec3 eyes = CameraAim.getFrameEyes(partialTicks);
+		Vec3 drawnOffset = EntityUtils.getLerpedPos(target, partialTicks)
+			.subtract(target.position());
+		AABB footprint = footprint(target.getBoundingBox()
+			.inflate(target.getPickRadius()).move(drawnOffset), eyes);
+		// directly above it every direction is on it
+		if(footprint.contains(eyes))
+			return;
+		
+		Vec3 center = footprint.getCenter();
+		double errorYaw = Mth.wrapDegrees(player.getYRot()
+			- RotationUtils.getNeededRotations(eyes, center).yaw());
+		AimFriction.Target t = new AimFriction.Target(errorYaw, 0,
+			yawTolerance(footprint, eyes, center), -180, 180);
+		
+		double step = Rotation.getMouseStep();
+		int signX = MC.options.invertMouseX().get() ? -1 : 1;
+		double[] slowed = AimFriction.slow(event.getDeltaX() * step * signX, 0,
+			t, aimStickiness.getValue(), 0);
+		event.setDeltaX(friction.toCounts(slowed[0], 0, step, signX, 1)[0]);
 	}
 	
 	/**
@@ -1197,6 +1356,10 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		if(lockedTarget == null || !isValidTarget(lockedTarget))
 			return false;
 		
+		// a stun slam is under way: its mace hit is the next attack
+		if(slamPlan.isActive())
+			return false;
+		
 		if(triggerHitsThisFall >= triggerHitsPerFall.getValueI())
 			return false;
 		
@@ -1210,12 +1373,44 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 			&& MC.player.getAttackStrengthScale(0) < 0.9F)
 			return false;
 		
-		if(!isCrosshairOnTarget(lockedTarget)
-			|| !HitCheck.isVerifiable(lockedTarget))
+		double spearReach = spearSlamReach(lockedTarget);
+		double reach = spearReach > 0 ? spearReach : Math
+			.min(triggerRange.getValue(), MC.player.entityInteractionRange());
+		if(!isCrosshairOnTarget(lockedTarget, reach) || !HitCheck.isVerifiable(
+			lockedTarget,
+			spearReach > 0 ? spearReach : MC.player.entityInteractionRange()))
 			return false;
 		
 		attackTarget(lockedTarget);
 		return true;
+	}
+	
+	/**
+	 * How far a stun slam starting now reaches from the spear in your hand,
+	 * or 0 if there's no such slam (Corzen01's spear stun slam, #15). The
+	 * axe hit right after switching away from a spear counts the spear's
+	 * range: vanilla's crosshair picks with the held item's attack range and
+	 * doesn't re-check it for an axe, and Grim's Reach uses the range of the
+	 * item held at the start of the tick when the new one has none. The spear
+	 * has to have been in hand since the tick before, or the server never
+	 * saw it there.
+	 */
+	private double spearSlamReach(Entity target)
+	{
+		if(!stunSlam.isChecked() || !spearStunSlam.isChecked()
+			|| sameSlotTicks < 2)
+			return 0;
+		
+		AttackRange range =
+			MC.player.getMainHandItem().get(DataComponents.ATTACK_RANGE);
+		if(range == null || !(target instanceof LivingEntity living)
+			|| !living.isBlocking() || !canShieldBlockYou(living)
+			|| findItem(ItemTags.AXES) == -1 || !willSmashNextTick())
+			return 0;
+		
+		// a little short of it - the server's copy of the target lags yours
+		return Math.max(MC.player.entityInteractionRange(),
+			range.effectiveMaxRange(MC.player) - 0.25);
 	}
 	
 	/**
@@ -1225,11 +1420,9 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 	 * (and Trigger range), against the target's hitbox as you see it, with
 	 * no block in between.
 	 */
-	private boolean isCrosshairOnTarget(Entity target)
+	private boolean isCrosshairOnTarget(Entity target, double reach)
 	{
 		Vec3 eyes = MC.player.getEyePosition();
-		double reach = Math.min(triggerRange.getValue(),
-			MC.player.entityInteractionRange());
 		Vec3 end = eyes.add(MC.player.getLookAngle().scale(reach));
 		
 		AABB box = target.getBoundingBox().inflate(target.getPickRadius());
@@ -1300,6 +1493,15 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		if(MC.player == null || target == null || slamAttacking)
 			return;
 			
+		// A stun slam is under way: no new swaps. If you're doing its mace
+		// hit yourself (mace key + click, XCOW-style), it doesn't send one too.
+		if(slamPlan.isActive())
+		{
+			if(MC.player.getMainHandItem().is(Items.MACE))
+				slamPlan.userMaced();
+			return;
+		}
+		
 		// Something already went out this tick (an earlier hit, a use...), so a
 		// swap now would only reach the server next tick - after this hit,
 		// which then wouldn't get the mace anyway. Grim flags slot changes
@@ -1320,7 +1522,8 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		int startingSlot = inventory.getSelectedSlot();
 		ItemStack held = MC.player.getMainHandItem();
 		
-		boolean weapon = isSword(held) || isAxe(held) || held.is(Items.MACE);
+		boolean weapon = isSword(held) || isAxe(held) || isSpear(held)
+			|| held.is(Items.MACE);
 		boolean allowedByScope =
 			weapon || swapScope.getSelected() == SwapScope.ALL;
 		
@@ -1329,17 +1532,13 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 			return;
 		
 		if(stunSlam.isChecked() && target instanceof LivingEntity living
-			&& living.isBlocking() && doStunSlam(target, held, startingSlot))
+			&& living.isBlocking() && doStunSlam(living, held, startingSlot))
 			return;
 		
 		if(!attributeSwap.isChecked() || maceSwapped)
 			return;
 		
-		boolean wantDensity = smartSwitch.isChecked()
-			? !MC.player.onGround() && MC.player.getDeltaMovement().y < -0.3
-			: maceMode.getSelected() == MaceMode.DENSITY;
-		
-		int maceSlot = findBestMace(wantDensity);
+		int maceSlot = findBestMace(wantDensity());
 		if(maceSlot == -1 || maceSlot == startingSlot)
 			return;
 		
@@ -1350,137 +1549,167 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 	}
 	
 	/**
-	 * Breaks the target's shield with an axe and queues a mace slam behind it.
+	 * Stun slam, tick N: puts the axe in hand for the hit that is going out
+	 * (the click or trigger-bot hit that fired this event - it IS the axe
+	 * hit, nothing extra is sent), and when a smash can land, lines up the
+	 * mace for tick N+1 (StunSlamPlan, run from tickStunSlam).
 	 *
-	 * @return true if a slam was queued.
+	 * <p>
+	 * There used to be a third hit with the starting item 2-3 ticks later.
+	 * After the mace that's in the target's i-frames and below the mace's
+	 * damage, so vanilla throws it away (LivingEntity.hurtServer) - all it did
+	 * was reset your own attack strength.
+	 *
+	 * @return true if the axe takes this hit.
 	 */
-	private boolean doStunSlam(Entity target, ItemStack held, int startingSlot)
+	private boolean doStunSlam(LivingEntity target, ItemStack held,
+		int startingSlot)
 	{
-		boolean wantDensity = maceMode.getSelected() == MaceMode.DENSITY;
-		int maceSlot = findBestMace(wantDensity);
-		
-		// already holding the axe, so the hit that just went out is the one
-		// that breaks the shield - all that's left is the follow-up
-		if(isAxe(held))
-		{
-			if(maceSlot != -1)
-			{
-				queueMaceSlam(target, maceSlot, startingSlot);
-				queueSlamFollowUp(target, startingSlot, 3);
-				return true;
-			}
-			
-			int swordSlot = findItem(ItemTags.SWORDS);
-			if(swordSlot != -1)
-			{
-				queueSlamFollowUp(target, swordSlot, 3);
-				return true;
-			}
-			
+		// From behind the shield there's nothing to break - and an axe hit
+		// that isn't blocked deals its damage, after which the mace only
+		// deals the difference. Straight in with the mace (attribute swap).
+		if(!canShieldBlockYou(target))
 			return false;
-		}
 		
-		// anything else - a sword, a wind charge, a carrot, an empty hand -
-		// gets the same treatment: axe out, shield broken, back to whatever
-		// you were holding
-		int axeSlot = findItem(ItemTags.AXES);
+		int axeSlot = isAxe(held) ? startingSlot : findItem(ItemTags.AXES);
 		if(axeSlot == -1)
 			return false;
 		
-		selectSlot(axeSlot);
-		slamAttacking = true;
-		MC.gameMode.attack(MC.player, target);
-		MC.player.swing(InteractionHand.MAIN_HAND);
-		slamAttacking = false;
+		int maceSlot = willSmashNextTick() ? findBestMace(wantDensity()) : -1;
 		
-		if(maceSlot != -1)
-		{
-			queueMaceSlam(target, maceSlot, startingSlot);
-			queueSlamFollowUp(target, startingSlot, 3);
-		}else
-			queueSlamFollowUp(target, startingSlot, 2);
+		// already holding the axe and no smash to follow: your hit is the
+		// shield break, nothing to switch
+		if(axeSlot == startingSlot && maceSlot == -1)
+			return true;
+			
+		// goes out before the hit: vanilla's attack sends the held slot
+		// first (MultiPlayerGameMode.ensureHasSentCarriedItem)
+		if(axeSlot != startingSlot)
+			selectSlot(axeSlot);
+			
+		// an attribute swap still waiting to switch back: what you held
+		// before it is where the slam ends up, and the slam does the
+		// switching back from here
+		int returnSlot = startingSlot;
+		if(maceSwapped && originalSlot >= 0 && originalSlot <= 8)
+			returnSlot = originalSlot;
+		maceSwapped = false;
+		originalSlot = -1;
 		
+		slamTarget = target;
+		slamAxeTick = PacketOrder.ticksEnded();
+		slamPlan.begin(returnSlot, maceSlot);
 		return true;
 	}
 	
-	private void queueMaceSlam(Entity target, int maceSlot, int returnSlot)
-	{
-		slamTarget = target;
-		slamMaceSlot = maceSlot;
-		slamReturnSlot = returnSlot;
-		slamPending = true;
-	}
-	
-	private void queueSlamFollowUp(Entity target, int returnSlot,
-		int delayTicks)
-	{
-		slamFollowUpTarget = target;
-		slamFollowUpSlot = returnSlot;
-		slamFollowUpDelay = delayTicks;
-		slamFollowUpPending = true;
-	}
-	
+	/**
+	 * Stun slam, tick N+1 and on: the mace hit at the first tick it can be
+	 * verified, or the slot back where it was.
+	 */
 	private void tickStunSlam()
 	{
-		// A queued hit whose target died, despawned or got left behind in
-		// another dimension is dropped. Entity IDs get reused, so attacking
-		// it anyway could hit something else entirely.
-		if(slamTarget != null && !isStillAttackable(slamTarget))
-		{
-			slamPending = false;
-			slamTarget = null;
-		}
-		if(slamFollowUpTarget != null && !isStillAttackable(slamFollowUpTarget))
-			slamFollowUpTarget = null;
-		
-		// (waits for a tick where the mace can go out before the hit)
-		if(slamPending && slamTarget != null && PacketOrder.canChangeSlotNow())
-		{
-			slamPending = false;
-			int prev = MC.player.getInventory().getSelectedSlot();
-			selectSlot(slamMaceSlot);
+		// not in the axe hit's own tick - a click (handleKeybinds) and the
+		// trigger bot both come before this in the same tick
+		if(!slamPlan.isActive() || PacketOrder.ticksEnded() == slamAxeTick)
+			return;
 			
-			if(!slamAttacking)
+		// A target that died, despawned or got left behind in another
+		// dimension is dropped. Entity IDs get reused, so attacking it anyway
+		// could hit something else entirely.
+		Entity target = slamTarget;
+		boolean targetValid = target != null && isStillAttackable(target);
+		int maceSlot = slamPlan.maceSlot();
+		boolean maceInSlot = maceSlot >= 0
+			&& MC.player.getInventory().getItem(maceSlot).is(Items.MACE);
+		boolean verifiable =
+			targetValid && MC.screen == null && HitCheck.isVerifiable(target);
+		
+		StunSlamPlan.Action action =
+			slamPlan.tick(PacketOrder.canChangeSlotNow(), verifiable,
+				targetValid, isSmashPossible(), maceInSlot);
+		
+		switch(action.kind())
+		{
+			case FIRE_MACE ->
 			{
+				// SetCarried(mace), Attack, Swing - then the slot back, which
+				// PacketOrder holds back to the start of next tick
+				selectSlot(action.slot());
 				slamAttacking = true;
-				MC.gameMode.attack(MC.player, slamTarget);
+				MC.gameMode.attack(MC.player, target);
 				MC.player.swing(InteractionHand.MAIN_HAND);
 				slamAttacking = false;
+				selectSlot(action.returnSlot());
 			}
 			
-			selectSlot(slamReturnSlot != -1 ? slamReturnSlot : prev);
-			slamTarget = null;
+			case RETURN -> selectSlot(action.slot());
+			
+			case NONE ->
+				{
+				}
 		}
 		
-		if(slamFollowUpPending && slamFollowUpDelay > 0
-			&& --slamFollowUpDelay == 0)
-		{
-			if(!PacketOrder.canChangeSlotNow())
-			{
-				// the slam just went out - follow up next tick
-				slamFollowUpDelay = 1;
-				return;
-			}
+		if(!slamPlan.isActive())
+			slamTarget = null;
+	}
+	
+	/**
+	 * Whether the target's raised shield would block a hit from where you
+	 * are. Vanilla (LivingEntity.applyItemBlocking): blocked within 90° of
+	 * where its head looks, measured horizontally only - straight above
+	 * counts as blocked. With {@link #BACKSTAB_MARGIN} to spare, since the
+	 * head yaw you see lags the server's.
+	 */
+	private boolean canShieldBlockYou(LivingEntity target)
+	{
+		double dx = MC.player.getX() - target.getX();
+		double dz = MC.player.getZ() - target.getZ();
+		double dist = Math.sqrt(dx * dx + dz * dz);
+		if(dist < 1e-4)
+			return true;
+		
+		Vec3 view = Vec3.directionFromRotation(0, target.getYHeadRot());
+		double cos = (view.x * dx + view.z * dz) / dist;
+		double angle = Math.toDegrees(Math.acos(Mth.clamp(cos, -1, 1)));
+		return angle <= 90 + BACKSTAB_MARGIN;
+	}
+	
+	/**
+	 * Whether a mace hit next tick would be a smash: in the air, not gliding,
+	 * and past vanilla's 1.5 blocks (and Min fall distance) once this tick's
+	 * move is done - the hit goes out before next tick's move.
+	 */
+	private boolean willSmashNextTick()
+	{
+		LocalPlayer p = MC.player;
+		if(p.onGround() || p.isFallFlying())
+			return false;
 			
-			slamFollowUpPending = false;
-			
-			// Back to the item you started with even if the target is gone -
-			// otherwise you'd be left holding the axe or mace.
-			selectSlot(slamFollowUpSlot);
-			
-			if(slamFollowUpTarget != null)
-			{
-				if(!slamAttacking)
-				{
-					slamAttacking = true;
-					MC.gameMode.attack(MC.player, slamFollowUpTarget);
-					MC.player.swing(InteractionHand.MAIN_HAND);
-					slamAttacking = false;
-				}
-				
-				slamFollowUpTarget = null;
-			}
-		}
+		// this tick's move uses the current velocity (gravity comes after:
+		// LivingEntity.travelInAir), like HitCheck's post-move eyes
+		double fallThisTick = Math.max(0, -p.getDeltaMovement().y);
+		return p.fallDistance + fallThisTick > smashFallDistance();
+	}
+	
+	/** Whether a mace hit right now would be a smash. */
+	private boolean isSmashPossible()
+	{
+		LocalPlayer p = MC.player;
+		return !p.onGround() && !p.isFallFlying()
+			&& p.fallDistance > smashFallDistance();
+	}
+	
+	/** MaceItem.canSmashAttack: more than 1.5 blocks, strictly. */
+	private double smashFallDistance()
+	{
+		return Math.max(1.5, minFallDistance.getValue());
+	}
+	
+	private boolean wantDensity()
+	{
+		return smartSwitch.isChecked()
+			? !MC.player.onGround() && MC.player.getDeltaMovement().y < -0.3
+			: maceMode.getSelected() == MaceMode.DENSITY;
 	}
 	
 	private boolean isStillAttackable(Entity e)
@@ -2571,15 +2800,8 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		swapBackTimer = 0;
 		maceSwapped = false;
 		
-		slamPending = false;
+		slamPlan.reset();
 		slamTarget = null;
-		slamMaceSlot = -1;
-		slamReturnSlot = -1;
-		
-		slamFollowUpPending = false;
-		slamFollowUpTarget = null;
-		slamFollowUpSlot = -1;
-		slamFollowUpDelay = 0;
 		
 		pearlReturnSlot = -1;
 		pearlCatch = null;
@@ -2613,6 +2835,10 @@ public final class MaceAssistHack extends Hack implements UpdateListener,
 		triggerHitsThisFall = 0;
 		triggerCooldownTimer = 0;
 		wasInAir = false;
+		lastVy = 0;
+		riseSpeed = 0;
+		sameSlotTicks = 0;
+		lastTickSlot = -1;
 		chestplateEquipped = false;
 		
 		resetAim();

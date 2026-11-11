@@ -32,6 +32,7 @@ public final class AnticheatServers implements PreLaunchEntrypoint
 	@Override
 	public void onPreLaunch()
 	{
+		TrainerHold.start();
 		List<AnticheatServer> wanted = get();
 		if(wanted.isEmpty())
 			return;
@@ -54,7 +55,9 @@ public final class AnticheatServers implements PreLaunchEntrypoint
 		
 		servers = new ArrayList<>();
 		for(AnticheatServer server : new AnticheatServer[]{
-			AnticheatServer.grim(), AnticheatServer.intave()})
+			AnticheatServer.grim(), AnticheatServer.intave(),
+			AnticheatServer.windfall(), AnticheatServer.shard(),
+			AnticheatServer.vanilla()})
 		{
 			if(server == null)
 				continue;

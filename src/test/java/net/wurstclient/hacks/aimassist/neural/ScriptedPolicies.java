@@ -33,6 +33,143 @@ public final class ScriptedPolicies
 		new Supplier[]{SprintCombo::new, CritTrader::new, Aggressor::new,
 			Spammer::new, Counter::new};
 	
+	/**
+	 * A scripted player with its own habits, new every fight (user,
+	 * 2026-10-27: it has to adapt as well as ECHO does - against five
+	 * fighters that always play the same way, reading the opponent paid
+	 * off too little to be learned): where it likes to stand, which way it
+	 * strafes, how jumpy it is, how long it waits with a ready hit, whether
+	 * it sneaks while charging and how far it backs off after a hit. Only
+	 * in training; the yardstick plays the plain ones.
+	 */
+	public static final class Styled implements Policy
+	{
+		private final Policy inner;
+		private SplittableRandom random;
+		private double spacing, strafeBias, jumpiness, sneakCharging;
+		private int hitDelay, backoff, preferred, waiting, backTicks;
+		
+		public Styled(Policy inner)
+		{
+			this.inner = inner;
+		}
+		
+		@Override
+		public void reset(SplittableRandom random)
+		{
+			this.random = random;
+			inner.reset(random);
+			spacing = (random.nextDouble() - 0.5) * 1.2;
+			strafeBias = random.nextDouble() * 0.6;
+			preferred = random.nextBoolean() ? 1 : -1;
+			jumpiness =
+				random.nextDouble() < 0.5 ? 0 : random.nextDouble() * 0.15;
+			sneakCharging =
+				random.nextDouble() < 0.7 ? 0 : random.nextDouble() * 0.8;
+			hitDelay = random.nextInt(4);
+			backoff = random.nextInt(5);
+			waiting = backTicks = 0;
+		}
+		
+		@Override
+		public void act(SimFighter me, NeuralObservation o, NeuralAction out)
+		{
+			// it sees the distances shifted: so it keeps its own spacing
+			double dist = o.dist, reach = o.theirReach;
+			o.dist = Math.max(0, dist - spacing);
+			o.theirReach = Math.max(0, reach - spacing);
+			inner.act(me, o, out);
+			o.dist = dist;
+			o.theirReach = reach;
+			
+			if(random.nextDouble() < strafeBias)
+				out.strafe = preferred;
+			if(o.myGround && dist < 4 && random.nextDouble() < jumpiness)
+				out.jump = true;
+			if(o.myChargeTicks > 3 && random.nextDouble() < sneakCharging)
+				out.sneak = true;
+			if(backTicks > 0)
+			{
+				backTicks--;
+				out.forward = -1;
+				out.sprint = false;
+			}
+			// a ready hit held for a few ticks (it still has to land)
+			if(out.attack)
+			{
+				if(waiting < hitDelay)
+				{
+					waiting++;
+					out.attack = false;
+				}else
+				{
+					waiting = 0;
+					backTicks = backoff;
+				}
+			}else if(!goodHit(o))
+				waiting = 0;
+		}
+	}
+	
+	/**
+	 * A styled scripted player that changes its game plan partway through
+	 * {@link #SHARE} of the fights: another fighter with other habits takes
+	 * over after 5-25 seconds, half the time going back to the first one
+	 * later (user, 2026-11-02: "a real person can change strategies
+	 * mid-match" - the net has to notice it in its history and answer it,
+	 * not keep playing what worked a minute ago).
+	 */
+	public static final class Switching implements Policy
+	{
+		static final double SHARE = 0.4;
+		private final int first;
+		private final Styled a;
+		private Styled b;
+		private Policy current;
+		private int tick, switchAt, backAt;
+		
+		public Switching(int first)
+		{
+			this.first = first;
+			a = new Styled(ALL[first].get());
+		}
+		
+		@Override
+		public void reset(SplittableRandom random)
+		{
+			a.reset(random);
+			current = a;
+			tick = 0;
+			switchAt = backAt = Integer.MAX_VALUE;
+			if(random.nextDouble() >= SHARE)
+				return;
+			int other =
+				(first + 1 + random.nextInt(ALL.length - 1)) % ALL.length;
+			b = new Styled(ALL[other].get());
+			b.reset(random);
+			switchAt = 100 + random.nextInt(400);
+			if(random.nextBoolean())
+				backAt = switchAt + 100 + random.nextInt(300);
+		}
+		
+		@Override
+		public void act(SimFighter me, NeuralObservation o, NeuralAction out)
+		{
+			tick++;
+			if(tick == switchAt)
+				current = b;
+			else if(tick == backAt)
+				current = a;
+			current.act(me, o, out);
+		}
+		
+		/** The tick the other fighter takes over (MAX_VALUE: never). */
+		int switchAt()
+		{
+			return switchAt;
+		}
+	}
+	
 	/** Blocks/tick a sprint covers once going. */
 	private static final double SPRINT_STEP = 0.28;
 	
@@ -45,6 +182,42 @@ public final class ScriptedPolicies
 	private static boolean goodHit(NeuralObservation o)
 	{
 		return o.canHit && o.myChargeTicks == 0 && (o.mySprint || o.critReady);
+	}
+	
+	/**
+	 * The items, the way a player uses them: a golden apple when low and
+	 * well out of reach (kept eating unless they close in), a healing potion
+	 * at your feet when low and they're too far to share it, a cobweb at
+	 * their feet when they're on the ground close by and your hit is a
+	 * while off, the shield while yours charges and theirs is ready.
+	 */
+	static void useItems(NeuralObservation o, NeuralAction out)
+	{
+		if(o.myEating > 0 ? o.dist > 3.5 : o.myHealth < 0.5 && o.gapplesLeft > 0
+			&& o.dist > 5 && !o.regenerating)
+		{
+			out.eat = true;
+			out.attack = false;
+			out.sprint = false;
+			out.forward = -1;
+			return;
+		}
+		// buffs once they run low (away from the fight)
+		if(o.potsLeft > 0 && o.myStrength < 0.1 && o.dist > 4)
+		{
+			out.pot = true;
+			out.attack = false;
+			return;
+		}
+		if(o.websLeft > 0 && !o.opInWeb && o.opGround && o.dist < 4
+			&& o.myChargeTicks >= 5)
+		{
+			out.web = true;
+			return;
+		}
+		if(o.hasShield && o.myChargeTicks >= 7 && o.opChargeTicks <= 3
+			&& o.theirReach < PvpSim.REACH + 0.5)
+			out.shield = true;
 	}
 	
 	/**
@@ -76,8 +249,10 @@ public final class ScriptedPolicies
 			out.clear();
 			if(--strafeTicks <= 0)
 			{
-				strafe = random.nextInt(3) - 1;
-				strafeTicks = 10 + random.nextInt(20);
+				// strafing 90% of the time, a new side every 8-20 ticks
+				strafe =
+					random.nextInt(10) == 0 ? 0 : random.nextBoolean() ? 1 : -1;
+				strafeTicks = 8 + random.nextInt(13);
 			}
 			out.strafe = strafe;
 			
@@ -124,6 +299,7 @@ public final class ScriptedPolicies
 				resetTicks = 2;
 				resetS = o.dist < 2.3 || o.opAlong > 0.05;
 			}
+			useItems(o, out);
 		}
 	}
 	
@@ -228,7 +404,8 @@ public final class ScriptedPolicies
 				&& o.dist < 3.5 && random.nextInt(10) < 3))
 				out.jump = true;
 			
-			if(!goodHit(o))
+			useItems(o, out);
+			if(!goodHit(o) || out.eat || out.pot)
 			{
 				held = 0;
 				selecting = false;
@@ -322,6 +499,7 @@ public final class ScriptedPolicies
 			out.attack = goodHit(o);
 			if(out.attack)
 				backTicks = 4;
+			useItems(o, out);
 		}
 	}
 }

@@ -9,14 +9,17 @@ package net.wurstclient.gametest.mixin;
 
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
+import net.minecraft.client.Minecraft;
 import net.minecraft.network.Connection;
 import net.minecraft.network.DisconnectionDetails;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
 import net.wurstclient.gametest.PacketTrace;
@@ -62,12 +65,36 @@ public abstract class ConnectionMixin
 			PacketTrace.received(packet);
 	}
 	
+	/** Faults on this connection so far: the first is logged in full. */
+	@Unique
+	private int faults;
+	
+	/**
+	 * The first fault with its stack trace, then a count now and then: once
+	 * the channel is dead every send faults again - a full run logged one
+	 * aborted connection ~300k times (772 MB of log) until Claude Code
+	 * killed it for low memory (2026-11-04).
+	 */
 	@Inject(method = "exceptionCaught", at = @At("HEAD"))
 	private void onExceptionCaught(ChannelHandlerContext context,
 		Throwable throwable, CallbackInfo ci)
 	{
-		WurstTest.LOGGER.error("Connection ({}) failed",
-			getReceiving() == PacketFlow.CLIENTBOUND ? "client" : "server",
-			throwable);
+		String side =
+			getReceiving() == PacketFlow.CLIENTBOUND ? "client" : "server";
+		if(++faults == 1)
+		{
+			WurstTest.LOGGER.error("Connection ({}) failed", side, throwable);
+			// the bot's side: end it, so the test sees a disconnect and
+			// rejoins instead of writing into a dead socket for an hour
+			// (vanilla returns early once the channel says it's closed)
+			if(getReceiving() == PacketFlow.CLIENTBOUND)
+			{
+				Connection self = (Connection)(Object)this;
+				Minecraft.getInstance().execute(() -> self.disconnect(
+					Component.literal("Connection failed: " + throwable)));
+			}
+		}else if(faults % 1000 == 0)
+			WurstTest.LOGGER.error("Connection ({}) failed {} times: {}", side,
+				faults, throwable.toString());
 	}
 }

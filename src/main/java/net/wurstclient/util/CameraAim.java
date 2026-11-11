@@ -45,6 +45,8 @@ public final class CameraAim
 		aim.invalidate();
 		turnKey = null;
 		lastSetValid = false;
+		yield.reset();
+		lastAssistStep = 0;
 	}
 	
 	public float getYaw()
@@ -129,6 +131,71 @@ public final class CameraAim
 		lastSetValid = true;
 	}
 	
+	private final AimYield yield = new AimYield();
+	/** How far {@link #assistYaw} itself turned the camera last frame. */
+	private float lastAssistStep;
+	
+	/**
+	 * An aim assist with a hand on the mouse, sideways only (MaceAssist;
+	 * user, 2026-11-03: "like the one in whataimassistturningshouldbelike.mp4
+	 * ... smooth, EXTREMELY human, and easy to pull away from"): the turn is
+	 * {@link HumanAim#pidStep}, the one measured from that video for
+	 * AimAssist (a 45 degree return at ~11 degrees a frame, then half of
+	 * what's left per frame, no overshoot), at
+	 * {@code max(340, 8 x degrees left)} degrees/s up to {@code maxSpeed} -
+	 * and it gives way: drag the mouse against it and it lets go almost
+	 * completely until you stop, hesitates when the target changes direction
+	 * (see {@link AimYield}). The pitch stays the player's.
+	 *
+	 * @param tolerance
+	 *            how far (degrees) the yaw can be from the aim point and still
+	 *            be on the target
+	 */
+	public void assistYaw(Entity target, Vec3 tickAimPoint, float partialTicks,
+		double tolerance, boolean humanize, double maxSpeed)
+	{
+		Vec3 offset = EntityUtils.getLerpedPos(target, partialTicks)
+			.subtract(target.position());
+		Vec3 point = tickAimPoint.add(offset);
+		Vec3 eyes = getFrameEyes(partialTicks);
+		
+		Rotation needed = RotationUtils.getNeededRotations(eyes, point);
+		double[] track = HumanAim.trackingRate(eyes, point,
+			HumanAim.relativeVelocity(target, MC.player));
+		
+		long now = GameClock.nanoTime();
+		// your mouse since the last frame (before prepare() takes it in)
+		double mouseYaw = lastSetValid
+			? Mth.wrapDegrees(MC.player.getYRot() - lastSetYaw) : 0;
+		if(!aim.isValid() || target != turnKey)
+		{
+			yield.reset();
+			lastAssistStep = 0;
+		}
+		prepare(target, now, true);
+		float dt = aim.takeDt(now);
+		aim.updateTracking(track[0], 0, dt);
+		
+		double gain = yield.update(mouseYaw, lastAssistStep, needed.yaw(), dt,
+			now / 1_000_000L);
+		// nothing built up while you held it off
+		if(yield.isDragging())
+			aim.clearIntegral();
+		aim.setPullGain(gain);
+		
+		float before = aim.getYaw();
+		double left = Math.abs(Mth.wrapDegrees(needed.yaw() - before));
+		aim.pidStep(needed.yaw(), aim.getPitch(), dt, now,
+			Math.min(maxSpeed, Math.max(340, 8 * left)), tolerance, humanize);
+		lastAssistStep = Mth.wrapDegrees(aim.getYaw() - before);
+		
+		// the pitch exactly as the player left it
+		new Rotation(aim.getYaw(), MC.player.getXRot()).applyToClientPlayer();
+		lastSetYaw = MC.player.getYRot();
+		lastSetPitch = MC.player.getXRot();
+		lastSetValid = true;
+	}
+	
 	/**
 	 * Leaves the camera alone this frame without ending the turn: the next
 	 * aiming call carries on from wherever the camera is then, with no new
@@ -141,6 +208,7 @@ public final class CameraAim
 		
 		aim.hold(MC.player.getYRot(), MC.player.getXRot(),
 			GameClock.nanoTime());
+		lastAssistStep = 0;
 		// mouse movement until the next call still counts, see prepare()
 		lastSetYaw = MC.player.getYRot();
 		lastSetPitch = MC.player.getXRot();

@@ -36,22 +36,40 @@ import org.lwjgl.glfw.GLFW;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.vertex.PoseStack;
 
-import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.protocol.game.ClientboundDamageEventPacket;
+import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
+import net.minecraft.network.protocol.game.ClientboundSetTimePacket;
+import net.minecraft.network.protocol.game.ClientboundAnimatePacket;
+import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
+import net.minecraft.network.protocol.game.ServerboundAttackPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
+import net.minecraft.world.entity.player.Input;
 import net.minecraft.util.Mth;
+import net.minecraft.tags.ItemTags;
+import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.entity.projectile.hurtingprojectile.windcharge.AbstractWindCharge;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.AbstractThrownPotion;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.component.Weapon;
 import net.minecraft.world.level.block.Blocks;
@@ -59,15 +77,28 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
+import net.wurstclient.hacks.aimassist.NeuralItems;
+import net.wurstclient.hacks.aimassist.NeuralSpace;
 import net.wurstclient.hacks.aimassist.OpponentModel;
+import net.wurstclient.hacks.aimassist.neural.Backprop;
+import net.wurstclient.hacks.aimassist.neural.Candy;
+import net.wurstclient.hacks.aimassist.neural.EchoFeatures;
+import net.wurstclient.hacks.aimassist.neural.FightLog;
+import net.wurstclient.hacks.aimassist.neural.ItemRules;
+import net.wurstclient.hacks.aimassist.neural.KeySmoother;
+import net.wurstclient.hacks.aimassist.neural.MoveRules;
 import net.wurstclient.hacks.aimassist.neural.NeuralAction;
+import net.wurstclient.hacks.aimassist.neural.NeuralHistory;
 import net.wurstclient.hacks.aimassist.neural.NeuralObservation;
 import net.wurstclient.hacks.aimassist.neural.NeuralNet;
 import net.wurstclient.hacks.aimassist.neural.NeuralPolicy;
 import net.wurstclient.hacks.aimassist.neural.OnlineLearner;
+import net.wurstclient.hacks.aimassist.neural.OpponentRecorder;
+import net.wurstclient.hacks.aimassist.neural.PvpSim;
 import net.wurstclient.events.MouseUpdateListener;
 import net.wurstclient.events.MouseUpdateListener.MouseUpdateEvent;
 import net.wurstclient.events.PacketInputListener;
+import net.wurstclient.events.PacketOutputListener;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
@@ -95,8 +126,9 @@ import net.wurstclient.util.Rotation;
 import net.wurstclient.util.RotationUtils;
 import net.wurstclient.util.text.WText;
 
-public final class AimAssistHack extends Hack implements UpdateListener,
-	RenderListener, MouseUpdateListener, PacketInputListener
+public final class AimAssistHack extends Hack
+	implements UpdateListener, RenderListener, MouseUpdateListener,
+	PacketInputListener, PacketOutputListener
 {
 	/**
 	 * Targets this much closer than the closest one count as equally close,
@@ -105,7 +137,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private static final double DISTANCE_TIE = 0.4;
 	
 	private final SliderSetting range =
-		new SliderSetting("Range", 4.5, 1, 20, 0.05, ValueDisplay.DECIMAL);
+		new SliderSetting("Range", 4.5, 1, 75, 0.05, ValueDisplay.DECIMAL);
 	
 	private final SliderSetting fov =
 		new SliderSetting("FOV", "description.wurst.setting.aimassist.fov", 120,
@@ -288,7 +320,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	private final CheckboxSetting neuralNetwork = new CheckboxSetting(
 		"Neural network",
-		"With §lAuto attack§r: a neural network trained for Beast fights"
+		"A neural network trained for Beast fights"
 			+ " instead of §lAuto combo§r's rules. Every tick it decides"
 			+ " W/S, A/D, jump, sprint, sneak and when to hit - with no"
 			+ " reaction delay (a human needs 4-5 ticks) - from what it sees:"
@@ -304,6 +336,18 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ " §lAuto combo§r's. The aim stays AimAssist's humanized aim."
 			+ " About a thousand multiply-adds a tick: no measurable CPU.",
 		false);
+	
+	private final CheckboxSetting recordFights = new CheckboxSetting(
+		"Record fights",
+		"Saves every fight against a player, tick by tick, the way the"
+			+ " server showed it: what you saw and which keys were pressed"
+			+ " (and whether you or the network pressed them), what they saw"
+			+ " and which keys their movement, sprint, sneak and swings give"
+			+ " away, and the damage both ways. The trainer learns from them:"
+			+ " your own moves and theirs that paid off, and copies of the"
+			+ " players you fought join its league.\n\n"
+			+ "Files: .minecraft/wurst/neural/fights (about 1 MB a minute).",
+		true);
 	
 	private final CheckboxSetting neuralLearn = new CheckboxSetting(
 		"Learn in game",
@@ -326,6 +370,12 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			+ "Saved per player in §l.minecraft/wurst/neural/§r, so a rematch"
 			+ " starts adapted. Off: the shipped network, nothing learned.",
 		true);
+	
+	private final SliderSetting vectorSmoothing = new SliderSetting(
+		"Vector smoothing",
+		"Carries part of the camera's last turn into the next, on top of the"
+			+ " humanized aim: smoother, a little more lag. 0 = off.",
+		0.3, 0, 0.9, 0.05, ValueDisplay.PERCENTAGE);
 	
 	private final SliderSetting neuralLearnCpu =
 		new SliderSetting("Learning CPU",
@@ -785,6 +835,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private int offhandSwapPrevSlot = -1;
 	private int shieldBreakPrevSlot = -1;
 	private int shieldBreakTicks;
+	/** How long the shield breaker holds the axe for its hit (a charge). */
+	private static final int SHIELD_BREAK_TICKS = 20;
 	
 	/** When the last crouch dodge started (tickCount). */
 	private int lastCrouchDodgeTick = NEVER;
@@ -888,6 +940,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		addSetting(neuralNetwork);
 		addSetting(neuralLearn);
 		addSetting(neuralLearnCpu);
+		addSetting(recordFights);
+		addSetting(vectorSmoothing);
 		addSetting(skipFalling);
 		addSetting(jumpReset);
 		addSetting(flyOuts);
@@ -971,13 +1025,26 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		lastTakenTick = NEVER;
 		neuralStrafing = false;
 		comboStrafing = false;
+		// the trainer's newest champion (stoptrain installs it)
+		if(isNeural() && getLearner() != null)
+			learner.refreshGeneral();
 		shieldBlocking = false;
 		shieldBlockTicks = 0;
 		resetDodge();
+		// turned back on while still recording a fight: that recording goes
+		// on, these listeners are still there
+		if(recordingOff)
+		{
+			recordingOff = false;
+			EVENTS.remove(UpdateListener.class, this);
+			EVENTS.remove(PacketInputListener.class, this);
+			EVENTS.remove(PacketOutputListener.class, this);
+		}
 		EVENTS.add(UpdateListener.class, this);
 		EVENTS.add(RenderListener.class, this);
 		EVENTS.add(MouseUpdateListener.class, this);
 		EVENTS.add(PacketInputListener.class, this);
+		EVENTS.add(PacketOutputListener.class, this);
 		
 		// a track that finished last time may play again
 		musicEndedFile = null;
@@ -987,10 +1054,18 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	@Override
 	protected void onDisable()
 	{
-		EVENTS.remove(UpdateListener.class, this);
+		// turned off mid-fight: the recording goes on while they're in
+		// range (recordWhileOff), which needs the tick and the packet tap
+		recordingOff = fightLog != null && fightLog.isOpen()
+			&& logTarget != null && recordFights.isChecked();
+		if(!recordingOff)
+		{
+			EVENTS.remove(UpdateListener.class, this);
+			EVENTS.remove(PacketInputListener.class, this);
+			EVENTS.remove(PacketOutputListener.class, this);
+		}
 		EVENTS.remove(RenderListener.class, this);
 		EVENTS.remove(MouseUpdateListener.class, this);
-		EVENTS.remove(PacketInputListener.class, this);
 		lastHurtBy.clear();
 		target = null;
 		resetAimState();
@@ -1001,7 +1076,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		stopMusic();
 		// what was learned stays in opponentModels for a rematch (and in
 		// the online learner's profiles)
-		if(learner != null)
+		if(learner != null && !recordingOff)
 			learner.setEnabled(false);
 		neuralProfile = null;
 		neuralProfileTarget = null;
@@ -1019,6 +1094,11 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		attackedThisTick = false;
 		hitSelecting = false;
 		tickCount++;
+		if(!isEnabled())
+		{
+			recordWhileOff();
+			return;
+		}
 		
 		// re-armed below if the camera should be aimed this tick
 		frameAimActive = false;
@@ -1039,9 +1119,20 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// never stale.
 		boolean steering = isPlayerSteering();
 		
-		// don't aim when a container/inventory screen is open
-		if(MC.screen instanceof AbstractContainerScreen)
+		// don't aim (or press anything) while a screen other than chat is
+		// open - the pause menu too
+		if(isScreenOpen())
 		{
+			// the network's restock has its inventory open: that goes on
+			// (no keys, no hit meanwhile)
+			logSkipped(SKIP_SCREEN);
+			if(isNeural() && neuralItems.isRestocking())
+			{
+				neuralItems.tickRestock();
+				return;
+			}
+			// (the death screen too: a fight you lost ends here)
+			endFightLog(false);
 			// picks up again with a smooth turn from wherever the camera is
 			aim.invalidate();
 			resetCombo();
@@ -1051,7 +1142,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		
 		// (the combo's own Shield block keeps going)
 		if(!aimWhileBlocking.isChecked() && MC.player.isUsingItem()
-			&& !shieldBlocking)
+			&& !shieldBlocking && !neuralItems.isEating() && !isNeural())
 		{
 			target = null;
 			aim.invalidate();
@@ -1096,9 +1187,12 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		
 		// (with or without a target: Always shield)
 		updateOffhandSwap();
+		neuralItems.tickBack();
 		
+		tapTargetId = target != null ? target.getId() : -1;
 		if(target == null)
 		{
+			endFightLog(false);
 			// Nothing to continue from next time we acquire a target; the
 			// player is free to look wherever until then.
 			aim.invalidate();
@@ -1118,6 +1212,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		trackSprint();
 		reactToTargetHit();
 		recordOpponent();
+		logFight();
 		updateCrouchDodge();
 		
 		// Apply the aim. Server-side keeps the camera still and only rewrites
@@ -1143,7 +1238,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		{
 			// (the network moves you relative to the camera too)
 			boolean forceClient =
-				autoAttack.isChecked() && (autoCombo.isChecked() || isNeural());
+				isNeural() || autoAttack.isChecked() && autoCombo.isChecked();
 			
 			// Turning the camera happens every frame in onRender, like a
 			// mouse. Only the silent and packet modes, which have nothing to
@@ -1157,7 +1252,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 					RotationUtils.getEyesPos(), forceClient);
 		}
 		
-		if(!autoAttack.isChecked())
+		if(!autoAttack.isChecked() && !isNeural())
 		{
 			resetCombo();
 			return;
@@ -1180,17 +1275,23 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// right now is HitCheck's call in attackTarget().)
 		boolean silentSpin =
 			spinRemaining > 0F && faceTarget.getSelected() == FaceTarget.SERVER;
-		if(attackClicked || !silentSpin && !isCrosshairOnTarget()
-			&& RotationUtils.getAngleToLookVec(
-				target.getBoundingBox().getCenter()) > LOOKED_AWAY_DEGREES)
+		// (the network plays on whatever the camera does - it moves, uses
+		// items and waits for its hit while the aim turns; user 2026-10-27:
+		// no old limits in neural mode. Its hits still need HitCheck.)
+		if(!isNeural() && (attackClicked || !silentSpin && !neuralItems.isBusy()
+			&& !isCrosshairOnTarget() && RotationUtils.getAngleToLookVec(
+				target.getBoundingBox().getCenter()) > LOOKED_AWAY_DEGREES))
 		{
 			resetCombo();
 			return;
 		}
 		
 		if(updateShieldBreak())
+		{
+			logSkipped(SKIP_SHIELD_BREAK);
 			return;
-			
+		}
+		
 		// (A separate path used to hit any airborne target right away. A
 		// falling one gets falling knockback - into the ground - so it lands
 		// and rebuilds its momentum first; now a falling target is waited
@@ -1247,12 +1348,18 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		
 		// kept up to date while snapping too, so it's ready when smoothing
 		// takes over
-		double[] track = HumanAim.trackingRate(eyes, aimPoint,
-			HumanAim.relativeVelocity(target, MC.player));
+		Vec3 relative = itemAimLastFrame
+			? MC.player.position()
+				.subtract(MC.player.xo, MC.player.yo, MC.player.zo).scale(-20)
+			: HumanAim.relativeVelocity(target, MC.player);
+		double[] track = HumanAim.trackingRate(eyes, aimPoint, relative);
 		aim.updateTracking(track[0], track[1], dt);
 		
-		boolean smooth = smoothAim.isChecked() && (smoothCatchUp || EntityUtils
-			.distanceToHitboxSq(target) > smoothAimDistance.getValueSq());
+		// (the network never snaps: a hit knocks them up and away, and
+		// snapping after them flicked the camera up at every hit)
+		boolean smooth =
+			smoothAim.isChecked() && (smoothCatchUp || isNeural() || EntityUtils
+				.distanceToHitboxSq(target) > smoothAimDistance.getValueSq());
 		
 		if(smooth)
 		{
@@ -1260,8 +1367,9 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			double speed = smoothAimSpeed.getValue();
 			if(speed >= AUTO_SPEED)
 				aim.pidStep(needed.yaw(), needed.pitch(), dt, now,
-					Math.max(SMOOTH_AIM_SPEED,
-						8 * aim.angleTo(needed.yaw(), needed.pitch())),
+					itemAimLastFrame || itemTurnBack ? ITEM_AIM_SPEED
+						: Math.max(SMOOTH_AIM_SPEED,
+							8 * aim.angleTo(needed.yaw(), needed.pitch())),
 					getAimTolerance(aimPoint, targetBox, eyes), humanize);
 			else if(humanize)
 				aim.humanStep(needed.yaw(), needed.pitch(), dt, now, speed);
@@ -1274,7 +1382,10 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			double left = aim.angleTo(needed.yaw(), needed.pitch());
 			if(smoothCatchUp && (left <= 0.5
 				|| left <= CATCH_UP_SETTLED && isAimOnTarget(targetBox, eyes)))
+			{
 				smoothCatchUp = false;
+				itemTurnBack = false;
+			}
 			
 		}else
 		{
@@ -1290,6 +1401,15 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 * settled once the crosshair is on the target.
 	 */
 	private static final double CATCH_UP_SETTLED = 2;
+	
+	/**
+	 * Degrees per second of the turns to an item's aim (a potion at your
+	 * feet, a pearl) and back: a quick flick, never a snap.
+	 */
+	private static final double ITEM_AIM_SPEED = 300;
+	
+	/** Turning back to the target after an item. */
+	private boolean itemTurnBack;
 	
 	/**
 	 * Whether a ray along the current aim rotation hits the target's hitbox,
@@ -1346,10 +1466,41 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	private void setClientRotation()
 	{
+		// vector smoothing: the step this frame keeps part of the last one's
+		// direction and speed (per 50 ms, like the simulator's)
+		LocalPlayer player = MC.player;
+		long now = GameClock.nanoTime();
+		double dt = (now - smoothTime) / 1e9;
+		if(smoothTime == 0 || dt > 0.25)
+		{
+			// a new turn: nothing to carry over
+			dt = 0.05;
+			smoothYaw = smoothPitch = 0;
+		}
+		dt = Math.max(dt, 1e-4);
+		smoothTime = now;
+		double stepYaw = Mth.wrapDegrees(aim.getYaw() - player.getYRot());
+		double stepPitch = aim.getPitch() - player.getXRot();
+		double keep = Math.pow(vectorSmoothing.getValue(), dt / 0.05);
+		smoothYaw = smoothYaw * keep + stepYaw * (1 - keep);
+		smoothPitch = smoothPitch * keep + stepPitch * (1 - keep);
+		
+		// the candy rule: a camera faster than 1800 deg/s resets it
+		candy.turned(Math.hypot(smoothYaw, smoothPitch) / dt);
+		
 		// mouse-sized steps, see Rotation.applyToClientPlayer()
-		new Rotation(aim.getYaw(), aim.getPitch()).applyToClientPlayer();
+		new Rotation((float)(player.getYRot() + smoothYaw),
+			(float)Mth.clamp(player.getXRot() + smoothPitch, -90, 90))
+				.applyToClientPlayer();
 		rememberCamera();
 	}
+	
+	private long smoothTime;
+	private double smoothYaw, smoothPitch;
+	
+	/** The user's reward rules (docs/TRAINING.MD) for this fight. */
+	private final Candy candy = new Candy();
+	private Entity candyTarget;
 	
 	/**
 	 * Whether the player moved the mouse noticeably during the last tick.
@@ -1538,10 +1689,14 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		
 		attackedThisTick = true;
 		boolean crit = isCritReady();
+		int hitType = MC.player.getAttackStrengthScale(0.5F) <= 0.9F ? -1
+			: crit ? Candy.CRIT
+				: MC.player.isSprinting() && MC.player.wasSprinting
+					? Candy.SPRINT : Candy.REGULAR;
 		boolean race = tickCount - targetSwingTick <= 40
 			&& targetTicksUntilCharged() == 0 && theirReachToUs() <= REACH;
 		MC.gameMode.attack(MC.player, target);
-		noteHitLanded(crit, race);
+		noteHitLanded(crit, race, hitType);
 		MC.player.swing(InteractionHand.MAIN_HAND);
 		return true;
 	}
@@ -2121,11 +2276,20 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	}
 	
 	/** Our hit landed on the target. */
-	private void noteHitLanded(boolean crit, boolean race)
+	private void noteHitLanded(boolean crit, boolean race, int hitType)
 	{
 		rollHitSelect();
+		double before = candy.total();
+		if(hitType < 0)
+			candy.active(tickCount);
+		else
+			candy.hit(hitType, tickCount, MC.player.getHealth(),
+				NeuralItems.webCells(target.getBoundingBox()) != null);
 		if(isLearning() && neuralProfile != null)
-			neuralProfile.noteResult(crit ? 1.5 : 1);
+		{
+			neuralProfile.noteResult(Candy.squash(candy.total() - before));
+			neuralProfile.noteHit(true);
+		}
 		if(model == null)
 			return;
 		model.ourHitLanded(crit, playedStyle());
@@ -2139,10 +2303,13 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	/** The target hit us. */
 	private void noteHitTaken()
 	{
+		double before = candy.total();
+		candy.hurt(tickCount);
 		if(isLearning() && neuralProfile != null)
 		{
-			neuralProfile.noteResult(-1);
+			neuralProfile.noteResult(Candy.squash(candy.total() - before));
 			neuralProfile.noteTheirReach(theirReachToUs());
+			neuralProfile.noteHit(false);
 		}
 		if(model == null)
 			return;
@@ -2397,9 +2564,27 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			targetSwingTick = NEVER;
 			targetWasSwinging = false;
 			targetLastSwingTime = 0;
+			lastTapSwings = tapSwings.get();
+			lastTapKnockbacks = tapKnockbacks.get();
 		}
 		if(!(target instanceof LivingEntity le))
 			return;
+		// the server's animate packets: every swing, exactly when it came
+		// (the swinging flag misses one that starts before the last ends)
+		int swings = tapSwings.get();
+		if(swings != lastTapSwings)
+		{
+			lastTapSwings = swings;
+			targetSwingTick = tickCount;
+			tapSwungThisTick = true;
+		}else
+			tapSwungThisTick = false;
+		int knockbacks = tapKnockbacks.get();
+		if(knockbacks != lastTapKnockbacks)
+		{
+			lastTapKnockbacks = knockbacks;
+			targetKnockbackTick = tickCount;
+		}
 		
 		boolean near =
 			EntityUtils.distanceToHitboxSq(le) <= (REACH + 0.5) * (REACH + 0.5);
@@ -2625,9 +2810,15 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	{
 		if(shieldBreakStage == 1)
 		{
+			// Keep the axe until it hits (user's fight, 2026-10-26: they
+			// lowered the shield to swing, it went back to the sword every
+			// time and never landed one): on a raised shield at any charge -
+			// that disables it - else charged, for its 9 damage.
 			shieldBreakTicks++;
-			if(!isShieldUp(target) || shieldBreakTicks > 10
-				|| attackTarget(true))
+			boolean hit = (isShieldUp(target)
+				|| MC.player.getAttackStrengthScale(0.5F) > 0.9F)
+				&& attackTarget(true);
+			if(hit || shieldBreakTicks > SHIELD_BREAK_TICKS)
 				shieldBreakStage = 2;
 			return true;
 		}
@@ -2643,7 +2834,12 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return true;
 		}
 		
-		if(!shieldBreaker.isChecked() || !isShieldUp(target)
+		// never mid-bite or mid-throw: the slot change would cancel it
+		if(MC.player.isUsingItem() || isNeural() && neuralItems.isBusy())
+			return false;
+		// (the network always: PvpSim switches to the axe by itself, so it
+		// was trained with that)
+		if(!(shieldBreaker.isChecked() || isNeural()) || !isShieldUp(target)
 			|| EntityUtils.distanceToHitboxSq(target) > REACH * REACH)
 			return false;
 		
@@ -2814,8 +3010,10 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	public boolean isKeepingShieldInOffhand()
 	{
-		if(!isEnabled() || !shieldBlock.isChecked() || !autoAttack.isChecked()
-			|| !autoCombo.isChecked() || MC.player == null)
+		// (the network's shield is its own: updateNeuralShield)
+		if(!isEnabled() || isNeural() || !shieldBlock.isChecked()
+			|| !autoAttack.isChecked() || !autoCombo.isChecked()
+			|| MC.player == null)
 			return false;
 		
 		ShieldSource source = shieldSource.getSelected();
@@ -3188,6 +3386,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		sprintHeldOff = false;
 		releaseComboStrafe();
 		stopShieldBlock();
+		neuralItems.reset();
 		// the weapon back if the hotbar shield is in hand (a swap into the
 		// offhand carries on - Always shield runs without a target too)
 		if(hotbarShieldPrevSlot >= 0 && MC.player != null
@@ -3217,21 +3416,118 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	
 	private final NeuralObservation neuralObs = new NeuralObservation();
 	private boolean neuralStrafing;
+	private final NeuralItems neuralItems = new NeuralItems();
+	/** Keeps the network's keys held like a finger does (see KeySmoother). */
+	private final KeySmoother neuralKeys = new KeySmoother();
+	/** No long back-pedaling, both strafe sides (see MoveRules). */
+	private final MoveRules neuralMoves = new MoveRules();
+	private Entity neuralKeysTarget;
+	
+	// ECHO's inputs (NeuralObservation version 12) and the history: one of
+	// each per side of the fight; how each player fights is kept for the
+	// next fight against them (this session)
+	private final EchoFeatures neuralEcho = new EchoFeatures(),
+		opponentEcho = new EchoFeatures();
+	/** Every player's style both ways, remembered across sessions. */
+	private EchoFeatures.StyleBook styles;
+	private Entity echoTarget;
+	/** Per player: the last minutes carry over to the next fight. */
+	private final Map<UUID, NeuralHistory> ourHistories = new HashMap<>(),
+		theirHistories = new HashMap<>();
+	private NeuralHistory neuralHistory = new NeuralHistory(),
+		opponentHistory = new NeuralHistory();
+	/** The general net, run on the target's side for its history. */
+	private NeuralNet opponentNet;
+	private float[] opponentNetParams;
+	private final float[] opponentInput = new float[NeuralObservation.SIZE];
+	/** The server's tick from its time packets (ms), written by netty. */
+	private volatile long timeNanos, timeGameTick;
+	private volatile double serverTickMs = 50;
+	/** Whether the camera was turned for an item last frame. */
+	private boolean itemAimLastFrame;
 	
 	/** When the target last hit us (tickCount). */
 	private int lastTakenTick = NEVER;
 	
+	/**
+	 * The per-tick candy rules in a real fight: near the opponent, stuck in a
+	 * web (-10/s), the opponent stuck in one (+1/s; +10 when it gets caught -
+	 * any web, the client can't know who placed it). A new opponent = a new
+	 * fight. Its changes go to the in-fight learner like the hits' do.
+	 */
+	private void updateCandy(double dist)
+	{
+		if(target != candyTarget)
+		{
+			candyTarget = target;
+			candy.reset(tickCount);
+			opWasInWeb = false;
+		}
+		LocalPlayer player = MC.player;
+		boolean opInWeb = NeuralItems.webCells(target.getBoundingBox()) != null;
+		double before = candy.total();
+		if(opInWeb && !opWasInWeb)
+			candy.trapped(tickCount, player.getHealth());
+		opWasInWeb = opInWeb;
+		boolean falling = !player.onGround() && player.getDeltaMovement().y < 0;
+		candy.tick(tickCount, dist,
+			NeuralItems.webCells(player.getBoundingBox()) != null, opInWeb,
+			falling && opInWeb && dist <= Candy.JUMP_REACH, player.getHealth());
+		if(candy.total() != before && isLearning() && neuralProfile != null)
+			neuralProfile.noteResult(Candy.squash(candy.total() - before));
+	}
+	
+	private boolean opWasInWeb;
+	private final NeuralAction lastNeuralAct = new NeuralAction();
+	
 	private boolean isNeural()
 	{
-		return neuralNetwork.isChecked() && autoAttack.isChecked()
-			&& NeuralPolicy.get() != null;
+		// on its own: no other setting turns it on or off, or forces or
+		// stops anything it does (user, 2026-10-29)
+		return neuralNetwork.isChecked() && NeuralPolicy.get() != null;
 	}
+	
+	private final java.util.concurrent.ConcurrentLinkedQueue<ClientboundEntityEventPacket> totemPops =
+		new java.util.concurrent.ConcurrentLinkedQueue<>();
 	
 	private void updateNeural()
 	{
-		double dist = Math.sqrt(EntityUtils.distanceToHitboxSq(target));
-		fillNeuralObservation(dist);
+		for(ClientboundEntityEventPacket pop; (pop = totemPops.poll()) != null;)
+		{
+			Entity popped = pop.getEntity(MC.level);
+			if(popped != null)
+				NeuralSpace.notePop(popped.getX(), popped.getZ(), tickCount);
+		}
+		double dist = observeNeural();
 		NeuralAction act = decideNeural();
+		if(neuralObs.mirrored)
+			act.strafe = -act.strafe;
+		if(target != neuralKeysTarget)
+		{
+			neuralKeysTarget = target;
+			long keySeed = random.nextLong();
+			neuralKeys.reset(keySeed);
+			neuralMoves.reset(keySeed ^ 0x6D6F7665L);
+		}
+		neuralKeys.apply(act);
+		
+		// items: web, potion, golden apple, breaking out of a web (they take
+		// the hands - no hit meanwhile), and the shield
+		ItemRules.apply(neuralObs, act);
+		neuralMoves.apply(neuralObs, act);
+		// what was pressed (and remembered), for the next observation - after
+		// the rules, like PvpSim's (ItemRules' A/D cut beyond 5 blocks was
+		// remembered as pressed)
+		lastNeuralAct.set(act);
+		boolean itemBusy = neuralItems.update(act, target);
+		// potting: stop, look straight down, throw - no keys at all, not
+		// turning mid-sprint (user, 2026-10-26)
+		if(neuralItems.isPotting())
+		{
+			act.forward = act.strafe = 0;
+			act.sprint = act.jump = act.sneak = false;
+		}
+		updateNeuralShield(act.shield && !itemBusy);
 		
 		if(act.forward > 0)
 		{
@@ -3265,36 +3561,149 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			KeyPresser.press(MC.options.keyJump);
 		if(act.sneak)
 			KeyPresser.press(MC.options.keyShift);
-		
-		// only a sprint hit or a crit the server can verify, like the combo
-		if(act.attack && dist <= REACH && canLandGoodHit() && attackTarget())
+			
+		// only a sprint hit or a crit the server can verify, like the combo -
+		// and both need the charge (vanilla: > 90%), which this never
+		// checked: in plain fights, glued together, it hit every 1-4 ticks,
+		// 98 of 98 hits uncharged, most into their hurt time (user's fights,
+		// 2026-10-31). PvpSim has the same rule.
+		if(act.attack && !itemBusy && !shieldBlocking && dist <= REACH
+			&& isChargedToStrike() && canLandGoodHit() && attackTarget())
 		{
 			lastHitTick = tickCount;
 			comboHitCount++;
+		}else if(act.attack)
+			logNoHit(itemBusy, dist);
+	}
+	
+	// what held a wanted hit back (FightLog.NO_HIT bits)
+	private static final int NO_HIT_ITEMS = 1, NO_HIT_SHIELD_UP = 2,
+		NO_HIT_REACH = 4, NO_HIT_ALREADY = 8, NO_HIT_USING = 16,
+		NO_HIT_HOTBAR_SHIELD = 32, NO_HIT_OFFHAND_SWAP = 64,
+		NO_HIT_UNVERIFIABLE = 128, NO_HIT_THEIR_SHIELD = 256,
+		NO_HIT_NOT_READY = 512, NO_HIT_ATTACK_FAILED = 1024,
+		NO_HIT_CHARGING = 2048;
+	// where onUpdate left before the network (FightLog.SKIPPED codes)
+	private static final int SKIP_SCREEN = 1, SKIP_SHIELD_BREAK = 2;
+	
+	/** The network wanted a hit that didn't go out: why, into the log. */
+	private void logNoHit(boolean itemBusy, double dist)
+	{
+		if(fightLog == null || !fightLog.isOpen() || logTarget != target)
+			return;
+		LocalPlayer player = MC.player;
+		int why = 0;
+		if(itemBusy)
+			why |= NO_HIT_ITEMS;
+		if(shieldBlocking)
+			why |= NO_HIT_SHIELD_UP;
+		if(dist > REACH)
+			why |= NO_HIT_REACH;
+		if(attackedThisTick)
+			why |= NO_HIT_ALREADY;
+		if(player.isUsingItem())
+			why |= NO_HIT_USING;
+		if(hotbarShieldPrevSlot >= 0)
+			why |= NO_HIT_HOTBAR_SHIELD;
+		if(offhandSwapStage != 0)
+			why |= NO_HIT_OFFHAND_SWAP;
+		if(!HitCheck.isVerifiable(target))
+			why |= NO_HIT_UNVERIFIABLE;
+		if(isShieldUp(target) && !isShieldBreaker(player.getMainHandItem()))
+			why |= NO_HIT_THEIR_SHIELD;
+		if(!isCritReady() && !isSprintHitReady())
+			why |= NO_HIT_NOT_READY;
+		if(!isChargedToStrike())
+			why |= NO_HIT_CHARGING;
+		if(why == 0)
+			why = NO_HIT_ATTACK_FAILED;
+		fightLog.event(tickCount, FightLog.NO_HIT, why,
+			player.getAttackStrengthScale(0.5F), (float)dist,
+			player.getInventory().getSelectedSlot());
+	}
+	
+	/** onUpdate left before the network in a fight: where, into the log. */
+	private void logSkipped(int code)
+	{
+		if(fightLog != null && fightLog.isOpen() && logTarget == target
+			&& isNeural())
+			fightLog.event(tickCount, FightLog.SKIPPED, code, 0, 0, 0);
+	}
+	
+	/**
+	 * The network's shield: up while it says so - the offhand one, or one
+	 * from the hotbar in the main hand (the weapon back after).
+	 */
+	private void updateNeuralShield(boolean up)
+	{
+		LocalPlayer player = MC.player;
+		boolean offhand = isBlocker(player.getOffhandItem());
+		int slot = offhand ? -1 : findShieldSlot();
+		ItemStack shield = offhand ? player.getOffhandItem()
+			: slot >= 0 ? player.getInventory().getItem(slot) : null;
+		up &= shield != null && !player.getCooldowns().isOnCooldown(shield);
+		
+		if(!offhand && (slot >= 0 || hotbarShieldPrevSlot >= 0))
+		{
+			updateHotbarShield(up, slot);
+			return;
 		}
+		if(up)
+		{
+			MC.options.keyUse.setDown(true);
+			shieldBlocking = true;
+			shieldBlockTicks++;
+		}else
+			stopShieldBlock();
 	}
 	
 	/**
 	 * This tick's keys: while learning, against a player the network for
 	 * them plus what it has learned during the fights with them (adapting
-	 * after every exchange), against anything else the general one; the
-	 * shipped one otherwise.
+	 * after every exchange), against anything else the general one (the
+	 * trainer's champion, also with learning off).
 	 */
+	/**
+	 * This tick's observation, once (the fight log and the network both use
+	 * it), with the pooled history in it. Returns the distance.
+	 */
+	private double observeNeural()
+	{
+		double dist = Math.sqrt(EntityUtils.distanceToHitboxSq(target));
+		if(neuralObsTick == tickCount)
+			return dist;
+		neuralObsTick = tickCount;
+		updateCandy(dist);
+		startEchoFight();
+		fillNeuralObservation(dist);
+		neuralHistory.context(neuralObs.context, neuralObs.memoryLong);
+		return dist;
+	}
+	
+	private int neuralObsTick = NEVER;
+	
 	private NeuralAction decideNeural()
 	{
+		// (the history went in with observeNeural; what ran goes in after)
 		float[] params = null;
-		if(isLearning() && getLearner() != null)
+		if(getLearner() != null)
 		{
-			if(neuralProfile != null)
+			if(isLearning() && neuralProfile != null)
 			{
 				neuralObs.encode(neuralInput);
 				neuralAction.decode(learner.decide(neuralProfile, neuralInput));
+				neuralHistory.push(learner.netOf(neuralProfile));
 				return neuralAction;
 			}
+			// the trained general net, also with learning off
 			params = learner.generalParams();
 		}
 		if(params == null)
-			return NeuralPolicy.get().decide(neuralObs);
+		{
+			NeuralAction act = NeuralPolicy.get().decide(neuralObs);
+			neuralHistory.push(NeuralPolicy.get().net());
+			return act;
+		}
 		
 		if(params != neuralParams)
 		{
@@ -3303,7 +3712,296 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		}
 		neuralObs.encode(neuralInput);
 		neuralAction.decode(neuralNet.forward(neuralInput));
+		neuralHistory.push(neuralNet);
 		return neuralAction;
+	}
+	
+	// ── Fight log (FightLog): every fight against a player, for the trainer
+	
+	// The packet tap: what the server actually sent about the target and
+	// what your client sent (written by netty / the sending thread, read on
+	// the tick)
+	private volatile int tapTargetId = -1;
+	private final java.util.concurrent.atomic.AtomicInteger tapSwings =
+		new java.util.concurrent.atomic.AtomicInteger(),
+		tapKnockbacks = new java.util.concurrent.atomic.AtomicInteger(),
+		ourAttacks = new java.util.concurrent.atomic.AtomicInteger();
+	private volatile double tapKnockbackX, tapKnockbackY, tapKnockbackZ;
+	/**
+	 * The last ServerboundPlayerInputPacket: bits W S A D jump sneak sprint.
+	 */
+	private volatile int lastInputBits;
+	private int lastTapSwings, lastTapKnockbacks, lastLoggedAttacks,
+		lastLoggedInput = -1;
+	private int targetKnockbackTick = NEVER;
+	private boolean tapSwungThisTick;
+	
+	@Override
+	public void onSentPacket(PacketOutputEvent event)
+	{
+		if(event.getPacket() instanceof ServerboundPlayerInputPacket in)
+		{
+			Input i = in.input();
+			lastInputBits = (i.forward() ? 1 : 0) | (i.backward() ? 2 : 0)
+				| (i.left() ? 4 : 0) | (i.right() ? 8 : 0) | (i.jump() ? 16 : 0)
+				| (i.shift() ? 32 : 0) | (i.sprint() ? 64 : 0);
+		}else if(event.getPacket() instanceof ServerboundAttackPacket)
+			ourAttacks.incrementAndGet();
+	}
+	
+	private FightLog fightLog;
+	private Entity logTarget;
+	private int logLastTick = NEVER;
+	private float logDealt, logTaken, logTargetHealth, logMyHealth;
+	private final float[] logInput = new float[NeuralObservation.SIZE];
+	private NeuralNet logNet;
+	private float[] logNetParams;
+	/** Their samples: to the learner's copy and to the log. */
+	private final OpponentRecorder.Sink opponentSink = (x, y) -> {
+		if(this.neuralProfile != null)
+			this.neuralProfile.add(x, y);
+		if(fightLog != null && logTarget == target)
+			fightLog.theirs(tickCount, x, y);
+	};
+	
+	private void logFight()
+	{
+		boolean fighting = recordFights.isChecked() && target instanceof Player
+			&& target.isAlive()
+			&& EntityUtils.distanceToHitboxSq(target) <= 8 * 8;
+		endFightLog(fighting);
+		if(!fighting)
+			return;
+		
+		LocalPlayer player = MC.player;
+		LivingEntity them = (LivingEntity)target;
+		if(fightLog == null)
+			fightLog = new FightLog(
+				WURST.getWurstFolder().resolve("neural").resolve("fights"));
+		if(logTarget != target)
+		{
+			logTarget = target;
+			fightLog.begin(target.getUUID(), target.getName().getString());
+			logDealt = logTaken = 0;
+			logTargetHealth = them.getHealth();
+			logMyHealth = player.getHealth();
+		}
+		logLastTick = tickCount;
+		logDealt += Math.max(0, logTargetHealth - them.getHealth());
+		logTaken += Math.max(0, logMyHealth - player.getHealth());
+		logTargetHealth = them.getHealth();
+		logMyHealth = player.getHealth();
+		
+		observeNeural();
+		neuralObs.encode(logInput);
+		boolean human = !isNeural() || !isEnabled();
+		byte[] y = new byte[Backprop.LABELS];
+		java.util.Arrays.fill(y, (byte)-1);
+		if(human)
+		{
+			// what you pressed, as your client told the server
+			// (ServerboundPlayerInputPacket) - the neural keys are the
+			// network's own
+			int bits = lastInputBits;
+			int fwd = (bits & 1) - (bits >> 1 & 1);
+			int left = (bits >> 2 & 1) - (bits >> 3 & 1);
+			if(neuralObs.mirrored)
+				left = -left;
+			y[0] = (byte)(1 - fwd);
+			y[1] = (byte)(1 - left);
+			y[2] = (byte)(bits >> 4 & 1);
+			y[3] = (byte)(player.isSprinting() ? 1 : 0);
+			y[4] = (byte)(bits >> 5 & 1);
+			// an attack packet went out since last tick
+			y[5] = (byte)(ourAttacks.get() != lastLoggedAttacks ? 1 : 0);
+			y[7] = (byte)(player.isBlocking() ? 1 : 0);
+			y[9] = (byte)(eatingFraction(player) > 0 ? 1 : 0);
+			// your history goes on while you play (the general net's view)
+			float[] general =
+				getLearner() != null ? learner.generalParams() : null;
+			if(general != null)
+			{
+				if(general != logNetParams)
+				{
+					logNetParams = general;
+					logNet = new NeuralNet(learner.getSizes(), general);
+				}
+				logNet.forward(logInput);
+				neuralHistory.push(logNet);
+			}
+		}
+		fightLog.ours(tickCount, logInput, y, human, logDealt, logTaken);
+		// the raw packet events of this tick
+		Vec3 raw = target.getPositionCodec().getBase();
+		fightLog.event(tickCount, FightLog.THEIR_POS, (float)raw.x,
+			(float)raw.y, (float)raw.z, target.onGround() ? 1 : 0);
+		if(tapSwungThisTick)
+			fightLog.event(tickCount, FightLog.THEIR_SWING, 0, 0, 0, 0);
+		if(targetKnockbackTick == tickCount)
+			fightLog.event(tickCount, FightLog.THEIR_KNOCKBACK,
+				(float)tapKnockbackX, (float)tapKnockbackY,
+				(float)tapKnockbackZ, 0);
+		if(lastInputBits != lastLoggedInput)
+		{
+			lastLoggedInput = lastInputBits;
+			fightLog.event(tickCount, FightLog.OUR_INPUT, lastInputBits, 0, 0,
+				0);
+		}
+		int attacks = ourAttacks.get();
+		if(attacks != lastLoggedAttacks)
+		{
+			lastLoggedAttacks = attacks;
+			fightLog.event(tickCount, FightLog.OUR_ATTACK, 0, 0, 0, 0);
+		}
+	}
+	
+	/** Turned off mid-fight and still recording it (see recordWhileOff). */
+	private boolean recordingOff;
+	
+	/**
+	 * Turned off mid-fight: keeps recording it - your own play, nothing
+	 * aimed or pressed - until it's over (endFightLog: they or you died, or
+	 * 5 s out of range), then lets go of the listeners (user, 2026-10-29).
+	 */
+	private void recordWhileOff()
+	{
+		target = logTarget;
+		tapTargetId = target != null ? target.getId() : -1;
+		if(target == null)
+			endFightLog(false);
+		else if(isScreenOpen())
+			endFightLog(false);
+		else
+		{
+			trackTargetSwing();
+			trackTargetMotion();
+			trackSprint();
+			recordOpponent();
+			logFight();
+		}
+		if(fightLog != null && fightLog.isOpen())
+			return;
+		
+		recordingOff = false;
+		target = null;
+		tapTargetId = -1;
+		EVENTS.remove(UpdateListener.class, this);
+		EVENTS.remove(PacketInputListener.class, this);
+		EVENTS.remove(PacketOutputListener.class, this);
+		if(learner != null)
+			learner.setEnabled(false);
+		neuralProfile = null;
+		neuralProfileTarget = null;
+		lastRecordTick = NEVER;
+	}
+	
+	/**
+	 * Ends the recorded fight once it's over: killed, died, another target
+	 * or 5 s without fighting. Also called with no target and while a screen
+	 * is open (onUpdate returns early then) - before, a fight ended by a kill
+	 * stayed open until the next one and was lost when the game closed.
+	 */
+	private void endFightLog(boolean fighting)
+	{
+		if(fightLog == null || !fightLog.isOpen()
+			|| logTarget == target && fighting)
+			return;
+		boolean theyDied = logTarget instanceof LivingEntity le
+			&& (le.isDeadOrDying() || le.isRemoved() && logTargetHealth <= 4);
+		boolean weDied = MC.player.isDeadOrDying();
+		if(theyDied || weDied || target != null && target != logTarget
+			|| tickCount - logLastTick > 100)
+		{
+			fightLog.end(weDied ? -1 : theyDied ? 1 : 0);
+			logTarget = null;
+		}
+	}
+	
+	/**
+	 * A new target: a new fight for ECHO's inputs and the history, with what
+	 * this player showed earlier; and the mirror image (NeuralObservation
+	 * .mirrored) picked for the whole fight - flipped mid-fight it would mix
+	 * two views in one history.
+	 */
+	private void startEchoFight()
+	{
+		if(target == echoTarget)
+			return;
+		// the fight before is over: what was learned of that player is kept
+		if(styles == null)
+			styles = new EchoFeatures.StyleBook(
+				WURST.getWurstFolder().resolve("neural").resolve("styles.bin"));
+		else if(echoTarget instanceof Player)
+			styles.save();
+		echoTarget = target;
+		UUID id = target.getUUID();
+		neuralEcho.reset(styles.theirs(id));
+		opponentEcho.reset(styles.ours(id));
+		neuralHistory =
+			ourHistories.computeIfAbsent(id, k -> new NeuralHistory());
+		opponentHistory =
+			theirHistories.computeIfAbsent(id, k -> new NeuralHistory());
+		neuralHistory.resetFight();
+		opponentHistory.resetFight();
+		neuralObs.mirrored = random.nextBoolean();
+	}
+	
+	/**
+	 * ECHO's inputs (version 12) for either side: "me" is the side the
+	 * observation is for. The same values PvpSim.observe gives.
+	 */
+	private void fillEcho(NeuralObservation o, EchoFeatures echo, Entity me,
+		Entity them, int mySwing, int theirSwing)
+	{
+		Vec3 eye = me.getEyePosition(), tEye = them.getEyePosition();
+		double myH = me.getBoundingBox().getYsize();
+		double th = them.getBoundingBox().getYsize();
+		o.myPitch = me.getXRot();
+		o.opPitch = them.getXRot();
+		o.aimYawErr = EchoFeatures.yawError(me.getX(), me.getZ(), me.getYRot(),
+			them.getX(), them.getZ());
+		o.aimPitchErr = EchoFeatures.pitchError(eye.x, eye.y, eye.z,
+			me.getXRot(), them.getX(), them.getY() + th / 2, them.getZ());
+		o.opAimYawErr = EchoFeatures.yawError(them.getX(), them.getZ(),
+			them.getYRot(), me.getX(), me.getZ());
+		o.opAimPitchErr = EchoFeatures.pitchError(tEye.x, tEye.y, tEye.z,
+			them.getXRot(), me.getX(), me.getY() + myH / 2, me.getZ());
+		Vec3 look = them.getViewVector(1);
+		o.opAimError = EchoFeatures.aimAngle(tEye.x, tEye.y, tEye.z, look.x,
+			look.y, look.z, me.getX(), me.getY() + myH / 2, me.getZ());
+		o.opOnUs = EchoFeatures.rayHitsBox(tEye.x, tEye.y, tEye.z, look.x,
+			look.y, look.z, me.getX(), me.getY(), me.getZ(), myH, REACH);
+		o.myFall = me.fallDistance;
+		o.opFall = them.fallDistance;
+		o.myWeapon = me instanceof LivingEntity le
+			&& isWeapon(le.getMainHandItem()) && !le.isUsingItem();
+		o.opSneaking = them.isCrouching();
+		o.sinceMySwing =
+			mySwing == NEVER ? 1000 : Math.min(1000, tickCount - mySwing);
+		o.sinceTheirSwing =
+			theirSwing == NEVER ? 1000 : Math.min(1000, tickCount - theirSwing);
+		o.opSwung = o.sinceTheirSwing == 0;
+		o.eyeDist = eye.distanceTo(tEye);
+		o.myPing = latency(me);
+		o.opPing = latency(them);
+		o.tickMs = serverTickMs;
+		echo.update(o);
+	}
+	
+	private static boolean isWeapon(ItemStack stack)
+	{
+		return stack.is(ItemTags.SWORDS) || stack.is(ItemTags.AXES)
+			|| stack.is(Items.MACE);
+	}
+	
+	/** A player's latency from the tab list (ms), 0 if unknown. */
+	private static double latency(Entity e)
+	{
+		if(MC.getConnection() == null)
+			return 0;
+		net.minecraft.client.multiplayer.PlayerInfo info =
+			MC.getConnection().getPlayerInfo(e.getUUID());
+		return info == null ? 0 : info.getLatency();
 	}
 	
 	// ── Learning in game (hacks/aimassist/neural/OnlineLearner)
@@ -3325,6 +4023,82 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	private final Vec3[] opponentPositions = new Vec3[3];
 	private int opponentPosCount;
 	private int lastRecordTick = NEVER;
+	/** Cobwebs (true) and water placed since the last tick (network thread). */
+	private final java.util.concurrent.ConcurrentLinkedQueue<BlockPos> placedWebs =
+		new java.util.concurrent.ConcurrentLinkedQueue<>(),
+		placedWater = new java.util.concurrent.ConcurrentLinkedQueue<>();
+	/** Their throws already counted (entity IDs, newest last). */
+	private final int[] countedThrows = new int[16];
+	private int countedThrowCount;
+	
+	/** Network thread: a block change, kept if it's a web or water. */
+	private void notePlaced(BlockPos pos, BlockState state)
+	{
+		if(state.is(Blocks.COBWEB) && placedWebs.size() < 64)
+			placedWebs.add(pos.immutable());
+		else if(state.is(Blocks.WATER) && state.getFluidState().isSource()
+			&& placedWater.size() < 64)
+			placedWater.add(pos.immutable());
+	}
+	
+	/**
+	 * What the target threw or placed this tick (OpponentRecorder's item
+	 * bits): their new pearls, potions and wind charges, a web placed at your
+	 * feet right after their swing, water placed at their own feet.
+	 */
+	private int opponentItems(Player opponent)
+	{
+		int items = 0;
+		Vec3 me = MC.player.position();
+		for(Entity e : MC.level.entitiesForRendering())
+		{
+			if(e.tickCount > 2 || !(e instanceof Projectile p)
+				|| !(p instanceof ThrownEnderpearl
+					|| p instanceof AbstractThrownPotion
+					|| p instanceof AbstractWindCharge)
+				|| p.getOwner() != opponent || isCountedThrow(e.getId()))
+				continue;
+			countedThrows[countedThrowCount++ % countedThrows.length] =
+				e.getId();
+			Vec3 v = e.getDeltaMovement();
+			if(p instanceof AbstractThrownPotion)
+				items |= OpponentRecorder.POT;
+			else if(p instanceof ThrownEnderpearl)
+				items |= v.x * (me.x - e.getX()) + v.z * (me.z - e.getZ()) > 0
+					? OpponentRecorder.PEARL_IN : OpponentRecorder.PEARL_OUT;
+			else
+				items |= v.y < -0.5 * v.length() ? OpponentRecorder.WIND_JUMP
+					: OpponentRecorder.WIND_HIT;
+		}
+		// a web at your feet is theirs (yours go at their feet), water at
+		// their feet too (yours goes at yours)
+		boolean swung = tickCount - targetSwingTick <= 3;
+		Vec3 them = opponent.position();
+		for(BlockPos pos; (pos = placedWebs.poll()) != null;)
+		{
+			double toMe = pos.distToCenterSqr(me.x, me.y + 0.5, me.z);
+			if(swung && toMe < 2.5 * 2.5
+				&& toMe < pos.distToCenterSqr(them.x, them.y + 0.5, them.z))
+				items |= OpponentRecorder.WEB;
+		}
+		for(BlockPos pos; (pos = placedWater.poll()) != null;)
+		{
+			double toThem = pos.distToCenterSqr(them.x, them.y + 0.5, them.z);
+			if(toThem < 2 * 2
+				&& toThem < pos.distToCenterSqr(me.x, me.y + 0.5, me.z))
+				items |= OpponentRecorder.WATER;
+		}
+		return items;
+	}
+	
+	private boolean isCountedThrow(int id)
+	{
+		for(int i = 0; i < Math.min(countedThrowCount,
+			countedThrows.length); i++)
+			if(countedThrows[i] == id)
+				return true;
+		return false;
+	}
 	
 	private boolean isLearning()
 	{
@@ -3357,9 +4131,20 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	{
 		if(learner != null)
 			learner.setEnabled(isLearning());
-		if(target == null || !isLearning() || getLearner() == null)
+		if(target == null || !isLearning() && !recordFights.isChecked()
+			|| getLearner() == null)
 			return;
 		learner.setDuty(neuralLearnCpu.getValue());
+		
+		// the learner's practice fights in what you both wear (user,
+		// 2026-10-30)
+		if(neuralProfile != null && target == neuralProfileTarget
+			&& tickCount % 20 == 0 && target instanceof LivingEntity them)
+		{
+			PvpSim.Gear mine = gearOf(MC.player);
+			neuralProfile.setGear(mine, gearOf(them));
+			learner.noteMyGear(mine);
+		}
 		
 		if(target != neuralProfileTarget)
 		{
@@ -3380,11 +4165,15 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		{
 			neuralProfile.recorder.reset();
 			opponentPosCount = 0;
+			placedWebs.clear();
+			placedWater.clear();
 		}
 		lastRecordTick = tickCount;
 		
-		// players are sent every second tick: their movement over two
-		Vec3 pos = target.position();
+		// players are sent every second tick: their movement over two - from
+		// the positions the server sent (the client smooths them over 3
+		// ticks), not the shown ones
+		Vec3 pos = target.getPositionCodec().getBase();
 		opponentPositions[opponentPosCount++ % 3] = pos;
 		if(opponentPosCount < 3)
 			return;
@@ -3398,11 +4187,43 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			return;
 		}
 		
+		startEchoFight();
 		fillOpponentObservation(neuralProfile.getReach());
+		opponentHistory.context(opponentObs.context, opponentObs.memoryLong);
+		// their keys last tick, as far as their motion shows them
+		double r = Math.toRadians(target.getYRot());
+		double fwd = -motion.x * Math.sin(r) + motion.z * Math.cos(r);
+		double left = motion.x * Math.cos(r) + motion.z * Math.sin(r);
+		opponentObs.lastForward = fwd > 0.06 ? 1 : fwd < -0.06 ? -1 : 0;
+		opponentObs.lastStrafe = left > 0.06 ? 1 : left < -0.06 ? -1 : 0;
+		opponentObs.lastJump = !target.onGround() && motion.y > 0.1;
+		opponentObs.lastSprint = target.isSprinting();
+		opponentObs.lastAttack = targetSwingTick == tickCount - 1;
 		neuralProfile.recorder.record(opponentObs, motion.x, motion.y, motion.z,
-			target.getYRot(), target.onGround(), opponent.hurtTime,
+			target.getYRot(), target.onGround(),
+			// knocked back (a velocity packet): their keys don't show
+			Math.max(opponent.hurtTime,
+				tickCount - targetKnockbackTick < 8 ? 10 : 0),
+			isInCobweb(opponent) || opponent.isUsingItem(),
 			target.isSprinting(), target.isCrouching(),
-			targetSwingTick == tickCount, neuralProfile);
+			targetSwingTick == tickCount, opponent.isBlocking(),
+			opponent.isUsingItem()
+				&& opponent.getUseItem().has(DataComponents.FOOD),
+			opponentItems(opponent), opponentSink);
+		// their history: the general net on their side (the copy starts
+		// as it)
+		float[] general = learner.generalParams();
+		if(general != null)
+		{
+			if(general != opponentNetParams)
+			{
+				opponentNetParams = general;
+				opponentNet = new NeuralNet(learner.getSizes(), general);
+			}
+			opponentObs.encode(opponentInput);
+			opponentNet.forward(opponentInput);
+			opponentHistory.push(opponentNet);
+		}
 		learner.noteActivity();
 	}
 	
@@ -3469,6 +4290,154 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		o.sinceMyHit = Math.min(1000, tickCount - lastTakenTick);
 		o.sinceTheirHit = Math.min(1000, tickCount - lastHitTick);
 		o.sneaking = target.isCrouching();
+		
+		// items (theirs we can't see: none)
+		o.myInWeb = NeuralItems.webCells(target.getBoundingBox()) != null;
+		o.opInWeb = NeuralItems.webCells(player.getBoundingBox()) != null;
+		o.myBlocking = them.isBlocking();
+		o.opBlocking = player.isBlocking();
+		o.hasShield = isBlocker(them.getOffhandItem())
+			|| isBlocker(them.getMainHandItem());
+		o.opHasShield =
+			isBlocker(player.getOffhandItem()) || findShieldSlot() >= 0;
+		o.myEating = eatingFraction(them);
+		o.opUsing = player.isUsingItem() && !player.isBlocking();
+		o.websLeft = o.potsLeft = o.gapplesLeft = o.speedPotsLeft = 0;
+		o.pearlsLeft = o.windLeft = o.waterLeft = 0;
+		o.pearlCooldown = o.windCooldown = 0;
+		o.pearlFlying = false;
+		o.myStrength = o.mySpeed = 0;
+		o.opStrength = o.opSpeed = false;
+		// what can be seen of theirs
+		o.myOnFire = target.isOnFire();
+		o.opOnFire = player.isOnFire();
+		o.myFireRes = 0;
+		o.myShieldCooldown = 0;
+		o.itemBusy = them.isUsingItem() && !them.isBlocking();
+		// their network's memory, if any, can't be seen
+		java.util.Arrays.fill(o.memory, 0);
+		NeuralSpace.fill(o, target, player, tickCount);
+		o.opWeapon = swordDamage(player) - swordDamage(target);
+		o.opToughness = armorToughness(player) - armorToughness(target);
+		o.setGear(gearOf(them), gearOf(player));
+		o.opTotem = holdsTotem(player);
+		o.absorption = them.getAbsorptionAmount();
+		o.regenerating = false;
+		fillEcho(o, opponentEcho, target, player, targetSwingTick, lastHitTick);
+	}
+	
+	/**
+	 * A player's sword damage, like PvpSim's (a diamond sword: 7): yours is
+	 * the best sword in the hotbar, theirs the one in hand (diamond if they
+	 * hold none right now).
+	 */
+	private static double swordDamage(Entity e)
+	{
+		if(!(e instanceof Player p))
+			return 7;
+		double best = 0;
+		if(p == MC.player)
+			for(int i = 0; i < 9; i++)
+				best = Math.max(best, swordDamage(p.getInventory().getItem(i)));
+		else
+			best = swordDamage(p.getMainHandItem());
+		return best > 0 ? best : 7;
+	}
+	
+	/**
+	 * What someone wears, in PvpSim's terms: armor points, toughness,
+	 * Protection levels (all pieces), the sword's damage and its Sharpness,
+	 * Knockback and Fire Aspect (as the server sent their items).
+	 */
+	private static PvpSim.Gear gearOf(LivingEntity e)
+	{
+		int protection = 0;
+		for(EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD,
+			EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET})
+			protection +=
+				enchantLevel(e.getItemBySlot(slot), Enchantments.PROTECTION);
+		ItemStack sword = swordOf(e);
+		int sharpness = enchantLevel(sword, Enchantments.SHARPNESS);
+		return new PvpSim.Gear(e.getArmorValue(), armorToughness(e), protection,
+			(float)swordDamage(e), sharpness > 0 ? 0.5F * sharpness + 0.5F : 0,
+			0.5 * enchantLevel(sword, Enchantments.KNOCKBACK),
+			80 * enchantLevel(sword, Enchantments.FIRE_ASPECT));
+	}
+	
+	/** Their sword: yours the best in the hotbar, theirs in their hand. */
+	private static ItemStack swordOf(LivingEntity e)
+	{
+		if(e != MC.player)
+			return e.getMainHandItem();
+		ItemStack best = ItemStack.EMPTY;
+		for(int i = 0; i < 9; i++)
+		{
+			ItemStack stack = MC.player.getInventory().getItem(i);
+			if(swordDamage(stack) > swordDamage(best))
+				best = stack;
+		}
+		return best;
+	}
+	
+	private static int enchantLevel(ItemStack stack,
+		net.minecraft.resources.ResourceKey<net.minecraft.world.item.enchantment.Enchantment> which)
+	{
+		for(var entry : stack
+			.getOrDefault(DataComponents.ENCHANTMENTS,
+				net.minecraft.world.item.enchantment.ItemEnchantments.EMPTY)
+			.entrySet())
+			if(entry.getKey().is(which))
+				return entry.getIntValue();
+		return 0;
+	}
+	
+	/** The armor toughness of what they wear (netherite: 3 a piece). */
+	private static double armorToughness(Entity e)
+	{
+		if(!(e instanceof LivingEntity le))
+			return 0;
+		double sum = 0;
+		for(EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD,
+			EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET})
+			sum += le.getItemBySlot(slot)
+				.getOrDefault(DataComponents.ATTRIBUTE_MODIFIERS,
+					ItemAttributeModifiers.EMPTY)
+				.compute(Attributes.ARMOR_TOUGHNESS, 0, slot);
+		return sum;
+	}
+	
+	private static boolean holdsTotem(Entity e)
+	{
+		return e instanceof LivingEntity le
+			&& (le.getOffhandItem().is(Items.TOTEM_OF_UNDYING)
+				|| le.getMainHandItem().is(Items.TOTEM_OF_UNDYING));
+	}
+	
+	private static double swordDamage(ItemStack stack)
+	{
+		if(!stack.is(ItemTags.SWORDS))
+			return 0;
+		return stack
+			.getOrDefault(DataComponents.ATTRIBUTE_MODIFIERS,
+				ItemAttributeModifiers.EMPTY)
+			.compute(Attributes.ATTACK_DAMAGE, 1, EquipmentSlot.MAINHAND);
+	}
+	
+	/** What's left of one of the kit's potion effects, 0..1 (PvpSim's). */
+	private static double effectLeft(
+		net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect> effect,
+		int type)
+	{
+		MobEffectInstance e = MC.player.getEffect(effect);
+		return e == null ? 0 : e.getDuration() / (double)PvpSim.POT_TICKS[type];
+	}
+	
+	/** How far into eating something, 0..1 (32 ticks, like a golden apple). */
+	private static double eatingFraction(LivingEntity e)
+	{
+		if(!e.isUsingItem() || !e.getUseItem().has(DataComponents.FOOD))
+			return 0;
+		return Math.min(1, e.getTicksUsingItem() / 32.0);
 	}
 	
 	/**
@@ -3513,6 +4482,8 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		o.mySprint = player.wasSprinting;
 		o.opSprint = target.isSprinting();
 		o.myHealth = player.getHealth() / player.getMaxHealth();
+		o.myFood = player.getFoodData().getFoodLevel();
+		o.mySaturation = player.getFoodData().getSaturationLevel();
 		o.opHealth = target instanceof LivingEntity le
 			? le.getHealth() / Math.max(1, le.getMaxHealth()) : 1;
 		o.critReady = isCritReady();
@@ -3527,6 +4498,61 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		o.sinceMyHit = Math.min(1000, tickCount - lastHitTick);
 		o.sinceTheirHit = Math.min(1000, tickCount - lastTakenTick);
 		o.sneaking = player.isCrouching();
+		
+		o.myInWeb = NeuralItems.webCells(player.getBoundingBox()) != null;
+		o.opInWeb = NeuralItems.webCells(target.getBoundingBox()) != null;
+		o.myBlocking = player.isBlocking();
+		o.hasShield =
+			isBlocker(player.getOffhandItem()) || findShieldSlot() >= 0;
+		o.myEating = eatingFraction(player);
+		o.websLeft = NeuralItems.count(NeuralItems::isCobweb);
+		o.potsLeft =
+			NeuralItems.count(NeuralItems.isSplash(MobEffects.STRENGTH));
+		o.speedPotsLeft =
+			NeuralItems.count(NeuralItems.isSplash(MobEffects.SPEED));
+		o.myStrength = effectLeft(MobEffects.STRENGTH, PvpSim.STRENGTH);
+		o.mySpeed = effectLeft(MobEffects.SPEED, PvpSim.SPEED);
+		// another player's effects never reach the client
+		o.opStrength = o.opSpeed = false;
+		o.pearlsLeft = NeuralItems.count(s -> s.is(Items.ENDER_PEARL));
+		o.windLeft = NeuralItems.count(s -> s.is(Items.WIND_CHARGE));
+		o.waterLeft = NeuralItems.count(s -> s.is(Items.WATER_BUCKET));
+		o.pearlCooldown = NeuralItems
+			.cooldownTicks(s -> s.is(Items.ENDER_PEARL), PvpSim.PEARL_COOLDOWN);
+		o.windCooldown = NeuralItems.cooldownTicks(s -> s.is(Items.WIND_CHARGE),
+			PvpSim.WIND_COOLDOWN);
+		o.pearlFlying = NeuralItems.isPearlFlying();
+		o.myOnFire = player.isOnFire();
+		o.opOnFire = target.isOnFire();
+		o.myFireRes = effectLeft(MobEffects.FIRE_RESISTANCE, PvpSim.FIRE_RES);
+		o.myShieldCooldown = NeuralItems.cooldownTicks(AimAssistHack::isBlocker,
+			PvpSim.SHIELD_DISABLE_TICKS);
+		o.itemBusy = neuralItems.isBusy();
+		NeuralSpace.fill(o, player, target, tickCount);
+		o.opWeapon = swordDamage(target) - swordDamage(player);
+		o.opToughness = armorToughness(target) - armorToughness(player);
+		if(target instanceof LivingEntity them)
+			o.setGear(gearOf(player), gearOf(them));
+		o.opTotem = holdsTotem(target);
+		NeuralAction last = lastNeuralAct;
+		System.arraycopy(last.memory, 0, o.memory, 0, NeuralAction.MEMORY);
+		o.lastForward = last.forward;
+		o.lastStrafe = last.strafe;
+		o.lastJump = last.jump;
+		o.lastSprint = last.sprint;
+		o.lastAttack = last.attack;
+		o.gapplesLeft = NeuralItems.count(NeuralItems::isGoldenApple);
+		o.absorption = player.getAbsorptionAmount();
+		o.regenerating = player.hasEffect(MobEffects.REGENERATION);
+		if(target instanceof LivingEntity le)
+		{
+			o.opBlocking = le.isBlocking();
+			o.opHasShield = isBlocker(le.getOffhandItem())
+				|| isBlocker(le.getMainHandItem());
+			o.opUsing = le.isUsingItem() && !le.isBlocking();
+		}else
+			o.opBlocking = o.opHasShield = o.opUsing = false;
+		fillEcho(o, neuralEcho, player, target, lastHitTick, targetSwingTick);
 	}
 	
 	// ── Dodging
@@ -3901,11 +4927,11 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	public boolean isHoldingSprintOff()
 	{
-		if(!isEnabled() || !autoAttack.isChecked())
+		if(!isEnabled())
 			return false;
 		if(isNeural())
 			return sprintHeldOff;
-		if(!autoCombo.isChecked())
+		if(!autoAttack.isChecked() || !autoCombo.isChecked())
 			return false;
 		
 		return comboPhase != ComboPhase.IDLE || sprintHeldOff;
@@ -3921,12 +4947,27 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// Fall back to a line-of-sight angle check so brief hitResult gaps
 		// during the combo (e.g. while jumping) don't falsely reset.
 		return RotationUtils.isFacingBox(target.getBoundingBox(),
-			range.getValue());
+			Math.sqrt(getRangeSq()));
+	}
+	
+	/**
+	 * How far targets are picked up and kept: Range, or with the Neural
+	 * network the slider's maximum - it looks all around too (FOV 360). Hits
+	 * stay within vanilla's reach either way (HitCheck).
+	 */
+	private double getRangeSq()
+	{
+		if(!isNeural())
+			return range.getValueSq();
+		double max = range.getMaximum();
+		return max * max;
 	}
 	
 	private void updateAuraFarming()
 	{
-		if(MC.player.onGround() || !auraFarming.isChecked())
+		// (not the network's: the spin would turn the camera off the target
+		// whenever it jumps)
+		if(MC.player.onGround() || !auraFarming.isChecked() || isNeural())
 		{
 			spinRemaining = 0F;
 			spinTriggered = false;
@@ -3973,6 +5014,15 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	{
 		if(target == null)
 			return;
+			
+		// the pause menu: the camera stays where it is (in singleplayer no
+		// tick runs to stop the aim, and the item aim would carry on)
+		if(isScreenOpen())
+		{
+			aim.invalidate();
+			lastFrameTime = GameClock.nanoTime();
+			return;
+		}
 		
 		long now = GameClock.nanoTime();
 		float dt = (now - lastFrameTime) / 1_000_000_000F;
@@ -4046,6 +5096,23 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		Vec3 eyes = EntityUtils.getLerpedPos(MC.player, partialTicks).add(0,
 			MC.player.getEyeHeight(MC.player.getPose()), 0);
 		
+		// the network's item (a web at their feet, a potion at ours) turns
+		// the camera there and back, smoothly both ways
+		Vec3 itemPoint = isNeural() ? neuralItems.getAimPoint() : null;
+		if((itemPoint != null) != itemAimLastFrame)
+		{
+			itemAimLastFrame = itemPoint != null;
+			itemTurnBack = itemPoint == null;
+			smoothCatchUp = true;
+			aim.startTurn(GameClock.nanoTime());
+		}
+		if(itemPoint != null)
+		{
+			applyAim(itemPoint, new AABB(itemPoint, itemPoint).inflate(0.1),
+				eyes, true);
+			return;
+		}
+		
 		applyAim(frameAimPoint(offset, drawnBox, eyes), box, eyes,
 			frameAimForceClient);
 	}
@@ -4060,9 +5127,42 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	 */
 	private Vec3 frameAimPoint(Vec3 offset, AABB drawnBox, Vec3 eyes)
 	{
+		if(isNeural())
+			return anywhereOn(drawnBox, eyes);
 		return aimAt.getSelected() == AimAtSetting.AimAt.AUTO
 			? closestPoint(drawnBox, eyes)
 			: aimAt.getAimPoint(target).add(offset);
+	}
+	
+	/**
+	 * The network's aim (user, 2026-10-25): anywhere on them, not one fixed
+	 * point - where the crosshair already is on the hitbox (a bit inside its
+	 * edges), else the point of the hitbox nearest to where it points. So it
+	 * only turns to follow them, or to bring the crosshair back on.
+	 */
+	private Vec3 anywhereOn(AABB box, Vec3 eyes)
+	{
+		AABB inner = box.deflate(box.getXsize() * ANYWHERE_INSET,
+			box.getYsize() * ANYWHERE_INSET, box.getZsize() * ANYWHERE_INSET);
+		Vec3 look =
+			new Rotation(MC.player.getYRot(), MC.player.getXRot()).toLookVec();
+		double d = eyes.distanceTo(closestPoint(inner, eyes));
+		Vec3 hit = inner.clip(eyes, eyes.add(look.scale(d + 4))).orElse(null);
+		if(hit != null)
+			return hit;
+		Vec3 p = eyes.add(look.scale(d));
+		return new Vec3(Mth.clamp(p.x, inner.minX, inner.maxX),
+			Mth.clamp(p.y, inner.minY, inner.maxY),
+			Mth.clamp(p.z, inner.minZ, inner.maxZ));
+	}
+	
+	/** How far inside the hitbox's edges the network's aim stays (share). */
+	private static final double ANYWHERE_INSET = 0.2;
+	
+	/** A screen other than chat is open (the pause menu, an inventory...). */
+	private static boolean isScreenOpen()
+	{
+		return MC.screen != null && !(MC.screen instanceof ChatScreen);
 	}
 	
 	/**
@@ -4080,7 +5180,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	public void onMouseUpdate(MouseUpdateEvent event)
 	{
 		LocalPlayer player = MC.player;
-		if(!isLockingMouse())
+		if(!isLockingMouse() || itemAimLastFrame)
 		{
 			friction.reset();
 			return;
@@ -4170,7 +5270,7 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 			
 		// Silent aim never turns the camera - locking it would just freeze
 		// your view.
-		return faceTarget.getSelected() == FaceTarget.CLIENT
+		return faceTarget.getSelected() == FaceTarget.CLIENT || isNeural()
 			|| autoAttack.isChecked() && autoCombo.isChecked()
 			|| spinRemaining > 0F;
 	}
@@ -4180,9 +5280,11 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 		// also drops a target left over from the previous world or dimension
 		if(e == null || !e.isAlive() || e.level() != MC.level)
 			return false;
-		if(EntityUtils.distanceToHitboxSq(e) > range.getValueSq())
+		if(EntityUtils.distanceToHitboxSq(e) > getRangeSq())
 			return false;
-		if(checkLOS.isChecked()
+		// (the network keeps its opponent behind a pillar too - it's picked
+		// up only in sight, below)
+		if(checkLOS.isChecked() && !isNeural()
 			&& !BlockUtils.hasLineOfSight(aimAt.getAimPoint(e)))
 			return false;
 			
@@ -4289,6 +5391,65 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	@Override
 	public void onReceivedPacket(PacketInputEvent event)
 	{
+		// the packet tap (FightLog, OpponentRecorder): IDs only
+		int tapId = tapTargetId;
+		if(tapId >= 0)
+		{
+			if(event.getPacket() instanceof ClientboundAnimatePacket swing
+				&& swing.getId() == tapId && swing
+					.getAction() == ClientboundAnimatePacket.SWING_MAIN_HAND)
+			{
+				tapSwings.incrementAndGet();
+				return;
+			}
+			if(event.getPacket() instanceof ClientboundSetEntityMotionPacket kb
+				&& kb.id() == tapId)
+			{
+				Vec3 m = kb.movement();
+				tapKnockbackX = m.x;
+				tapKnockbackY = m.y;
+				tapKnockbackZ = m.z;
+				tapKnockbacks.incrementAndGet();
+				return;
+			}
+			// placed cobwebs and water (the recorder's item labels): positions
+			// only, looked at in the next tick
+			if(event.getPacket() instanceof ClientboundBlockUpdatePacket block)
+			{
+				notePlaced(block.getPos(), block.getBlockState());
+				return;
+			}
+			if(event
+				.getPacket() instanceof ClientboundSectionBlocksUpdatePacket blocks)
+			{
+				blocks.runUpdates(this::notePlaced);
+				return;
+			}
+		}
+		// totem pops (entity event 35): the entity is looked up on the next
+		// tick, never here on the network thread
+		if(event.getPacket() instanceof ClientboundEntityEventPacket pop
+			&& pop.getEventId() == 35)
+		{
+			if(totemPops.size() < 64)
+				totemPops.add(pop);
+			return;
+		}
+		// the server's tick length, from how fast its clock runs
+		if(event.getPacket() instanceof ClientboundSetTimePacket time)
+		{
+			long now = System.nanoTime(), game = time.gameTime();
+			long ticks = game - timeGameTick;
+			if(timeNanos != 0 && ticks > 0 && ticks < 200)
+			{
+				double ms = (now - timeNanos) / 1e6 / ticks;
+				serverTickMs =
+					serverTickMs * 0.7 + Math.max(25, Math.min(500, ms)) * 0.3;
+			}
+			timeNanos = now;
+			timeGameTick = game;
+			return;
+		}
 		if(!(event.getPacket() instanceof ClientboundDamageEventPacket packet))
 			return;
 		
@@ -4310,16 +5471,18 @@ public final class AimAssistHack extends Hack implements UpdateListener,
 	{
 		Stream<Entity> stream = EntityUtils.getAttackableEntities();
 		
-		double rangeSq = range.getValueSq();
+		double rangeSq = getRangeSq();
 		stream =
 			stream.filter(e -> EntityUtils.distanceToHitboxSq(e) <= rangeSq);
 		
 		if(exclude != null)
 			stream = stream.filter(e -> e != exclude);
 		
-		if(fov.getValue() < 360.0)
-			stream = stream.filter(e -> RotationUtils.getAngleToLookVec(
-				aimAt.getAimPoint(e)) <= fov.getValue() / 2.0);
+		// (the network looks all around)
+		double fovValue = isNeural() ? 360 : fov.getValue();
+		if(fovValue < 360.0)
+			stream = stream.filter(e -> RotationUtils
+				.getAngleToLookVec(aimAt.getAimPoint(e)) <= fovValue / 2.0);
 		
 		stream = entityFilters.applyTo(stream);
 		

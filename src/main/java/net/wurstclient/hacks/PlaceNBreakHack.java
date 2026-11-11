@@ -99,7 +99,8 @@ public final class PlaceNBreakHack extends Hack implements UpdateListener
 	protected void onDisable()
 	{
 		EVENTS.remove(UpdateListener.class, this);
-		MC.gameMode.stopDestroyBlock();
+		if(MC.gameMode != null)
+			MC.gameMode.stopDestroyBlock();
 		nextActionTick = 0;
 		pendingCyclePos = null;
 		

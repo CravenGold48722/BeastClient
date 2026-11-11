@@ -99,13 +99,20 @@ public final class HackList implements UpdateListener
 	public final BaseFinderHack baseFinderHack = new BaseFinderHack();
 	public final BedrockEscapeHack bedrockEscapeHack = new BedrockEscapeHack();
 	public final BedrockStashHack bedrockStashHack = new BedrockStashHack();
+	public final BetterTabHack betterTabHack = new BetterTabHack();
 	public final BlinkHack blinkHack = new BlinkHack();
+	public final BlockSelectionHack blockSelectionHack =
+		new BlockSelectionHack();
+	public final BlurHack blurHack = new BlurHack();
 	public final BoatFlyHack boatFlyHack = new BoatFlyHack();
 	public final BoatPhaseHack boatPhaseHack = new BoatPhaseHack();
 	public final BonemealAuraHack bonemealAuraHack = new BonemealAuraHack();
 	public final BookBotHack bookBotHack = new BookBotHack();
+	public final BossStackHack bossStackHack = new BossStackHack();
 	public final BowAimbotHack bowAimbotHack = new BowAimbotHack();
 	public final BreadcrumbsHack breadcrumbsHack = new BreadcrumbsHack();
+	public final BreakIndicatorsHack breakIndicatorsHack =
+		new BreakIndicatorsHack();
 	public final BuildRandomHack buildRandomHack = new BuildRandomHack();
 	public final BunnyHopHack bunnyHopHack = new BunnyHopHack();
 	public final CameraDistanceHack cameraDistanceHack =
@@ -118,6 +125,7 @@ public final class HackList implements UpdateListener
 	public final ChestEspHack chestEspHack = new ChestEspHack();
 	public final ChestSearchHack chestSearchHack = new ChestSearchHack();
 	public final ChorusFruitHack chorusFruitHack = new ChorusFruitHack();
+	public final CityEspHack cityEspHack = new CityEspHack();
 	public final ClickAuraHack clickAuraHack = new ClickAuraHack();
 	public final ClickGuiHack clickGuiHack = new ClickGuiHack();
 	public final ClientChatOverlayHack clientChatOverlayHack =
@@ -162,6 +170,7 @@ public final class HackList implements UpdateListener
 	public final FollowHack followHack = new FollowHack();
 	public final ForceOpHack forceOpHack = new ForceOpHack();
 	public final FreecamHack freecamHack = new FreecamHack();
+	public final FreeLookHack freeLookHack = new FreeLookHack();
 	public final FullbrightHack fullbrightHack = new FullbrightHack();
 	public final FunCreepersHack funCreepersHack = new FunCreepersHack();
 	public final GameStatsHack gameStatsHack = new GameStatsHack();
@@ -170,6 +179,7 @@ public final class HackList implements UpdateListener
 	public final HeadRollHack headRollHack = new HeadRollHack();
 	public final HealthTagsHack healthTagsHack = new HealthTagsHack();
 	public final HighJumpHack highJumpHack = new HighJumpHack();
+	public final HoleEspHack holeEspHack = new HoleEspHack();
 	public final InfiniChatHack infiniChatHack = new InfiniChatHack();
 	public final InfiniteReachHack infiniteReachHack = new InfiniteReachHack();
 	public final InstaBuildHack instaBuildHack = new InstaBuildHack();
@@ -183,6 +193,8 @@ public final class HackList implements UpdateListener
 	public final ItemEspHack itemEspHack = new ItemEspHack();
 	public final ItemGeneratorHack itemGeneratorHack = new ItemGeneratorHack();
 	public final ItemHandlerHack itemHandlerHack = new ItemHandlerHack();
+	public final ItemHighlightHack itemHighlightHack = new ItemHighlightHack();
+	public final ItemPhysicsHack itemPhysicsHack = new ItemPhysicsHack();
 	public final JesusHack jesusHack = new JesusHack();
 	public final JetpackHack jetpackHack = new JetpackHack();
 	public final JoinDropHack joinDropHack = new JoinDropHack();
@@ -268,6 +280,7 @@ public final class HackList implements UpdateListener
 	public final PlayerEspHack playerEspHack = new PlayerEspHack();
 	public final PlayerMuteHack playerMuteHack = new PlayerMuteHack();
 	public final PlayerSonarHack playerSonarHack = new PlayerSonarHack();
+	public final PopChamsHack popChamsHack = new PopChamsHack();
 	public final PortalEspHack portalEspHack = new PortalEspHack();
 	public final PortalGuiHack portalGuiHack = new PortalGuiHack();
 	public final PotEspHack potEspHack = new PotEspHack();
@@ -347,6 +360,7 @@ public final class HackList implements UpdateListener
 	public final VeinMinerHack veinMinerHack = new VeinMinerHack();
 	public final ViewmodelHack viewmodelHack = new ViewmodelHack();
 	public final VillagerRollHack villagerRollHack = new VillagerRollHack();
+	public final VoidEspHack voidEspHack = new VoidEspHack();
 	public final WardenEspHack wardenEspHack = new WardenEspHack();
 	public final WaypointsHack waypointsHack = new WaypointsHack();
 	public final WebhookAlertHack webhookAlertHack = new WebhookAlertHack();

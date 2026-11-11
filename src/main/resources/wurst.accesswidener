@@ -38,3 +38,5 @@ accessible	field	net/minecraft/client/renderer/ItemInHandRenderer	oMainHandHeigh
 accessible	field	net/minecraft/network/protocol/game/ClientboundSectionBlocksUpdatePacket	sectionPos	Lnet/minecraft/core/SectionPos;
 accessible	field	net/minecraft/network/protocol/game/ClientboundEntityEventPacket	entityId	I
 accessible	field	net/minecraft/client/gui/Font	provider	Lnet/minecraft/client/gui/Font$Provider;
+accessible	field	net/minecraft/client/renderer/LevelRenderer	destructionProgress	Lit/unimi/dsi/fastutil/longs/Long2ObjectMap;
+accessible	field	net/minecraft/client/multiplayer/MultiPlayerGameMode	destroyBlockPos	Lnet/minecraft/core/BlockPos;

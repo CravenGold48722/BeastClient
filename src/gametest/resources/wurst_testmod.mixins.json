@@ -7,7 +7,8 @@
   ],
   "client": [
     "ScreenMixin",
-    "SodiumUniformsMixin"
+    "SodiumUniformsMixin",
+    "ThreadingImplMixin"
   ],
   "injectors": {
     "defaultRequire": 1

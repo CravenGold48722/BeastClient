@@ -60,7 +60,8 @@ public final class AutoMineHack extends Hack
 		EVENTS.remove(UpdateListener.class, this);
 		EVENTS.remove(HandleBlockBreakingListener.class, this);
 		IKeyMapping.get(MC.options.keyAttack).resetPressedState();
-		MC.gameMode.stopDestroyBlock();
+		if(MC.gameMode != null)
+			MC.gameMode.stopDestroyBlock();
 	}
 	
 	@Override

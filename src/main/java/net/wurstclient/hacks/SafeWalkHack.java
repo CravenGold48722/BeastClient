@@ -9,20 +9,37 @@ package net.wurstclient.hacks;
 
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
+import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
-import net.wurstclient.mixinterface.IKeyMapping;
 import net.wurstclient.settings.CheckboxSetting;
 import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
+import net.wurstclient.util.KeyPresser;
 
+/**
+ * Keeps you from walking off edges.
+ *
+ * <p>
+ * "Sneak at edges" (default): your sneak key goes down - a real press, see
+ * {@link KeyPresser} - the tick before your next move would take you over
+ * the edge, and vanilla's own sneaking stops you there, like a player
+ * bridging. Off: you're stopped at the edge without sneaking, which no
+ * vanilla client does (Grim Simulation: sneak-style movement without the
+ * sneak input).
+ */
 @SearchTags({"safe walk", "SneakSafety", "sneak safety", "SpeedBridgeHelper",
 	"speed bridge helper"})
-public final class SafeWalkHack extends Hack
+public final class SafeWalkHack extends Hack implements UpdateListener
 {
-	private final CheckboxSetting sneak =
-		new CheckboxSetting("Sneak at edges", "Visibly sneak at edges.", false);
+	private final CheckboxSetting sneak = new CheckboxSetting("Sneak at edges",
+		"Presses your sneak key right before an edge, so vanilla's sneaking"
+			+ " stops you there - what a player does.\n\n"
+			+ "Off: stops you at edges without sneaking. No vanilla client can,"
+			+ " so anti-cheats flag it.",
+		true);
 	
 	private final SliderSetting edgeDistance = new SliderSetting(
 		"Sneak edge distance",
@@ -30,7 +47,8 @@ public final class SafeWalkHack extends Hack
 			+ "This setting is only used when \"Sneak at edges\" is enabled.",
 		0.05, 0.05, 0.25, 0.001, ValueDisplay.DECIMAL.withSuffix("m"));
 	
-	private boolean sneaking;
+	/** Most a walking/sprinting player speeds up in one tick, plus a bit. */
+	private static final double MAX_SPEEDUP = 0.15;
 	
 	public SafeWalkHack()
 	{
@@ -44,50 +62,46 @@ public final class SafeWalkHack extends Hack
 	protected void onEnable()
 	{
 		WURST.getHax().parkourHack.setEnabled(false);
-		sneaking = false;
+		EVENTS.add(UpdateListener.class, this);
 	}
 	
 	@Override
 	protected void onDisable()
 	{
-		if(sneaking)
-			setSneaking(false);
+		EVENTS.remove(UpdateListener.class, this);
 	}
 	
-	public void onClipAtLedge(boolean clipping)
+	@Override
+	public void onUpdate()
 	{
 		LocalPlayer player = MC.player;
-		
-		if(!isEnabled() || !sneak.isChecked() || !player.onGround())
-		{
-			if(sneaking)
-				setSneaking(false);
-			
+		if(!sneak.isChecked() || player == null || !player.onGround())
 			return;
-		}
+			
+		// where this tick's move can take you: last tick's speed (after
+		// friction) plus the most input can add, in the direction you go
+		Vec3 v = player.getDeltaMovement().multiply(1, 0, 1);
+		double speed = v.horizontalDistance();
+		Vec3 next = speed > 1e-4 ? v.add(v.scale(MAX_SPEEDUP / speed)) : v;
 		
-		AABB box = player.getBoundingBox();
-		AABB adjustedBox = box.expandTowards(0, -player.maxUpStep(), 0)
-			.inflate(-edgeDistance.getValue(), 0, -edgeDistance.getValue());
-		
-		if(MC.level.noCollision(player, adjustedBox))
-			clipping = true;
-		
-		setSneaking(clipping);
+		if(isOverEdge(player, Vec3.ZERO) || isOverEdge(player, next))
+			KeyPresser.press(MC.options.keyShift);
 	}
 	
-	private void setSneaking(boolean sneaking)
+	private boolean isOverEdge(LocalPlayer player, Vec3 offset)
 	{
-		IKeyMapping sneakKey = IKeyMapping.get(MC.options.keyShift);
-		
-		if(sneaking)
-			sneakKey.setDownIgnoringToggle(true);
-		else
-			sneakKey.resetPressedState();
-		
-		this.sneaking = sneaking;
+		AABB box = player.getBoundingBox().move(offset)
+			.expandTowards(0, -player.maxUpStep(), 0)
+			.inflate(-edgeDistance.getValue(), 0, -edgeDistance.getValue());
+		return MC.level.noCollision(player, box);
 	}
 	
-	// See LocalPlayerMixin.isStayingOnGroundSurface() and
-	// LocalPlayerMixin.maybeBackOffFromEdge()
+	/**
+	 * With "Sneak at edges" off: vanilla's sneak edge-stop without sneaking
+	 * (LocalPlayerMixin.isStayingOnGroundSurface()).
+	 */
+	public boolean clipsAtEdges()
+	{
+		return isEnabled() && !sneak.isChecked();
+	}
 }

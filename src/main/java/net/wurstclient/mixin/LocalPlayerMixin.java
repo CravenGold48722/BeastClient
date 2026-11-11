@@ -13,7 +13,6 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
@@ -59,6 +58,14 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 	@Final
 	protected Minecraft minecraft;
 	
+	@Shadow
+	private double xLast;
+	@Shadow
+	private double yLast;
+	@Shadow
+	private double zLast;
+	@Shadow
+	private boolean lastOnGround;
 	@Shadow
 	private int positionReminder;
 	
@@ -193,23 +200,6 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 		EventManager.fire(PostMotionEvent.INSTANCE);
 	}
 	
-	/**
-	 * ElytraWalk (ported from the CevAPI fork) replaces the movement while it
-	 * skates on the ground.
-	 */
-	@ModifyVariable(
-		method = "move(Lnet/minecraft/world/entity/MoverType;Lnet/minecraft/world/phys/Vec3;)V",
-		at = @At("HEAD"),
-		argsOnly = true,
-		ordinal = 0)
-	private Vec3 elytraWalk$groundSkating(Vec3 movement, MoverType type,
-		Vec3 originalMovement)
-	{
-		HackList hax = WurstClient.INSTANCE.getHax();
-		return hax == null ? movement
-			: hax.elytraWalkHack.getGroundMovement(type, movement);
-	}
-	
 	@Inject(
 		method = "move(Lnet/minecraft/world/entity/MoverType;Lnet/minecraft/world/phys/Vec3;)V",
 		at = @At("HEAD"))
@@ -315,9 +305,14 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 	}
 	
 	@Override
-	public void elytraWalk$setPositionReminder(int value)
+	public void wurst$setLastSentPosition(double x, double y, double z,
+		boolean onGround, int ticksAgo)
 	{
-		positionReminder = value;
+		xLast = x;
+		yLast = y;
+		zLast = z;
+		lastOnGround = onGround;
+		positionReminder = ticksAgo;
 	}
 	
 	@Override
@@ -328,29 +323,15 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 	}
 	
 	/**
-	 * This is the part that makes SafeWalk work.
+	 * SafeWalk with "Sneak at edges" off: vanilla's sneak edge-stop without
+	 * sneaking. (With it on - the default - SafeWalk presses the real sneak
+	 * key and vanilla does the rest.)
 	 */
 	@Override
 	protected boolean isStayingOnGroundSurface()
 	{
 		return super.isStayingOnGroundSurface()
-			|| WurstClient.INSTANCE.getHax().safeWalkHack.isEnabled();
-	}
-	
-	/**
-	 * This mixin allows SafeWalk to sneak visibly when the player is
-	 * near a ledge.
-	 */
-	@Override
-	protected Vec3 maybeBackOffFromEdge(Vec3 movement, MoverType type)
-	{
-		Vec3 result = super.maybeBackOffFromEdge(movement, type);
-		
-		if(movement != null)
-			WurstClient.INSTANCE.getHax().safeWalkHack
-				.onClipAtLedge(!movement.equals(result));
-		
-		return result;
+			|| WurstClient.INSTANCE.getHax().safeWalkHack.clipsAtEdges();
 	}
 	
 	@Override

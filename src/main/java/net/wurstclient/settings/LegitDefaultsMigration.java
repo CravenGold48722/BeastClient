@@ -66,7 +66,17 @@ public enum LegitDefaultsMigration
 		// MaceAssist: pearls are caught from any upward throw now (the catch
 		// is solved exactly, flat throws get a sprint-jump)
 		new Batch("legit-defaults-v4",
-			new String[][]{{"MaceAssist", "Pearl catch angle", "60.0"}})};
+			new String[][]{{"MaceAssist", "Pearl catch angle", "60.0"}}),
+		
+		// BookBot: a 32-character title is past vanilla's 15 (Grim ExploitB
+		// "title too long" on every book) - opt-in now
+		new Batch("legit-defaults-v5",
+			new String[][]{{"BookBot", "High-byte signed name", "true"}}),
+		
+		// SafeWalk: a real sneak at edges (stopping at them without sneaking
+		// is Grim Simulation)
+		new Batch("legit-defaults-v6",
+			new String[][]{{"SafeWalk", "Sneak at edges", "false"}})};
 	
 	public static void run(Path wurstFolder,
 		Function<String, Feature> featureByName)

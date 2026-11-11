@@ -41,6 +41,7 @@ import net.wurstclient.settings.TakeItemsFromSetting;
 import net.wurstclient.settings.TakeItemsFromSetting.TakeItemsFrom;
 import net.wurstclient.settings.filterlists.AnchorAuraFilterList;
 import net.wurstclient.settings.filterlists.EntityFilterList;
+import net.wurstclient.util.BlockBreaker;
 import net.wurstclient.util.BlockUtils;
 import net.wurstclient.util.ChatUtils;
 import net.wurstclient.util.EntityUtils;
@@ -171,11 +172,13 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 		ArrayList<BlockPos> newAnchors = new ArrayList<>();
 		
 		boolean shouldSwing = false;
+		turning = false;
 		for(Entity target : targets)
 		{
 			ArrayList<BlockPos> freeBlocks = getFreeBlocksNear(target);
 			
 			for(BlockPos pos : freeBlocks)
+			{
 				if(placeAnchor(pos))
 				{
 					shouldSwing = true;
@@ -184,7 +187,12 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 					// TODO optional speed limit(?)
 					break;
 				}
+				if(turning)
+					break;
+			}
 			
+			if(turning)
+				break;
 			if(!newAnchors.isEmpty()
 				&& !faceTarget.canFaceMultipleTargetsPerTick())
 				break;
@@ -241,6 +249,9 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 			swingHand.swing(InteractionHand.MAIN_HAND);
 	}
 	
+	/** placeAnchor() turned to a spot and clicks it next tick. */
+	private boolean turning;
+	
 	private boolean rightClickBlock(BlockPos pos)
 	{
 		Vec3 eyesPos = RotationUtils.getEyesPos();
@@ -266,6 +277,12 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 				continue;
 			
 			faceTarget.face(hitVec);
+			
+			// The click goes out before this tick's movement packet: only once
+			// the rotation the server has is on that block (Grim RotationPlace
+			// "post-flying", like CrystalAura)
+			if(BlockBreaker.isTurnPending(pos))
+				return false;
 			
 			// place block
 			IMC.getInteractionManager().rightClickBlock(pos, side, hitVec);
@@ -312,6 +329,13 @@ public final class AnchorAuraHack extends Hack implements UpdateListener
 				return false;
 			
 			faceTarget.face(hitVec);
+			
+			// see rightClickBlock()
+			if(BlockBreaker.isTurnPending(neighbor))
+			{
+				turning = true;
+				return false;
+			}
 			
 			// place block
 			IMC.getInteractionManager().rightClickBlock(neighbor,

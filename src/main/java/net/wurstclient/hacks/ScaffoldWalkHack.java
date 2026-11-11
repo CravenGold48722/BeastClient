@@ -91,6 +91,21 @@ public final class ScaffoldWalkHack extends Hack
 			+ " afterwards.",
 		900, 180, 1800, 30, ValueDisplay.DEGREES.withSuffix("/s"));
 	
+	private final CheckboxSetting slowBridging = new CheckboxSetting(
+		"Slow bridging",
+		"§lClient-side§r: at most one block every \"Ticks per block\", holding"
+			+ " sneak at the edge in between, like a slow (ninja) bridger.\n\n"
+			+ "For strict anti-cheats: Intave at its strictest allows a block"
+			+ " every 6-7 ticks, a godbridge at walking speed places one about"
+			+ " every 5 (~4 blocks/s).",
+		false);
+	
+	private final SliderSetting ticksPerBlock =
+		new SliderSetting("Ticks per block",
+			"How many ticks \"Slow bridging\" waits between blocks at least.\n"
+				+ "7 = ~2.9 blocks a second.",
+			7, 5, 12, 1, ValueDisplay.INTEGER);
+	
 	/** Bridge directions this close to straight or diagonal snap to it. */
 	private static final double SNAP_DEGREES = 4;
 	
@@ -125,6 +140,8 @@ public final class ScaffoldWalkHack extends Hack
 	private int ticksSinceSneak;
 	/** Jump once this many blocks are placed: 8-10, like players. */
 	private int jumpAfter = 9;
+	/** When the last block went in (Slow bridging). */
+	private long lastPlaceTick = Long.MIN_VALUE / 2;
 	private static final Random RANDOM = new Random();
 	
 	// the smooth aim (spring) state
@@ -157,6 +174,18 @@ public final class ScaffoldWalkHack extends Hack
 		addSetting(faceTarget);
 		addSetting(humanizeAim);
 		addSetting(turnSpeed);
+		addSetting(slowBridging);
+		addSetting(ticksPerBlock);
+	}
+	
+	/**
+	 * Slow bridging: the last block went in too recently for the next one -
+	 * sneak at the edge (vanilla's edge protection holds you) and don't click.
+	 */
+	private boolean isPacing()
+	{
+		return slowBridging.isChecked()
+			&& tick - lastPlaceTick < ticksPerBlock.getValueI();
 	}
 	
 	@Override
@@ -252,10 +281,13 @@ public final class ScaffoldWalkHack extends Hack
 		moving = walking ? wanted : 0;
 		
 		// click first (with the aim from before), then aim for the next one
-		boolean placed = ensureBlockSlot() && tryPlace();
+		boolean placed = !isPacing() && ensureBlockSlot() && tryPlace();
 		if(placed)
+		{
 			blocksSinceJump++;
-			
+			lastPlaceTick = tick;
+		}
+		
 		// A godbridger's jump every 8-10 blocks, right after one - the
 		// next blocks go in while in the air. Only when a short simulation
 		// from here says it lands on them. Pressed like the jump key, so the
@@ -455,6 +487,10 @@ public final class ScaffoldWalkHack extends Hack
 				planYaw, reach);
 			sneaking = planner.shouldSneak();
 		}
+		// Slow bridging: wait at the edge, sneaking - edge protection holds
+		// you from this tick's sneak key on; the planner replans each tick
+		if(isPacing())
+			sneaking = true;
 		double override = planner.yawOverride();
 		targetYaw = (float)(Double.isNaN(override) ? planYaw : override);
 		targetPitch = (float)pitch;

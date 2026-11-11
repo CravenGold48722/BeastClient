@@ -20,6 +20,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import net.minecraft.client.gui.Font;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -140,6 +141,9 @@ public class PearlEspHack extends Hack
 		new SliderSetting("Inference window", 32, 2, 250, 1,
 			ValueDisplay.INTEGER.withSuffix(" ms"));
 	
+	private final ConcurrentLinkedQueue<ReceivedPacket> received =
+		new ConcurrentLinkedQueue<>();
+	private long packetTimeMs;
 	private final ArrayList<TrackedPearl> pearls = new ArrayList<>();
 	private final ArrayList<HeldPearl> holders = new ArrayList<>();
 	private final HashSet<UUID> alertedPearls = new HashSet<>();
@@ -214,6 +218,7 @@ public class PearlEspHack extends Hack
 		EVENTS.remove(RightClickListener.class, this);
 		EVENTS.remove(RenderListener.class, this);
 		saveOwnershipData(true);
+		received.clear();
 		pearls.clear();
 		holders.clear();
 		alertedPearls.clear();
@@ -242,7 +247,36 @@ public class PearlEspHack extends Hack
 	@Override
 	public void onReceivedPacket(PacketInputEvent event)
 	{
-		rememberPacket(event.getPacket());
+		// netty thread: only queue it - handling it here changed the maps
+		// while onUpdate walked them (ConcurrentModificationException crash,
+		// 2026-10-31) and chatted / looked up entities off the game thread
+		received.add(
+			new ReceivedPacket(event.getPacket(), System.currentTimeMillis()));
+	}
+	
+	/** Handles the queued packets on the game thread, at their arrival time. */
+	private void handleReceivedPackets()
+	{
+		for(ReceivedPacket r; (r = received.poll()) != null;)
+		{
+			packetTimeMs = r.timeMs();
+			try
+			{
+				rememberPacket(r.packet());
+			}finally
+			{
+				packetTimeMs = 0;
+			}
+		}
+	}
+	
+	/**
+	 * The time now, or while a queued packet is handled the time it came in,
+	 * so the join/leave timing inference sees the real gaps.
+	 */
+	private long clockMs()
+	{
+		return packetTimeMs != 0 ? packetTimeMs : System.currentTimeMillis();
 	}
 	
 	@Override
@@ -254,7 +288,7 @@ public class PearlEspHack extends Hack
 		if(!isHoldingPearlAnyHand(MC.player))
 			return;
 		
-		lastOwnPearlUseMs = System.currentTimeMillis();
+		lastOwnPearlUseMs = clockMs();
 		lastOwnPearlUsePos = MC.player.position();
 	}
 	
@@ -299,11 +333,12 @@ public class PearlEspHack extends Hack
 	@Override
 	public void onUpdate()
 	{
+		handleReceivedPackets();
 		pearls.clear();
 		holders.clear();
 		hasOwnPearl = false;
 		HashSet<UUID> seenPearls = new HashSet<>();
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		
 		if(MC.level == null)
 			return;
@@ -335,7 +370,7 @@ public class PearlEspHack extends Hack
 				if(ownPearl)
 				{
 					hasOwnPearl = true;
-					ownPearlSuppressUntilMs = System.currentTimeMillis() + 4000;
+					ownPearlSuppressUntilMs = clockMs() + 4000;
 				}
 				
 				if(!ownPearl && alertedPearls.add(pearl.getUUID()))
@@ -583,8 +618,8 @@ public class PearlEspHack extends Hack
 					Vec3 start = getHandPos(MC.player, hand, partialTicks);
 					// Suppress prediction if our pearl is in-flight or recently
 					// thrown
-					boolean hasActual = hasOwnPearl
-						|| System.currentTimeMillis() < ownPearlSuppressUntilMs;
+					boolean hasActual =
+						hasOwnPearl || clockMs() < ownPearlSuppressUntilMs;
 					if(start != null)
 					{
 						if(!hasActual)
@@ -842,10 +877,8 @@ public class PearlEspHack extends Hack
 		// Update pearl identity with owner
 		PearlIdentity pearlId = pearlIdentities.get(pearlUuid);
 		if(pearlId != null)
-			pearlIdentities.put(pearlUuid,
-				pearlId.withOwner(ownerUuid,
-					OwnerConfidence.CONFIRMED_PEARL_UUID_CACHE,
-					System.currentTimeMillis()));
+			pearlIdentities.put(pearlUuid, pearlId.withOwner(ownerUuid,
+				OwnerConfidence.CONFIRMED_PEARL_UUID_CACHE, clockMs()));
 	}
 	
 	private String rememberPearlOwnerLabel(UUID pearlUuid, String label)
@@ -872,7 +905,7 @@ public class PearlEspHack extends Hack
 	
 	private void rememberPlayerInfo(ClientboundPlayerInfoUpdatePacket packet)
 	{
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		
 		for(ClientboundPlayerInfoUpdatePacket.Entry entry : packet.entries())
 		{
@@ -903,7 +936,7 @@ public class PearlEspHack extends Hack
 			return;
 		
 		int entityId = packet.getId();
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		
 		// Deactivate any previous binding for this player UUID
 		markPlayerEntityIdInactiveForUuid(uuid, now);
@@ -931,7 +964,7 @@ public class PearlEspHack extends Hack
 		
 		int entityId = player.getId();
 		UUID uuid = player.getUUID();
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		
 		// Deactivate any previous binding for this player UUID
 		markPlayerEntityIdInactiveForUuid(uuid, now);
@@ -1072,8 +1105,7 @@ public class PearlEspHack extends Hack
 		if(ownerId != null && ownerId > 0 && ownerId != MC.player.getId())
 			return null;
 		
-		if(System.currentTimeMillis()
-			- lastOwnPearlUseMs > OWN_THROW_INFERENCE_MS)
+		if(clockMs() - lastOwnPearlUseMs > OWN_THROW_INFERENCE_MS)
 			return null;
 		
 		Vec3 reference = lastOwnPearlUsePos != null ? lastOwnPearlUsePos
@@ -1234,7 +1266,7 @@ public class PearlEspHack extends Hack
 			{
 				Vec3 hitPos = hit.getLocation();
 				path.add(hitPos);
-				return new PearlPrediction(path, hitPos);
+				return new PearlPrediction(path, hitPos, true);
 			}
 			
 			path.add(next);
@@ -1252,7 +1284,11 @@ public class PearlEspHack extends Hack
 		return new PearlPrediction(path, landing);
 	}
 	
-	private PearlPrediction buildPredictionFromPlayer(Player player,
+	/**
+	 * Where a pearl thrown now from this hand goes. Trajectories draws pearls
+	 * with this too.
+	 */
+	public PearlPrediction buildPredictionFromPlayer(Player player,
 		InteractionHand hand, float partialTicks)
 	{
 		Vec3 start = getHandPos(player, hand, partialTicks);
@@ -1280,7 +1316,7 @@ public class PearlEspHack extends Hack
 			{
 				Vec3 hitPos = hit.getLocation();
 				path.add(hitPos);
-				return new PearlPrediction(path, hitPos);
+				return new PearlPrediction(path, hitPos, true);
 			}
 			
 			path.add(next);
@@ -1348,7 +1384,7 @@ public class PearlEspHack extends Hack
 	
 	private String inferOwnerFromJoinTiming(UUID pearlUuid, Entity pearl)
 	{
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		long windowMs = inferenceWindowMs.getValueI();
 		long pearlSpawnTime = 0L;
 		
@@ -1409,7 +1445,7 @@ public class PearlEspHack extends Hack
 	
 	private String inferOwnerFromLeaveTiming(UUID pearlUuid)
 	{
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		long windowMs = inferenceWindowMs.getValueI();
 		
 		// Pearl vanished — use now as reference
@@ -1535,7 +1571,7 @@ public class PearlEspHack extends Hack
 		UUID pearlUuid = packet.getUUID();
 		int pearlEntityId = packet.getId();
 		int ownerId = packet.getData();
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		
 		pearlSpawnOwnerIds.put(pearlUuid, ownerId);
 		if(ownerId == 0)
@@ -1618,7 +1654,7 @@ public class PearlEspHack extends Hack
 	
 	private void rememberEntityRemoval(ClientboundRemoveEntitiesPacket packet)
 	{
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		
 		for(int id : packet.getEntityIds())
 			markEntityIdInactive(id, now);
@@ -1648,8 +1684,8 @@ public class PearlEspHack extends Hack
 	{
 		PearlIdentity pid = pearlIdentities.get(pearlUuid);
 		if(pid != null)
-			pearlIdentities.put(pearlUuid, pid.withOwner(ownerUuid, confidence,
-				System.currentTimeMillis()));
+			pearlIdentities.put(pearlUuid,
+				pid.withOwner(ownerUuid, confidence, clockMs()));
 	}
 	
 	private OwnerConfidence getPearlConfidence(UUID pearlUuid)
@@ -1884,7 +1920,7 @@ public class PearlEspHack extends Hack
 		if(currentFile == null)
 			return;
 		
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		if(!force && now - lastSaveAt < 2000L)
 			return;
 		
@@ -1926,7 +1962,7 @@ public class PearlEspHack extends Hack
 	{
 		if(!dirty || currentFile == null)
 			return;
-		long now = System.currentTimeMillis();
+		long now = clockMs();
 		if(!force && now - lastSaveAt < 2000L)
 			return;
 		
@@ -2013,10 +2049,19 @@ public class PearlEspHack extends Hack
 		String ownerLabel, StasisLabel stasisLabel)
 	{}
 	
-	private record PearlPrediction(List<Vec3> path, Vec3 landing)
-	{}
+	/** {@code hit}: the path ends on a block. */
+	public record PearlPrediction(List<Vec3> path, Vec3 landing, boolean hit)
+	{
+		PearlPrediction(List<Vec3> path, Vec3 landing)
+		{
+			this(path, landing, false);
+		}
+	}
 	
 	private record HeldPearl(Player player, InteractionHand hand)
+	{}
+	
+	private record ReceivedPacket(Packet<?> packet, long timeMs)
 	{}
 	
 	private record StasisLabel(String text, Vec3 pos, long untilMs)

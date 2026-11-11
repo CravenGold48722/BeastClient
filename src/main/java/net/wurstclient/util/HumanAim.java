@@ -670,9 +670,23 @@ public final class HumanAim
 			velPitch = 0;
 		}
 		
-		// plus the target's own motion across the view (feed-forward)
+		// plus the target's own motion across the view (feed-forward), all of
+		// it scaled by how hard it may pull now (AimYield; 1 = all of it)
 		double lead = leadDt(dt);
-		moveBy(moveYaw + ffYaw * lead, movePitch + ffPitch * lead);
+		moveBy((moveYaw + ffYaw * lead) * pullGain,
+			(movePitch + ffPitch * lead) * pullGain);
+	}
+	
+	/** {@link #pidStep}'s share of its pull (AimYield), 0-1. */
+	private double pullGain = 1;
+	
+	/**
+	 * How much of its pull {@link #pidStep} uses, 0-1 (see {@link AimYield}).
+	 * 1 unless set.
+	 */
+	public void setPullGain(double gain)
+	{
+		pullGain = Mth.clamp(gain, 0, 1);
 	}
 	
 	/**

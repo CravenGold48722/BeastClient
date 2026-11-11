@@ -12,7 +12,7 @@ import java.util.Random;
 
 /**
  * Supervised training: mini-batch Adam on cross-entropy - softmax for the
- * W/S and A/D choices, sigmoid for the four keys. Plain loops; the net is
+ * W/S and A/D choices, sigmoid for the keys and items. Plain loops; the net is
  * small enough that this is fast. The online learner copies opponents with
  * it in game; a label of -1 means "not known" and that output isn't trained
  * on that sample.
@@ -22,18 +22,36 @@ public final class Backprop
 	private Backprop()
 	{}
 	
-	// how much each output counts: strafing is the teacher's coin flip, so
-	// it barely counts; a missed hit or jump costs more than a stray one
-	private static final float W_FORWARD = 1, W_STRAFE = 0.05F, W_JUMP = 1,
-		W_SPRINT = 1, W_SNEAK = 0.5F, W_ATTACK = 1;
-	private static final float POS_JUMP = 3, POS_ATTACK = 4;
+	// how much each output counts: the teacher's strafe side is a coin
+	// flip (which way doesn't matter, that it strafes does), so it counts
+	// less; a missed hit or jump costs more than a stray one, and the items
+	// are rare, so a missed one counts more than a stray one too
+	private static final float W_FORWARD = 1, W_STRAFE = 0.3F, W_JUMP = 1,
+		W_SPRINT = 1, W_SNEAK = 0.5F, W_ATTACK = 1, W_ITEM = 1;
+	static final float POS_JUMP = 3, POS_ATTACK = 4, POS_ITEM = 3;
+	
+	/** Labels per sample. */
+	public static final int LABELS = 15;
 	
 	/**
 	 * Labels: W/S index (0 = W, 1 = neither, 2 = S), A/D index (0 = A, 1 =
-	 * neither, 2 = D), jump, sprint, sneak, attack (0/1); -1 = unknown.
+	 * neither, 2 = D), jump, sprint, sneak, attack, web, shield, potion,
+	 * golden apple, water, pearl in, pearl out, wind jump, wind hit (0/1);
+	 * -1 = unknown.
 	 */
 	public static void train(int[] sizes, float[] params, float[][] x,
 		byte[][] y, int size, int epochs, float lr, Random random)
+	{
+		train(sizes, params, x, y, null, size, epochs, lr, random);
+	}
+	
+	/**
+	 * With a weight per sample (null = all 1): how much each one counts,
+	 * e.g. by how well the move paid off (advantage-weighted regression).
+	 */
+	public static void train(int[] sizes, float[] params, float[][] x,
+		byte[][] y, float[] weight, int size, int epochs, float lr,
+		Random random)
 	{
 		int n = params.length;
 		float[] m = new float[n], v = new float[n], grad = new float[n];
@@ -72,6 +90,9 @@ public final class Backprop
 					int k = order[s];
 					forward(sizes, params, offsets, x[k], z, a);
 					outputDelta(a[layers - 1], y[k], delta[layers - 1]);
+					if(weight != null)
+						for(int o = 0; o < delta[layers - 1].length; o++)
+							delta[layers - 1][o] *= weight[k];
 					backward(sizes, params, offsets, z, a, delta, grad);
 				}
 				step++;
@@ -87,6 +108,7 @@ public final class Backprop
 				}
 			}
 		}
+		NeuralNet.weightsChanged();
 	}
 	
 	static int[] offsets(int[] sizes)
@@ -131,6 +153,8 @@ public final class Backprop
 		sigmoidDelta(out, 7, y[3], W_SPRINT, 1, d);
 		sigmoidDelta(out, 8, y[4], W_SNEAK, 1, d);
 		sigmoidDelta(out, 9, y[5], W_ATTACK, POS_ATTACK, d);
+		for(int k = 0; k < LABELS - 6; k++)
+			sigmoidDelta(out, 10 + k, y[6 + k], W_ITEM, POS_ITEM, d);
 	}
 	
 	private static void softmaxDelta(float[] out, int from, int label, float w,
@@ -192,13 +216,47 @@ public final class Backprop
 		}
 	}
 	
+	/**
+	 * How unlikely the known labels were to the net (nats, summed over the
+	 * movement keys, jump, sprint, sneak and hits): its odds, the training's
+	 * extra weight on rare keys taken out. Not the items: one unexpected web
+	 * or potion is 3-9 nats on its own and swamped how they fight.
+	 */
+	public static double surprise(float[] out, byte[] y)
+	{
+		return softmaxNll(out, 0, y[0]) + softmaxNll(out, 3, y[1])
+			+ sigmoidNll(out[6], y[2], POS_JUMP) + sigmoidNll(out[7], y[3], 1)
+			+ sigmoidNll(out[8], y[4], 1)
+			+ sigmoidNll(out[9], y[5], POS_ATTACK);
+	}
+	
+	private static double softmaxNll(float[] out, int from, int label)
+	{
+		if(label < 0)
+			return 0;
+		double max =
+			Math.max(out[from], Math.max(out[from + 1], out[from + 2]));
+		double sum = Math.exp(out[from] - max) + Math.exp(out[from + 1] - max)
+			+ Math.exp(out[from + 2] - max);
+		return Math.log(sum) - (out[from + label] - max);
+	}
+	
+	private static double sigmoidNll(float logit, int label, float posWeight)
+	{
+		if(label < 0)
+			return 0;
+		double p = 1 / (1 + Math.exp(-(logit - Math.log(posWeight))));
+		p = Math.max(1e-4, Math.min(1 - 1e-4, p));
+		return -Math.log(label == 1 ? p : 1 - p);
+	}
+	
 	/** How often each head picks the label (known labels only). */
 	public static String accuracy(int[] sizes, float[] params, float[][] x,
 		byte[][] y, int size)
 	{
 		NeuralNet net = new NeuralNet(sizes, params);
 		NeuralAction act = new NeuralAction();
-		int[] right = new int[6], known = new int[6];
+		int[] right = new int[LABELS], known = new int[LABELS];
 		int[] attackPos = new int[2];
 		int n = Math.min(size, 50_000);
 		for(int k = 0; k < n; k++)
@@ -206,8 +264,12 @@ public final class Backprop
 			act.decode(net.forward(x[k]));
 			byte[] yk = y[k];
 			int[] got = {1 - act.forward, 1 - act.strafe, act.jump ? 1 : 0,
-				act.sprint ? 1 : 0, act.sneak ? 1 : 0, act.attack ? 1 : 0};
-			for(int h = 0; h < 6; h++)
+				act.sprint ? 1 : 0, act.sneak ? 1 : 0, act.attack ? 1 : 0,
+				act.web ? 1 : 0, act.shield ? 1 : 0, act.pot ? 1 : 0,
+				act.eat ? 1 : 0, act.water ? 1 : 0, act.pearlIn ? 1 : 0,
+				act.pearlOut ? 1 : 0, act.windJump ? 1 : 0,
+				act.windHit ? 1 : 0};
+			for(int h = 0; h < LABELS; h++)
 				if(yk[h] >= 0)
 				{
 					known[h]++;
@@ -221,13 +283,21 @@ public final class Backprop
 					attackPos[0]++;
 			}
 		}
-		return String.format(
+		StringBuilder sb = new StringBuilder(String.format(
 			"W/S %.0f%%, A/D %.0f%%, jump %.0f%%, sprint %.0f%%, sneak %.0f%%, attack %.0f%% (hits %d/%d)",
 			pct(right[0], known[0]), pct(right[1], known[1]),
 			pct(right[2], known[2]), pct(right[3], known[3]),
 			pct(right[4], known[4]), pct(right[5], known[5]), attackPos[0],
-			attackPos[1]);
+			attackPos[1]));
+		for(int h = 6; h < LABELS; h++)
+			if(known[h] > 0)
+				sb.append(String.format(", %s %.0f%%", ITEM_NAMES[h - 6],
+					pct(right[h], known[h])));
+		return sb.toString();
 	}
+	
+	private static final String[] ITEM_NAMES = {"web", "shield", "pot", "eat",
+		"water", "pearl in", "pearl out", "wind jump", "wind hit"};
 	
 	private static double pct(int a, int b)
 	{

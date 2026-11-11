@@ -21,6 +21,7 @@ import net.wurstclient.events.PacketOutputListener;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.DontSaveState;
 import net.wurstclient.hack.Hack;
+import net.wurstclient.mixinterface.ILocalPlayer;
 import net.wurstclient.settings.filterlists.EntityFilterList;
 import net.wurstclient.settings.filterlists.RemoteViewFilterList;
 import net.wurstclient.util.ChatUtils;
@@ -128,6 +129,16 @@ public final class RemoteViewHack extends Hack
 			fakePlayer.resetPlayerPosition();
 			fakePlayer.despawn();
 		}
+		
+		// Vanilla "sent" the camera's positions (blocked here), so back home
+		// it would send your real position at once - no movement to the
+		// server, a few ticks after the last reminder: Grim BadPacketsV. Tell
+		// it what the server really has, and since when.
+		// (null when it turned itself off before starting - never stale)
+		if(realPos != null)
+			((ILocalPlayer)MC.player).wurst$setLastSentPosition(realPos.x,
+				realPos.y, realPos.z, realOnGround, ticksSinceReminder);
+		realPos = null;
 	}
 	
 	public void onToggledByCommand(String viewName)

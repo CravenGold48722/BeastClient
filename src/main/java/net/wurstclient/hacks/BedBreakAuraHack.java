@@ -359,7 +359,8 @@ public final class BedBreakAuraHack extends Hack
 	
 	private void stopBreaking()
 	{
-		MC.gameMode.stopDestroyBlock();
+		if(MC.gameMode != null)
+			MC.gameMode.stopDestroyBlock();
 		currentTarget = null;
 		occludingBlocks = Collections.emptySet();
 		

@@ -13,14 +13,23 @@ import net.wurstclient.SearchTags;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.util.KeyPresser;
+import net.wurstclient.settings.SliderSetting;
+import net.wurstclient.settings.SliderSetting.ValueDisplay;
 
 @SearchTags({"speed hack"})
 public final class SpeedHackHack extends Hack implements UpdateListener
 {
+	private final SliderSetting multiplier = new SliderSetting("Multiplier",
+		"How much each mini jump multiplies your speed by. The top speed"
+			+ " grows with it (1.8x: 0.66 blocks a tick, the most that"
+			+ " worked on NoCheat+).",
+		1.8, 1, 100, 0.1, ValueDisplay.DECIMAL.withSuffix("x"));
+	
 	public SpeedHackHack()
 	{
 		super("SpeedHack");
 		setCategory(Category.MOVEMENT);
+		addSetting(multiplier);
 	}
 	
 	@Override
@@ -52,7 +61,8 @@ public final class SpeedHackHack extends Hack implements UpdateListener
 			return;
 		
 		Vec3 v = MC.player.getDeltaMovement();
-		MC.player.setDeltaMovement(v.x * 1.8, v.y + 0.1, v.z * 1.8);
+		double m = multiplier.getValue();
+		MC.player.setDeltaMovement(v.x * m, v.y + 0.1, v.z * m);
 		
 		v = MC.player.getDeltaMovement();
 		double currentSpeed = Math.sqrt(Math.pow(v.x, 2) + Math.pow(v.z, 2));
@@ -60,7 +70,8 @@ public final class SpeedHackHack extends Hack implements UpdateListener
 		// limit speed to highest value that works on NoCheat+ version
 		// 3.13.0-BETA-sMD5NET-b878
 		// UPDATE: Patched in NoCheat+ version 3.13.2-SNAPSHOT-sMD5NET-b888
-		double maxSpeed = 0.66F;
+		// (scaled with the multiplier: at the default 1.8x it's that value)
+		double maxSpeed = 0.66F * m / 1.8;
 		
 		if(currentSpeed > maxSpeed)
 			MC.player.setDeltaMovement(v.x / currentSpeed * maxSpeed, v.y,

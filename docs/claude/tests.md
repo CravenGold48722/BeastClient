@@ -1,5 +1,34 @@
 # Test client, quick rounds and the anticheat tests
 
+## Overview (moved from CLAUDE.md)
+
+
+- `src/test/java/net/wurstclient/util/` — JUnit tests for `Rotation`, `RotationUtils`, `HumanAim`
+  (settling, no overshoot, tracking lag), `BallisticSolver` (hits at range, moving targets) and
+  `TargetPredictor` (hit rates against simulated strafers, < 1 ms per tick) and `PidAimTest`
+  (PID aim vs the old ease-out: landing, overshoot, resting, strafers), `YawSpringTest`
+  (MaceAssist's smooth yaw-only turn: no overshoot or speed jumps, tracking, resuming after
+  `hold`).
+- `src/gametest/` — in-game tests (`AltManagerTest`, `VanillaSpoofTest`, `KeyPresserTest`,
+  `PacketBudgetTest`, `AutoMineHackTest`, `FreecamHackTest`, `NoFallHackTest`, `XRayHackTest`, …)
+  run via `runClientGameTest` / `runClientGameTestWithMods`; the whole suite passes (exit 0,
+  "Test complete" in `build/run/clientGameTest/logs/latest.log`). Every `SingleplayerTest` ends
+  with a screenshot compared to one clean-world template, so a test must leave nothing behind:
+  clear chat, the action bar (toggle announcements), particles, dropped items / XP, wait ~25 ticks
+  for death animations and ~7 ticks after a `tp` rotation. Failed runs keep their PNGs in
+  `build/run/clientGameTest/screenshots/` — look at them before guessing.
+  The in-world tests run at `/tick rate` `WurstTest.TICK_RATE` (60), MaceAssist and ScaffoldWalk
+  first. That only works because per-frame aim (`CameraAim`, AimAssist's frame aim, ScaffoldWalk's
+  spring) runs on `util/GameClock` - ticks that actually ran + the frame's partial tick, 50 ms each -
+  not `System.nanoTime`; the test client runs at most one tick per frame, so real time x tick rate
+  would be wrong too. New per-frame aim code must use `GameClock.nanoTime()`.
+- **More test details** - the perf-mod test client and JVM flags, quick `gametest` rounds, the
+  real-anticheat tests (`AnticheatTest`, Grim + Intave) and the per-feature sweep
+  (`AnticheatFeatureSweep`) with every trap and finding: **`docs/claude/tests.md`**. Read it
+  before running or changing gametests or anticheat tests.
+
+
+
 Moved word for word from CLAUDE.md (2026-10-24); CLAUDE.md keeps the short version and points here.
 
 - **Test client = performance mods + lowest graphics + tuned JVM (user, 2026-10-16).**
@@ -20,14 +49,91 @@ Moved word for word from CLAUDE.md (2026-10-24); CLAUDE.md keeps the short versi
   G1 (pause 50 ms), `UseCompactObjectHeaders` (JDK 25), string dedup, unused heap given back
   (`MinHeapFreeRatio=10`, `MaxHeapFreeRatio=25`, `G1PeriodicGCInterval=10000`), code cache
   192M; the Gradle daemon gives heap back too - peaks 1.4 GB client + 1.0 GB Gradle.
+  **Training pauses during a test run** (`TrainerHold`, from the client's preLaunch: `train.ps1
+  hold -WhilePid <client>` suspends the trainer - nothing lost - and resumes it when the client
+  exits, however; the watchdog resumes an orphaned hold; `-PkeepTraining` skips it). Next to a
+  full trainer the laptop's 4 cores + iGPU share 15 W: the client took 392 s to start (2026-11-03).
+  **Fabric's test-thread race** (`ThreadingImplMixin`): the test thread registered with the tick
+  phaser from inside itself; on a busy CPU the render thread went through a phase cycle alone,
+  parked in PHASE_TEST, and both waited forever before the first test (20 min at the title
+  screen, test thread 0 ms CPU). The render thread now waits for the registration.
+  **Servers: Grim, Intave, vanilla, Windfall (`../Testing3`), Shard (`../Testing4`)** - one
+  server failing no longer stops the rest (`WurstTest` collects the failures, throws at the end).
+  A server that doesn't flag the Flight control is "blind": its features are skipped, the run
+  fails. **Windfall 2.4.3 is blind** - it makes its player data on LOGIN_SUCCESS, where
+  packetevents has no Bukkit player yet, so it checks nobody ("[Windfall] No player data
+  found."). Creating it on the first play packet instead (tried 2026-11-04, reverted) woke up
+  worse bugs: setbacks teleport from the netty thread ("PlayerTeleportEvent may only be
+  triggered synchronously"), "movement before login complete", and a kick for "exceeding
+  packet rate limit". **Shard runs with its AI check off** (the user's rule: it needs the paid
+  API) and has no other detections - it can't flag Flight (`mustFlagFlight()` false), so its
+  run only shows what still works and what it kicks for.
+  **Every anticheat at its strictest** (user, 2026-11-04: "ABSOLUTE MAX AGGRESSIVENESS";
+  `grimMaxAggressive`/`intaveMaxAggressive` in `gradle/anticheat.gradle`): Grim flags offsets
+  from 0.0001 (0.001), sets back/cancels on the first violation, no VL decay, no timer drift,
+  no reach expansion + post-tick reach probe, experimental checks, no elytra sprint-jumping, no
+  ghost-block building; Intave in its advanced config with AGGRESSIVE physics mitigation
+  (default BARELY), placement timings, rotation limit 1500, blink limit 1, verbose ALL, and the
+  bot on its strictest trust level DARK_RED (`permissions.yml` grants `intave.trust.darkred` -
+  it takes the first trust permission a player has); Windfall sets back on the first violation
+  with its severity at the top tier from VL 0; Shard's mitigation rules act on any AI signal
+  (moot with the AI off). Kicks and bans stay off - they'd only end the session.
+  Found and fixed at max (2026-11-05): AutoBuild clicked in the tick of the turn (Grim
+  RotationPlace + MultiPlace - now `isTurnPending` first); RemoteView/.rv's disable sent a
+  zero-movement position packet (vanilla "sent" the blocked camera positions; Grim BadPacketsV -
+  `ILocalPlayer.wurst$setLastSentPosition` now tells it what the server had); SafeWalk stopped
+  you at edges without sneaking (Grim Simulation) - "Sneak at edges" is the default now, a real
+  sneak press the tick before the edge, vanilla does the stopping. Kaboom queues its whole
+  flood in one tick: a reconnect drains it into the closed channel (the throttled
+  `ConnectionMixin` log; the bot's side disconnects on the first fault). A full run needs
+  ~4-5 GB free (client + one server + Gradle): run it in pieces (`-PnoAnticheat`, then
+  `-Ponly=<server>` each) when memory is tight - Claude Code kills background jobs at low
+  memory, which orphans the test JVMs (`./gradlew --stop` ends them).
+  **`-PfromInventory`** puts what a test gives on the hotbar into the main inventory instead.
+  Hotbar-only hacks then report "DIDN'T WORK" by design (AutoEat, AutoTool, AutoBuild,
+  InstaBuild, BonemealAura, ShearAura, SoulChalice, ChorusFruit, Instacart, CrystalAura); the
+  ones that fetch from the inventory (`inventoryOpeners()`) show "sent ContainerClick xN,
+  ContainerClose xN". Found and fixed with it (2026-11-04): ClutchFall and PearlIntercept sent
+  a separate look packet (Grim TickTimer, Intave "2 packets without client tick end") - now
+  the turn rides in the tick's movement packet and the use follows a tick later; AnchorAura and
+  AutoFarm's replant clicked in the tick of the turn (Grim RotationPlace "post-flying") - now
+  `BlockBreaker.isTurnPending` first; AutoFarm broke crops another crop hid from the crosshair
+  (Intave "looking at a different wheat block", "Check line of sight" is off by default);
+  BookBot wrote without opening the book (Grim ExploitB "not editing book" - now a real
+  right-click, Done a tick later) and signed with a 32-character title by default ("title too
+  long", vanilla allows 15 - "High-byte signed name" is opt-in now); `stopDestroyBlock()` in
+  seven mining hacks' `onDisable` threw once kicked (`MC.gameMode` null). Blatant by design,
+  still flagged: AreaNuker/FastFill/SpeedNuker (break packet spam), InstaBuild.
+  **ElytraWalk is vanilla elytra bouncing now** (user, 2026-11-04: "vanilla and
+  realistic/humanized"): while W is held it only presses jump/sprint through `KeyPresser` -
+  space held through each landing (vanilla re-jumps that tick), let go 1-3 ticks after take-off,
+  pressed again (vanilla's own START_FALL_FLYING); camera untouched. The CevAPI version faked
+  onGround, sent its own look + START_FALL_FLYING on the ground and set 1.5 blocks/tick (Grim
+  GroundSpoof/ElytraB/TickTimer/Simulation). Now 0 flags on both, ~6 blocks/s, gliding 55-75%.
+  Intave (max) flagged a deterministic physics Δ0.517258 (= a whole first sprint-jump tick:
+  0.42 up, 0.2 boost + 0.1 accel) right after Auto elytra's inventory closed; a 3-6 tick
+  reaction delay after any screen fixed it (0 in 3 runs). It also no longer jumps while the
+  client still glides on the ground after landing (waits for the server's "stopped").
+  **Grim at max timer settings (drift 0)**: Timer flags on everything - scheduling/network
+  jitter alone (97 on joining, no hack on) - and each flag's setback shows up as Simulation/
+  AntiKB in the next feature (BunnyHop, ExtraElytra, the VexBot fight). `-PgrimTimerAllowance`
+  keeps Grim's timer allowance at the default and everything else at max: then every
+  KeyPresser feature is clean.
+  **Keystroke mods** (user, 2026-11-04 - BoxHud, Visual/Clean/Modern Keystrokes, TipTapShow,
+  CreamyKeys, SnappyTappy, EvergreenHUD, lazykeys; sources checked): they read
+  `KeyMapping.isDown()`, click counts, `glfwGetKey`, `InputConstants.isKeyDown` or hook
+  `KeyboardHandler` - all covered by KeyPresser (`KeyPresserTest` checks each); none chains its
+  own GLFW callback or uses OS hooks.
   Not lite-cpu either: it throttles chunk rebuilds whatever its config says ("profile:
   aggressive"). Screenshots still raced Sodium's own chunk rebuilds after a block change
   ("all drawn" before the rebuild was scheduled): `assertScreenshotEquals` retries a
   mismatch twice 10 ticks apart and records templates only after 20 ticks; `in_game` also
   waits for the wall's block to reach the client.
 - **Quick rounds:** `gametest aimassistcombo -parts fight,rematch` (parts: still, falling,
-  taps, fight, rematch, crit, shield; `gametest mace -parts catch` = the pearl catch test
-  alone) and `-record` for fight screenshots (off by default - ~900 a run). A round is ~2.5
+  taps, fight, rematch, crit, shield; `gametest mace -parts` takes any of catch, riptide,
+  heavy, cobweb, stun, chain - `-parts catch` is the pearl catch test alone. The heavy fall
+  leaves the server ~1,400 ticks behind, so a test right after it can race a delayed `clear`)
+  and `-record` for fight screenshots (off by default - ~900 a run). A round is ~2.5
   min, ~1.5 of it game startup. Wait loops must not match their own command line (a
   `Get-CimInstance ... -match 'gametest.ps1'` loop found itself and never ended), and a `cut`
   in a Monitor pipe buffers (no events).
@@ -73,6 +179,17 @@ Moved word for word from CLAUDE.md (2026-10-24); CLAUDE.md keeps the short versi
     disconnect reason and connection exception (a silent disconnect used to hang the run).
   First results (2026-10-13): Killaura, MaceAssist (mace hit) and ScaffoldWalk clean on both;
   Intave once noted "halting game ticks" (+0 VL) after the Flight setbacks.
+- **VanillaSpoof scenario + a plain server (2026-10-29):** a third server, **Vanilla** (Fabric's
+  launcher with an empty `mods` folder = vanilla; port 25573, `build/anticheat/vanilla`), runs
+  only the `VanillaSpoof` scenario (nothing flags there; Flight would just be kicked). The
+  scenario (also on Grim/Intave, `-features vanillaspoof`) reconnects with Spoof Vanilla on and
+  off and reports what went out (PacketTrace records at `doSendPacket`, after VanillaSpoof):
+  brand, other custom payloads, login-query answers, non-vanilla known packs; "NOT VANILLA" if
+  on isn't brand vanilla / nothing else. First result: on = vanilla on all three; off = brand
+  fabric + `minecraft:register` (+5 Fabric API channels, a login answer and a data pack on
+  Grim's Fabric-API server). A failing `buildIntave` (repo.codemc.io down for a Geyser
+  snapshot) can be skipped with `./gradlew runClientGameTest -x buildIntave ...` when Intave's
+  source is unchanged.
 - **Every feature on both anticheats (`AnticheatFeatureSweep`, user, 2026-10-13):** each hack
   and command has its own test built for what it does (a pool for Jesus, a ladder for FastLadder,
   ores for VeinMiner, a still 1024-health husk for the auras...) **and a check that it did it**
@@ -122,7 +239,7 @@ Moved word for word from CLAUDE.md (2026-10-24); CLAUDE.md keeps the short versi
     TickTimer, Intave "2 packets without client tick end", blamed on the feature). The first
     mouse move of a run can get lost: it falls back to `Rotation.applyToClientPlayer`.
   - `-Pfeatures=a,b` / `gametest grim -features a,b`: only those features' tests (plus baseline
-    and control) - ~2-3 min per server instead of ~11. Never compile while a run is loading
+    and control, and the core scenarios it names: `-features maceassist` runs MaceAssist's) - ~2-3 min per server instead of ~11. Never compile while a run is loading
     classes (NoClassDefFoundError mid-run).
   Found and fixed (2026-10-13/14, verified on both servers):
   - SkinDerp never told the server (26.1's `Options.setModelPart` only sets the option): now

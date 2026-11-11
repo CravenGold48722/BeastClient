@@ -86,7 +86,10 @@ public class FightAdapterTest
 		}
 		double ns = (System.nanoTime() - t0) / (double)reps;
 		System.out.printf("%.0f ns a decision%n", ns);
-		assertTrue(ns < 5000, ns + " ns");
+		// 20 us (was 5): the net has 343 inputs since observation version 12
+		// (171 before), and the game's plain Java pass doesn't vectorize
+		// (~11 us measured, with or without FMA); a game tick is 50,000 us
+		assertTrue(ns < 20_000, ns + " ns");
 		
 		float[] d = a.getDelta();
 		FightAdapter b = new FightAdapter(sizes, shipped.getParams(), 2, true);
@@ -112,8 +115,7 @@ public class FightAdapterTest
 					new PvpSim(77_000L + s * 101 + f, me, opponent.get(), 600);
 				sim.a.onlyGoodHits = true;
 				int r = sim.run();
-				if(r == 0)
-					r = Float.compare(sim.a.health, sim.b.health);
+				r = sim.outcome(r);
 				double w = r > 0 ? 1 : r < 0 ? 0 : 0.5;
 				sum += w;
 				if(f >= FIGHTS / 2)

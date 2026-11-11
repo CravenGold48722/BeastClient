@@ -237,8 +237,9 @@ public final class PacketBudgetTest extends SingleplayerTest
 			|| p instanceof ServerboundUseItemOnPacket
 			|| p instanceof ServerboundPlayerCommandPacket)
 			actedThisTick = true;
-		else if(p instanceof ServerboundPlayerActionPacket a && a
-			.getAction() == ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM)
+		else if(p instanceof ServerboundPlayerActionPacket a && (a
+			.getAction() == ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM
+			|| a.getAction() == ServerboundPlayerActionPacket.Action.STAB))
 			actedThisTick = true;
 		else if(p instanceof ServerboundPlayerInputPacket in)
 		{

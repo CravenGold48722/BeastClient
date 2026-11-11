@@ -30,6 +30,7 @@ import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.WurstClient;
+import net.wurstclient.hacks.FreeLookHack;
 import net.wurstclient.hacks.FreecamHack;
 
 @Mixin(LocalPlayer.class)
@@ -55,6 +56,13 @@ public abstract class LocalPlayerMixin extends AbstractClientPlayer
 		if(freecam.isMovingCamera())
 		{
 			freecam.turn(deltaYaw, deltaPitch);
+			return;
+		}
+		
+		FreeLookHack freeLook = WurstClient.INSTANCE.getHax().freeLookHack;
+		if(freeLook.isTurningCamera())
+		{
+			freeLook.turn(deltaYaw, deltaPitch);
 			return;
 		}
 		

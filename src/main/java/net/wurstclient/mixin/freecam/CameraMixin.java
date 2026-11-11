@@ -18,6 +18,7 @@ import net.minecraft.client.DeltaTracker;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.waypoints.TrackedWaypoint;
 import net.wurstclient.WurstClient;
+import net.wurstclient.hacks.FreeLookHack;
 import net.wurstclient.hacks.FreecamHack;
 
 @Mixin(Camera.class)
@@ -34,7 +35,13 @@ public abstract class CameraMixin implements TrackedWaypoint.Camera
 	{
 		FreecamHack freecam = WurstClient.INSTANCE.getHax().freecamHack;
 		if(!freecam.isEnabled())
+		{
+			// FreeLook (idea from Meteor Client): only the rotation
+			FreeLookHack freeLook = WurstClient.INSTANCE.getHax().freeLookHack;
+			if(freeLook.isEnabled())
+				setRotation(freeLook.getCameraYaw(), freeLook.getCameraPitch());
 			return;
+		}
 		
 		float partialTicks = deltaTracker.getGameTimeDeltaPartialTick(true);
 		detached = true;

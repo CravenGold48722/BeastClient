@@ -273,6 +273,21 @@ public abstract class ContainerOverlayHooksMixin extends Screen
 			cir.setReturnValue(true);
 	}
 	
+	/** ItemHighlight (idea from Meteor Client): behind the slot's item. */
+	@Inject(at = @At("HEAD"),
+		method = "extractSlot(Lnet/minecraft/client/gui/GuiGraphicsExtractor;Lnet/minecraft/world/inventory/Slot;II)V")
+	private void wurst$itemHighlight(GuiGraphicsExtractor context, Slot slot,
+		int mouseX, int mouseY, CallbackInfo ci)
+	{
+		if(!WurstClient.INSTANCE.isEnabled())
+			return;
+		
+		int color = WurstClient.INSTANCE.getHax().itemHighlightHack
+			.getSlotColor(slot.getItem());
+		if(color != 0)
+			context.fill(slot.x, slot.y, slot.x + 16, slot.y + 16, color);
+	}
+	
 	/**
 	 * Fills the slot that ChestSearch or EnchantmentHandler points at (the
 	 * item you searched for, or the one picked in the overlay).

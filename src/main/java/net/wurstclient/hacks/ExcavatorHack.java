@@ -119,7 +119,8 @@ public final class ExcavatorHack extends Hack
 		posLookingAt = null;
 		area = null;
 		
-		MC.gameMode.stopDestroyBlock();
+		if(MC.gameMode != null)
+			MC.gameMode.stopDestroyBlock();
 		overlay.resetProgress();
 		currentBlock = null;
 		

@@ -25,6 +25,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 
+import net.minecraft.client.gui.screens.inventory.BookEditScreen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
@@ -33,6 +34,7 @@ import net.minecraft.server.network.Filterable;
 import net.minecraft.world.item.component.WrittenBookContent;
 import net.minecraft.network.protocol.game.ServerboundEditBookPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.wurstclient.Category;
@@ -46,6 +48,7 @@ import net.wurstclient.settings.SliderSetting;
 import net.wurstclient.settings.SliderSetting.ValueDisplay;
 import net.wurstclient.settings.TextFieldSetting;
 import net.wurstclient.util.ChatUtils;
+import net.wurstclient.util.InteractionSimulator;
 import net.wurstclient.util.InventoryUtils;
 
 @SearchTags({"book bot", "book writer"})
@@ -55,6 +58,7 @@ public final class BookBotHack extends Hack implements UpdateListener
 	private static final int MAX_BOOK_PAGES = 100;
 	private static final int MAX_PAGE_JAVA_CHARS = 1024;
 	private static final int MAX_TITLE_JAVA_CHARS = 32;
+	private static final int VANILLA_TITLE_CHARS = 15;
 	private static final int MIN_THREE_BYTE_BMP = 0x0800;
 	private static final int MAX_THREE_BYTE_BMP_EXCLUSIVE = 0xD800;
 	
@@ -111,8 +115,9 @@ public final class BookBotHack extends Hack implements UpdateListener
 	
 	private final CheckboxSetting highByteSignedName = new CheckboxSetting(
 		"High-byte signed name",
-		"Uses a 32 character 3-byte UTF-8 signed book name in Random UTF8 mode.",
-		true);
+		"Uses a 32 character 3-byte UTF-8 signed book name in Random UTF8 mode."
+			+ "\n\nVanilla allows 15 characters: Grim flags it on every book.",
+		false);
 	
 	private final CheckboxSetting wordWrap = new CheckboxSetting("Word wrap",
 		"Prevents words from being cut in the middle of lines.", true);
@@ -231,6 +236,22 @@ public final class BookBotHack extends Hack implements UpdateListener
 			delayTimer--;
 			return;
 		}
+		
+		// open the book like a player (right-click, vanilla opens the edit
+		// screen) and write it the next tick - an edit without the use that
+		// opened it is Grim ExploitB "not editing book"
+		if(!(MC.screen instanceof BookEditScreen))
+		{
+			// the inventory InventoryOpener opened closes itself
+			if(MC.screen != null)
+				return;
+			InteractionSimulator.rightClickItem(InteractionHand.MAIN_HAND);
+			if(!(MC.screen instanceof BookEditScreen))
+				delayTimer = delay.getValueI();
+			return;
+		}
+		// like its Done button
+		MC.setScreen(null);
 		delayTimer = delay.getValueI();
 		
 		// Produce pages
@@ -316,8 +337,10 @@ public final class BookBotHack extends Hack implements UpdateListener
 	private void moveToMainHand(int slot)
 	{
 		if(slot < 9)
+		{
 			MC.player.getInventory().setSelectedSlot(slot);
-		else
+			IMC.getInteractionManager().syncSelectedSlot();
+		}else
 			swapWithMainHand(slot);
 	}
 	
@@ -545,13 +568,18 @@ public final class BookBotHack extends Hack implements UpdateListener
 		if(titleOverride == null && appendCount.isChecked() && bookCount != 0)
 			title += " #" + bookCount;
 		
-		if(titleOverride == null && signedOverride
+		boolean maxPayload = titleOverride == null && signedOverride
 			&& highByteSignedName.isChecked()
 			&& mode.getSelected() == Mode.RANDOM
-			&& randomType.getSelected() == RandomType.UTF8)
+			&& randomType.getSelected() == RandomType.UTF8;
+		if(maxPayload)
 			title = randomMaxPayloadTitle();
-		
-		title = clampToJavaChars(title, MAX_TITLE_JAVA_CHARS);
+			
+		// vanilla's sign screen takes 15 characters (more is Grim ExploitB
+		// "title too long"); only the max-payload option goes to the
+		// server's 32
+		title = clampToJavaChars(title,
+			maxPayload ? MAX_TITLE_JAVA_CHARS : VANILLA_TITLE_CHARS);
 		
 		// Build filtered pages for the component
 		ArrayList<Filterable<Component>> filteredPages = new ArrayList<>();

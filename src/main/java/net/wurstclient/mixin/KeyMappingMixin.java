@@ -21,6 +21,7 @@ import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonInfo;
 import net.wurstclient.WurstClient;
 import net.wurstclient.mixinterface.IKeyMapping;
+import net.wurstclient.util.KeyPresser;
 
 @Mixin(KeyMapping.class)
 public abstract class KeyMappingMixin implements IKeyMapping
@@ -39,10 +40,13 @@ public abstract class KeyMappingMixin implements IKeyMapping
 		Window window = WurstClient.MC.getWindow();
 		int code = key.getValue();
 		
+		// the user's own fingers, not KeyPresser's presses
 		if(key.getType() == InputConstants.Type.MOUSE)
-			return GLFW.glfwGetMouseButton(window.handle(), code) == 1;
+			return KeyPresser.readPhysical(
+				() -> GLFW.glfwGetMouseButton(window.handle(), code) == 1);
 		
-		return InputConstants.isKeyDown(window, code);
+		return KeyPresser
+			.readPhysical(() -> InputConstants.isKeyDown(window, code));
 	}
 	
 	@Override

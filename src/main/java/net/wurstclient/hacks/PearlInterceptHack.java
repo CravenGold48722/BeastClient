@@ -51,6 +51,9 @@ public final class PearlInterceptHack extends Hack implements UpdateListener
 	private boolean restoreRotationPending;
 	private float restoreYaw;
 	private float restorePitch;
+	/** Turned to it last tick; thrown this tick. */
+	private ThrowSolution pendingThrow;
+	private int pendingOldSlot;
 	
 	public PearlInterceptHack()
 	{
@@ -75,6 +78,7 @@ public final class PearlInterceptHack extends Hack implements UpdateListener
 		handledPearls.clear();
 		cooldown = 0;
 		restoreRotationPending = false;
+		pendingThrow = null;
 	}
 	
 	@Override
@@ -82,12 +86,19 @@ public final class PearlInterceptHack extends Hack implements UpdateListener
 	{
 		if(MC.player == null || MC.level == null)
 			return;
-		
+			
+		// turns ride in the tick's own movement packet (a separate look
+		// packet made two in one tick - Grim TickTimer)
 		if(restoreRotationPending)
 		{
 			new Rotation(restoreYaw, restorePitch).applyToClientPlayer();
-			new Rotation(restoreYaw, restorePitch).sendPlayerLookPacket();
 			restoreRotationPending = false;
+		}
+		
+		if(pendingThrow != null)
+		{
+			finishThrow();
+			pendingThrow = null;
 		}
 		
 		if(cooldown > 0)
@@ -108,7 +119,7 @@ public final class PearlInterceptHack extends Hack implements UpdateListener
 			if(isOwnPearl(entity))
 				continue;
 			
-			if(cooldown > 0)
+			if(cooldown > 0 || pendingThrow != null)
 				continue;
 				
 			// Freshly spawned pearls can report unstable/zero velocity for a
@@ -245,17 +256,33 @@ public final class PearlInterceptHack extends Hack implements UpdateListener
 		restoreYaw = MC.player.getYRot();
 		restorePitch = MC.player.getXRot();
 		
-		Rotation aim = new Rotation(solution.yaw(), solution.pitch());
-		aim.applyToClientPlayer();
-		aim.sendPlayerLookPacket();
-		IMC.getInteractionManager().rightClickItem();
-		
-		if(switchBack.isChecked()
-			&& MC.player.getInventory().getSelectedSlot() != oldSlot)
-			MC.player.getInventory().setSelectedSlot(oldSlot);
+		// the use goes out before this tick's movement packet: turn now,
+		// throw next tick once the server has the look
+		new Rotation(solution.yaw(), solution.pitch()).applyToClientPlayer();
+		pendingThrow = solution;
+		pendingOldSlot = oldSlot;
+		return true;
+	}
+	
+	private void finishThrow()
+	{
+		if(MC.player.getMainHandItem().is(Items.ENDER_PEARL))
+		{
+			// the same look again, in case the mouse moved since
+			new Rotation(pendingThrow.yaw(), pendingThrow.pitch())
+				.applyToClientPlayer();
+			IMC.getInteractionManager().rightClickItem();
+			
+			// held back to the next tick by PacketOrder
+			if(switchBack.isChecked()
+				&& MC.player.getInventory().getSelectedSlot() != pendingOldSlot)
+			{
+				MC.player.getInventory().setSelectedSlot(pendingOldSlot);
+				IMC.getInteractionManager().syncSelectedSlot();
+			}
+		}
 		
 		restoreRotationPending = true;
-		return true;
 	}
 	
 	private boolean isSafeLanding(Vec3 pos)

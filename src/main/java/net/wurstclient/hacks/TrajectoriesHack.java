@@ -9,6 +9,7 @@ package net.wurstclient.hacks;
 
 import java.awt.Color;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Predicate;
 
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -27,6 +28,8 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
+import net.wurstclient.events.CameraTransformViewBobbingListener;
+import net.wurstclient.events.CameraTransformViewBobbingListener.CameraTransformViewBobbingEvent;
 import net.wurstclient.events.RenderListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.settings.ColorSetting;
@@ -36,7 +39,8 @@ import net.wurstclient.util.RenderUtils;
 
 @SearchTags({"ArrowTrajectories", "ArrowPrediction", "aim assist",
 	"arrow trajectories", "bow trajectories"})
-public final class TrajectoriesHack extends Hack implements RenderListener
+public final class TrajectoriesHack extends Hack
+	implements RenderListener, CameraTransformViewBobbingListener
 {
 	private final ColorSetting missColor = new ColorSetting("Miss Color",
 		"Color of the trajectory when it doesn't hit anything.", Color.GRAY);
@@ -62,12 +66,30 @@ public final class TrajectoriesHack extends Hack implements RenderListener
 	protected void onEnable()
 	{
 		EVENTS.add(RenderListener.class, this);
+		EVENTS.add(CameraTransformViewBobbingListener.class, this);
 	}
 	
 	@Override
 	protected void onDisable()
 	{
 		EVENTS.remove(RenderListener.class, this);
+		EVENTS.remove(CameraTransformViewBobbingListener.class, this);
+	}
+	
+	@Override
+	public void onCameraTransformViewBobbing(
+		CameraTransformViewBobbingEvent event)
+	{
+		// like PearlESP: a bobbing camera moves the line off the world
+		LocalPlayer player = MC.player;
+		if(player == null)
+			return;
+		
+		ItemStack stack = player.getMainHandItem();
+		if(!isThrowable(stack))
+			stack = player.getOffhandItem();
+		if(stack.getItem() instanceof EnderpearlItem)
+			event.cancel();
 	}
 	
 	@Override
@@ -106,11 +128,14 @@ public final class TrajectoriesHack extends Hack implements RenderListener
 			
 			// If neither hand has a throwable item, return empty path
 			if(!isThrowable(stack))
-				return new Trajectory(path, type);
+				return new Trajectory(path, type, false);
 		}
 		
 		// Calculate item-specific values
 		Item item = stack.getItem();
+		if(item instanceof EnderpearlItem)
+			return getPearlTrajectory(player, hand, partialTicks);
+		
 		double throwPower = getThrowPower(item);
 		double gravity = getProjectileGravity(item);
 		Fluid fluidHandling = getFluidHandling(item);
@@ -176,7 +201,42 @@ public final class TrajectoriesHack extends Hack implements RenderListener
 				break;
 		}
 		
-		return new Trajectory(path, type);
+		return new Trajectory(path, type, false);
+	}
+	
+	// PearlESP's prediction, whole ticks like the real pearl (user,
+	// 2026-10-31: PearlESP's landing spot was clearly the more accurate one);
+	// only the entity check on top is Trajectories' own
+	private Trajectory getPearlTrajectory(LocalPlayer player,
+		InteractionHand hand, float partialTicks)
+	{
+		ArrayList<Vec3> path = new ArrayList<>();
+		PearlEspHack.PearlPrediction prediction = WURST.getHax().pearlEspHack
+			.buildPredictionFromPlayer(player, hand, partialTicks);
+		if(prediction == null || prediction.path().isEmpty())
+			return new Trajectory(path, HitResult.Type.MISS, true);
+		
+		Predicate<Entity> predicate = e -> !e.isSpectator() && e.isPickable();
+		List<Vec3> points = prediction.path();
+		path.add(points.get(0));
+		for(int i = 1; i < points.size(); i++)
+		{
+			Vec3 from = points.get(i - 1);
+			Vec3 to = points.get(i);
+			EntityHitResult eResult = ProjectileUtil.getEntityHitResult(player,
+				from, to, new AABB(from, to), predicate, 64.0 * 64.0);
+			if(eResult != null && eResult.getType() != HitResult.Type.MISS)
+			{
+				path.add(eResult.getLocation());
+				return new Trajectory(path, HitResult.Type.ENTITY, true);
+			}
+			
+			path.add(to);
+		}
+		
+		return new Trajectory(path,
+			prediction.hit() ? HitResult.Type.BLOCK : HitResult.Type.MISS,
+			true);
 	}
 	
 	private boolean isThrowable(ItemStack stack)
@@ -272,7 +332,8 @@ public final class TrajectoriesHack extends Hack implements RenderListener
 		};
 	}
 	
-	private record Trajectory(ArrayList<Vec3> path, HitResult.Type type)
+	private record Trajectory(ArrayList<Vec3> path, HitResult.Type type,
+		boolean pearl)
 	{
 		public boolean isEmpty()
 		{
@@ -281,8 +342,10 @@ public final class TrajectoriesHack extends Hack implements RenderListener
 		
 		public AABB getEndBox()
 		{
+			// pearls: PearlESP's landing box
+			double radius = pearl ? 0.35 : 0.5;
 			Vec3 end = path.get(path.size() - 1);
-			return new AABB(end.subtract(0.5), end.add(0.5));
+			return new AABB(end.subtract(radius), end.add(radius));
 		}
 	}
 }

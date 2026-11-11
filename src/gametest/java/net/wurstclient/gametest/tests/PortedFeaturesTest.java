@@ -71,7 +71,11 @@ public final class PortedFeaturesTest extends SingleplayerTest
 		// big systems
 		"AutoFly", "LootRunner", "Mapa", "NBTEditor",
 		// alternative GUIs and the chat overlay
-		"AltGUI", "XPGUI", "ClientChatOverlay");
+		"AltGUI", "XPGUI", "ClientChatOverlay",
+		// from Meteor Client
+		"HoleESP", "VoidESP", "FreeLook", "BossStack", "BreakIndicators",
+		"PopChams", "ItemHighlight", "BlockSelection", "BetterTab", "CityESP",
+		"Blur", "ItemPhysics");
 	
 	public PortedFeaturesTest(ClientGameTestContext context,
 		TestSingleplayerContext spContext)
@@ -142,6 +146,7 @@ public final class PortedFeaturesTest extends SingleplayerTest
 		
 		testContainerOverlays();
 		testPortedCommandsAndOtfs(failed);
+		testItemPhysics();
 		
 		if(!failed.isEmpty())
 			throw new RuntimeException(
@@ -198,6 +203,26 @@ public final class PortedFeaturesTest extends SingleplayerTest
 			if(otfs.performanceOverlayOtf.isEnabled())
 				otfs.performanceOverlayOtf.doPrimaryAction();
 		});
+	}
+	
+	/**
+	 * Drops a sword and a block with ItemPhysics on and keeps a screenshot
+	 * (not compared - for looking at).
+	 */
+	private void testItemPhysics()
+	{
+		runCommand("tp @s 0 -57 0 0 50");
+		runCommand("summon item 0 -60 2 {Item:{id:\"minecraft:diamond_sword\"},"
+			+ "PickupDelay:32767,Age:-32768}");
+		runCommand("summon item 1 -60 2 {Item:{id:\"minecraft:stone\"},"
+			+ "PickupDelay:32767,Age:-32768}");
+		setHack("ItemPhysics", true);
+		context.waitTicks(20);
+		context.takeScreenshot("itemphysics_on");
+		setHack("ItemPhysics", false);
+		runCommand("kill @e[type=item]");
+		runCommand("tp @s 0 -57 0 0 0");
+		context.waitTicks(3);
 	}
 	
 	private void setHack(String name, boolean enabled)

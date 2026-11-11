@@ -98,7 +98,8 @@ public final class NukerLegitHack extends Hack
 		
 		// resets
 		IKeyMapping.get(MC.options.keyAttack).resetPressedState();
-		MC.gameMode.stopDestroyBlock();
+		if(MC.gameMode != null)
+			MC.gameMode.stopDestroyBlock();
 		overlay.resetProgress();
 		currentBlock = null;
 		commonSettings.reset();

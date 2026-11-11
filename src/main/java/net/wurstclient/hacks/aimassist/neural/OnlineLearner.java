@@ -25,7 +25,6 @@ import java.util.SplittableRandom;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-import net.wurstclient.hacks.aimassist.neural.PvpSim.Policy;
 import net.wurstclient.hacks.aimassist.neural.PvpSim.SimFighter;
 
 /**
@@ -92,10 +91,43 @@ public final class OnlineLearner
 	static final float ANCHOR = 0.02F;
 	static final int EVAL_EVERY = 20;
 	static final int EVAL_GAMES = 120;
+	/**
+	 * The general net beating a copy at least this often: no tuned net for
+	 * that player (nothing real left to learn from the copy).
+	 */
+	static final double SATURATED = 0.85;
 	/** Generations per opponent without new moves before it rests. */
+	/**
+	 * Real full hits (ours + theirs, the general net playing) before a tuned
+	 * net may be made, and how far the copy's hit share may be off theirs.
+	 */
+	static final int MIN_REAL_HITS = 60, REAL_HIT_WINDOW = 120;
+	/**
+	 * The last 30 seconds of their recording (one sample a tick), compared
+	 * with the 30-second windows before it (2+ needed), see
+	 * {@link #styleChanged}; when they changed, the copy plays only the
+	 * recent.
+	 */
+	static final int RECENT_SAMPLES = 600, STYLE_MIN_SCORED = 300,
+		STYLE_WINDOWS = 4;
+	/**
+	 * A spread of at least 0.16 nats: single fights of one fighter vary that
+	 * much (4 windows understate it - SprintCombo +0.38 against a spread of
+	 * 0.067, +0.51 against 0.131), so a change is 0.56+ up; the switches
+	 * between Aggressor and Counter were +0.74 and +1.04 (2026-11-02).
+	 */
+	static final double STYLE_SD = 3.5, STYLE_MIN_SD = 0.16;
+	/**
+	 * The window after one that stood out only has to stay up: the copy has
+	 * already learned from the first (Spammer -> SprintCombo: +2.69 nats,
+	 * then +0.42 at a spread of 0.16; the windows after a lone spike were
+	 * at -0.2 to -0.7 spreads, 2026-11-03).
+	 */
+	static final double STYLE_STAY_SD = 2;
+	static final double FIDELITY = 0.06;
 	static final int SESSION_GENS = 400;
 	static final int GENERAL_GENS = 150;
-	static final int MAX_TICKS = 600;
+	static final int MAX_TICKS = 1200;
 	
 	private static OnlineLearner instance;
 	
@@ -178,6 +210,22 @@ public final class OnlineLearner
 		return a.forward(input);
 	}
 	
+	/** The net decide() ran last for this player (NeuralHistory reads it). */
+	public NeuralNet netOf(Profile p)
+	{
+		return p.adapter.net();
+	}
+	
+	/**
+	 * Takes the trainer's champion from {@code aimassist_learned.bin} if it's
+	 * newer than the general net in use (client thread, when AimAssist is
+	 * switched on - one small file).
+	 */
+	public void refreshGeneral()
+	{
+		adoptNewerGeneral();
+	}
+	
 	/** The general net's weights right now (never changed in place). */
 	public float[] generalParams()
 	{
@@ -256,6 +304,19 @@ public final class OnlineLearner
 		volatile double adaptedScore;
 		/** How far they were seen hitting from (eyes to hitbox). */
 		volatile double reach = PvpSim.REACH;
+		/**
+		 * What you and they wore last time (AimAssist reads it off both
+		 * players): the fights against their copy are in that gear (null =
+		 * PvpSim's default).
+		 */
+		volatile PvpSim.Gear myGear, theirGear;
+		
+		public void setGear(PvpSim.Gear mine, PvpSim.Gear theirs)
+		{
+			myGear = mine;
+			theirGear = theirs;
+		}
+		
 		volatile boolean dirty;
 		
 		/** Whether the tuned net plays (client thread decides). */
@@ -284,6 +345,7 @@ public final class OnlineLearner
 		{
 			xs[next] = x;
 			ys[next] = y;
+			surprises[next] = Float.NaN;
 			next = (next + 1) % SAMPLE_CAP;
 			size = Math.min(size + 1, SAMPLE_CAP);
 			newSamples++;
@@ -291,16 +353,86 @@ public final class OnlineLearner
 			lastSeen = System.nanoTime();
 		}
 		
-		synchronized int copySamples(float[][] x, byte[][] y)
+		/** The samples, oldest first. */
+		int copySamples(float[][] x, byte[][] y)
 		{
+			return copySamples(x, y, null);
+		}
+		
+		/** ... and how surprising each was to the copy (NaN: not scored). */
+		synchronized int copySamples(float[][] x, byte[][] y, float[] s)
+		{
+			int first = size < SAMPLE_CAP ? 0 : next;
 			for(int i = 0; i < size; i++)
 			{
-				x[i] = xs[i];
-				y[i] = ys[i];
+				int k = (first + i) % SAMPLE_CAP;
+				x[i] = xs[k];
+				y[i] = ys[k];
+				if(s != null)
+					s[i] = surprises[k];
 			}
 			newSamples = 0;
 			return size;
 		}
+		
+		/**
+		 * How surprising each new sample was to the copy as it was before
+		 * it learned from them (learner thread; the scoring outside the
+		 * lock, the client thread adds samples).
+		 */
+		void scoreNew(NeuralNet copy)
+		{
+			int[] slots = new int[SAMPLE_CAP];
+			float[][] x = new float[SAMPLE_CAP][];
+			byte[][] y = new byte[SAMPLE_CAP][];
+			int n = 0;
+			synchronized(this)
+			{
+				for(int i = 0; i < size; i++)
+					if(Float.isNaN(surprises[i]))
+					{
+						slots[n] = i;
+						x[n] = xs[i];
+						y[n++] = ys[i];
+					}
+			}
+			float[] s = new float[n];
+			for(int i = 0; i < n; i++)
+				s[i] = (float)Backprop.surprise(copy.forward(x[i]), y[i]);
+			synchronized(this)
+			{
+				for(int i = 0; i < n; i++)
+					if(xs[slots[i]] == x[i])
+						surprises[slots[i]] = s[i];
+			}
+		}
+		
+		/** Forgets all but the newest n samples (they changed their style). */
+		synchronized void keepNewest(int n)
+		{
+			if(n >= size)
+				return;
+			int first = size < SAMPLE_CAP ? 0 : next;
+			float[][] x = new float[n][];
+			byte[][] y = new byte[n][];
+			float[] s = new float[n];
+			for(int i = 0; i < n; i++)
+			{
+				int k = (first + size - n + i) % SAMPLE_CAP;
+				x[i] = xs[k];
+				y[i] = ys[k];
+				s[i] = surprises[k];
+			}
+			Arrays.fill(xs, null);
+			Arrays.fill(ys, null);
+			System.arraycopy(x, 0, xs, 0, n);
+			System.arraycopy(y, 0, ys, 0, n);
+			System.arraycopy(s, 0, surprises, 0, n);
+			size = n;
+			next = n % SAMPLE_CAP;
+		}
+		
+		private final float[] surprises = new float[SAMPLE_CAP];
 		
 		public synchronized int sampleCount()
 		{
@@ -327,6 +459,45 @@ public final class OnlineLearner
 			reach = Math.max(PvpSim.REACH,
 				Math.min(4.5, Math.max(r, cur - (cur - PvpSim.REACH) * 0.05)));
 		}
+		
+		/** Real full hits while the general net played: ours, theirs. */
+		volatile int realOurHits, realTheirHits;
+		/** How often they changed their style (the copy forgot the rest). */
+		volatile int styleChanges;
+		/** Learner thread: when the style was last checked (seen). */
+		long styleCheckSeen;
+		/**
+		 * Learner thread: where the last window that stood out began (seen),
+		 * -1 without one - the next window decides.
+		 */
+		long styleSuspectSeen = -1;
+		/** Learner thread: what that window was compared with. */
+		double[] styleSuspectBase;
+		
+		/**
+		 * A real full hit, ours or theirs (client thread): how the general
+		 * net really does against them, to check the copy against.
+		 */
+		public void noteHit(boolean ours)
+		{
+			if(usingAdapted && adapted != null)
+				return;
+			// the last REAL_HIT_WINDOW only: how they fight now
+			if(realOurHits + realTheirHits >= REAL_HIT_WINDOW)
+				if(realHitRing[realHitNext])
+					realOurHits--;
+				else
+					realTheirHits--;
+			realHitRing[realHitNext] = ours;
+			realHitNext = (realHitNext + 1) % REAL_HIT_WINDOW;
+			if(ours)
+				realOurHits++;
+			else
+				realTheirHits++;
+		}
+		
+		private final boolean[] realHitRing = new boolean[REAL_HIT_WINDOW];
+		private int realHitNext;
 		
 		/**
 		 * A real exchange: +1 our hit (1.5 a crit), -1 theirs. Picks the
@@ -396,6 +567,10 @@ public final class OnlineLearner
 		final float[] theta, anchor, m, v;
 		int gen, idleGens;
 		double bestScore = Double.NaN;
+		/** The general net against this copy (NaN: not measured yet). */
+		double baseScore = Double.NaN;
+		/** The general net's share of the hits against this copy (NaN). */
+		double copyShare = Double.NaN;
 		
 		Session(float[] start, float[] anchor)
 		{
@@ -486,6 +661,14 @@ public final class OnlineLearner
 	}
 	
 	private int slices;
+	/** What you wore in the last fight (the general net's own fights). */
+	private volatile PvpSim.Gear lastMyGear;
+	
+	/** What you wear now (AimAssist, every few seconds of a fight). */
+	public void noteMyGear(PvpSim.Gear gear)
+	{
+		lastMyGear = gear;
+	}
 	
 	void adaptStep(Profile p, Random rnd)
 	{
@@ -496,6 +679,8 @@ public final class OnlineLearner
 			{
 				p.session.idleGens = 0;
 				p.session.bestScore = Double.NaN;
+				p.session.baseScore = Double.NaN;
+				p.session.copyShare = Double.NaN;
 			}
 			return;
 		}
@@ -506,6 +691,15 @@ public final class OnlineLearner
 		Session s = p.session;
 		float[] clone = p.clone;
 		double reach = p.reach;
+		// in what both of you wear (the general net stands in for them)
+		PvpSim.Gear mine = p.myGear, theirs = p.theirGear;
+		
+		// only tune against a copy that fights like them. v4 vs Counter: the
+		// general net won 88% of the real fights but 64% against the copy;
+		// its tuned net beat the copy 68% and the general net >= 50%, and
+		// fell to 78% against the real one (2026-11-02)
+		if(!copyFaithful(p, s, mine, theirs))
+			return;
 		
 		for(int i = 0; i < 4; i++)
 		{
@@ -513,8 +707,8 @@ public final class OnlineLearner
 				SplittableRandom r = new SplittableRandom(seed);
 				// mostly the copy, sometimes the general net (stay sound)
 				boolean vsClone = r.nextInt(4) != 0;
-				return fight(cand, vsClone ? clone : base, vsClone, reach,
-					seed);
+				return fight(cand, vsClone ? clone : base, vsClone, reach, seed,
+					mine, theirs);
 			});
 			s.idleGens++;
 		}
@@ -525,11 +719,26 @@ public final class OnlineLearner
 			long seeds = p.id.getMostSignificantBits() ^ p.cloneVersion;
 			float[] current = p.adapted != null ? p.adapted : base;
 			if(Double.isNaN(s.bestScore))
-				s.bestScore =
-					winRate(current, clone, true, reach, EVAL_GAMES, seeds);
-			double score =
-				winRate(s.theta, clone, true, reach, EVAL_GAMES, seeds);
-			if(score > s.bestScore + 0.02)
+				s.bestScore = winRate(current, clone, true, reach, EVAL_GAMES,
+					seeds, mine, theirs);
+			double score = winRate(s.theta, clone, true, reach, EVAL_GAMES,
+				seeds, mine, theirs);
+			// and it must still hold its own against the general net: one
+			// that only beats the copy exploits where the copy plays wrong.
+			// Against Counter (copy 86% beaten, the real one 63%) every
+			// tuned net won 88-93% against the copy, lost 38-50% to the
+			// general net and 48-59% to the real one (2026-10-29)
+			// Nor when the general net already beats the copy this clearly:
+			// all a tuned net can still find is where the copy plays wrong
+			// (v2 vs Counter: general 90.5% vs the real one, its tuned net
+			// 83%, though it held its own against the general net -
+			// 2026-10-31). The general net plays on.
+			if(Double.isNaN(s.baseScore))
+				s.baseScore = current == base ? s.bestScore : winRate(base,
+					clone, true, reach, EVAL_GAMES, seeds, mine, theirs);
+			if(score > s.bestScore + 0.02 && s.baseScore < SATURATED
+				&& winRate(s.theta, base, false, PvpSim.REACH, EVAL_GAMES,
+					seeds, mine, theirs) >= 0.5)
 			{
 				s.bestScore = score;
 				p.adapted = s.theta.clone();
@@ -541,15 +750,181 @@ public final class OnlineLearner
 		}
 	}
 	
+	/**
+	 * Whether the copy fights like the real player: the general net's share
+	 * of the full hits against it is within {@link #FIDELITY} of what it got
+	 * in the real fights ({@link #MIN_REAL_HITS} of them first).
+	 */
+	boolean copyFaithful(Profile p, Session s, PvpSim.Gear mine,
+		PvpSim.Gear theirs)
+	{
+		int ours = p.realOurHits, real = ours + p.realTheirHits;
+		if(real < MIN_REAL_HITS)
+			return false;
+		if(Double.isNaN(s.copyShare))
+			s.copyShare = hitShare(general, p.clone, p.reach, EVAL_GAMES,
+				p.id.getMostSignificantBits() ^ p.cloneVersion, mine, theirs);
+		return Math.abs(s.copyShare - ours / (double)real) <= FIDELITY;
+	}
+	
+	/** A's share of the full hits against a copy, both sides' counted. */
+	double hitShare(float[] mine, float[] copy, double theirReach, int games,
+		long seed, PvpSim.Gear myGear, PvpSim.Gear theirGear)
+	{
+		int[][] hits = new int[games][];
+		runFights(games, g -> {
+			PvpSim sim =
+				new PvpSim(seed * 1_000_003L + g, new NetPolicy(sizes, mine),
+					NetPolicy.copy(sizes, copy), MAX_TICKS);
+			sim.a.onlyGoodHits = true;
+			sim.b.reach = theirReach;
+			sim.setGear(myGear, theirGear);
+			sim.run();
+			hits[g] = new int[]{sim.a.hits, sim.b.hits};
+			return 0;
+		});
+		simFights += games;
+		long a = 0, all = 0;
+		for(int[] h : hits)
+		{
+			a += h[0];
+			all += h[0] + h[1];
+		}
+		return all == 0 ? 0.5 : a / (double)all;
+	}
+	
+	/**
+	 * How much more surprising their moves in [before, n) were to the copy
+	 * than in the windows of {@link #styleBase}, in those windows' spread
+	 * (at least {@link #STYLE_MIN_SD}); NaN without a base. Each move is
+	 * scored before the copy learned it, so the situation they were in is
+	 * accounted for. A switch between two fighters is a step up that stays.
+	 * Counting how often they pressed each key took the same fighter for a
+	 * changed one: Aggressor sprinted on 19-64% of the ticks of its
+	 * 30-second windows (2026-11-02).
+	 */
+	static double styleZ(float[] s, int before, int n, double[] base)
+	{
+		double[] r = surpriseSum(s, before, n);
+		if(base == null || r[1] < STYLE_MIN_SCORED)
+			return Double.NaN;
+		// fewer scored moves than an average window: noisier
+		double sd = Math.max(STYLE_MIN_SD,
+			base[1] * Math.sqrt(Math.max(1, base[2] / r[1])));
+		double off = r[0] / r[1] - base[0];
+		lastStyleOff = off;
+		lastStyleSd = sd;
+		return off / sd;
+	}
+	
+	/**
+	 * Their 30-second windows in the 2 minutes before baseEnd: mean surprise,
+	 * its spread and the moves scored in an average window - null without 3
+	 * of them.
+	 */
+	static double[] styleBase(float[] s, int baseEnd)
+	{
+		double sum = 0, sq = 0, count = 0;
+		int m = 0;
+		// the last 2 minutes before it: older windows were scored by a copy
+		// still learning (a fresh one's surprise fell from ~2 to ~0.5 nats)
+		for(int to = baseEnd; to - RECENT_SAMPLES >= 0
+			&& to > baseEnd - STYLE_WINDOWS * RECENT_SAMPLES; to -=
+				RECENT_SAMPLES)
+		{
+			double[] c = surpriseSum(s, to - RECENT_SAMPLES, to);
+			if(c[1] < STYLE_MIN_SCORED)
+				continue;
+			double v = c[0] / c[1];
+			sum += v;
+			sq += v * v;
+			count += c[1];
+			m++;
+		}
+		// two windows' spread means nothing (Aggressor: 0.012, then +0.147
+		// called a change in its 3rd fight)
+		if(m < 3)
+			return null;
+		double mean = sum / m;
+		return new double[]{mean,
+			Math.sqrt(Math.max(0, (sq - m * mean * mean) / (m - 1))),
+			count / m};
+	}
+	
+	/** The last check's numbers (tests). */
+	static volatile double lastStyleOff, lastStyleSd;
+	
+	/** {sum, count} of the scored samples in [from, to). */
+	private static double[] surpriseSum(float[] s, int from, int to)
+	{
+		double sum = 0;
+		int count = 0;
+		for(int i = from; i < to; i++)
+			if(!Float.isNaN(s[i]))
+			{
+				sum += s[i];
+				count++;
+			}
+		return new double[]{sum, count};
+	}
+	
 	/** Learns to play like the opponent from the recorded moves. */
 	void trainClone(Profile p, Random rnd)
 	{
+		// how the new moves surprised the copy, before it learns them
+		if(p.clone != null)
+			p.scoreNew(new NeuralNet(sizes, p.clone));
 		float[][] x = new float[SAMPLE_CAP][];
 		byte[][] y = new byte[SAMPLE_CAP][];
-		int n = p.copySamples(x, y);
+		float[] s = new float[SAMPLE_CAP];
+		int n = p.copySamples(x, y, s);
 		float[] params = (p.clone != null ? p.clone : general).clone();
-		Backprop.train(sizes, params, x, y, n, p.clone == null ? 8 : 3, 0.003F,
-			new Random(rnd.nextLong()));
+		// a player who changed their style: copy how they play now (the last
+		// 30 seconds) and forget the rest, not the mix of both
+		// once per 30+ seconds of new moves: all of them since the last check
+		// against moves already checked - the first fight after a switch
+		// landed in what the next check compared with otherwise (Spammer ->
+		// SprintCombo, spread 0.16 -> 0.76, missed, 2026-11-03)
+		long seen = p.seen;
+		int fresh = (int)Math.min(n, seen - p.styleCheckSeen);
+		int from = n;
+		boolean changed = false;
+		if(fresh >= RECENT_SAMPLES)
+		{
+			int before = n - fresh;
+			// a change is a step up that stays: one window standing out isn't
+			// one (SprintCombo's copy, +0.875 nats for 30 s against v5 and
+			// nothing changed, 2026-11-03) - the next one has to stay up
+			// against the same moves before them too
+			// (kept from then: the moves before it may have left the ring)
+			boolean suspect = p.styleSuspectSeen >= 0;
+			double[] base = suspect ? p.styleSuspectBase : styleBase(s, before);
+			double z = styleZ(s, before, n, base);
+			p.styleCheckSeen = seen;
+			if(Double.isNaN(z) || z < (suspect ? STYLE_STAY_SD : STYLE_SD))
+				p.styleSuspectSeen = -1;
+			else if(!suspect)
+			{
+				p.styleSuspectSeen = seen - fresh;
+				p.styleSuspectBase = base;
+			}else
+			{
+				changed = true;
+				from = Math.max(0, n - (int)(seen - p.styleSuspectSeen));
+			}
+		}
+		if(changed)
+		{
+			// both windows (and any moves between them)
+			p.keepNewest(n - from);
+			p.styleSuspectSeen = -1;
+			p.styleChanges++;
+			Backprop.train(sizes, params, Arrays.copyOfRange(x, from, n),
+				Arrays.copyOfRange(y, from, n), n - from, 6, 0.003F,
+				new Random(rnd.nextLong()));
+		}else
+			Backprop.train(sizes, params, x, y, n, p.clone == null ? 8 : 3,
+				0.003F, new Random(rnd.nextLong()));
 		p.clone = params;
 		p.cloneVersion++;
 		p.dirty = true;
@@ -583,24 +958,29 @@ public final class OnlineLearner
 			esGeneration(s, rnd, (seed, cand) -> {
 				SplittableRandom r = new SplittableRandom(seed);
 				int pick = r.nextInt(pool.size() + 1);
+				// itself in your gear; each copy in your and their gear
 				if(pick == pool.size())
-					return fight(cand, base, false, PvpSim.REACH, seed);
+					return fight(cand, base, false, PvpSim.REACH, seed,
+						lastMyGear, lastMyGear);
 				Profile p = pool.get(pick);
-				return fight(cand, p.clone, true, p.reach, seed);
+				return fight(cand, p.clone, true, p.reach, seed, p.myGear,
+					p.theirGear);
 			});
 		if(s.gen < GENERAL_GENS)
 			return true;
 		
 		generalSession = null;
 		long seeds = 0x5EED_0000L + generalVersion;
-		if(general != base || adoptNewerGeneral()
-			|| winRate(s.theta, base, false, PvpSim.REACH, 200, seeds) < 0.5)
+		if(general != base || adoptNewerGeneral() || winRate(s.theta, base,
+			false, PvpSim.REACH, 200, seeds, lastMyGear, lastMyGear) < 0.5)
 			return true;
 		double before = 0, after = 0;
 		for(Profile p : pool)
 		{
-			before += winRate(base, p.clone, true, p.reach, 60, seeds);
-			after += winRate(s.theta, p.clone, true, p.reach, 60, seeds);
+			before += winRate(base, p.clone, true, p.reach, 60, seeds, p.myGear,
+				p.theirGear);
+			after += winRate(s.theta, p.clone, true, p.reach, 60, seeds,
+				p.myGear, p.theirGear);
 		}
 		if(after < before || adoptNewerGeneral())
 			return true;
@@ -627,6 +1007,39 @@ public final class OnlineLearner
 	}
 	
 	/**
+	 * Fights played at once: 1 in game (the learner has a CPU budget), every
+	 * core in the tests. Each fight has its own seed and the results are
+	 * added up in the same order, so it's the same either way.
+	 */
+	static volatile int parallelism = 1;
+	private static java.util.concurrent.ForkJoinPool fightPool;
+	
+	private static synchronized java.util.concurrent.ForkJoinPool fightPool()
+	{
+		if(fightPool == null
+			|| fightPool.getParallelism() != Math.max(1, parallelism))
+			fightPool =
+				new java.util.concurrent.ForkJoinPool(Math.max(1, parallelism));
+		return fightPool;
+	}
+	
+	/** Runs job(0..count-1), in parallel if parallelism says so. */
+	private static double[] runFights(int count,
+		java.util.function.IntToDoubleFunction job)
+	{
+		double[] r = new double[count];
+		if(parallelism <= 1)
+		{
+			for(int k = 0; k < count; k++)
+				r[k] = job.applyAsDouble(k);
+			return r;
+		}
+		fightPool().submit(() -> java.util.stream.IntStream.range(0, count)
+			.parallel().forEach(k -> r[k] = job.applyAsDouble(k))).join();
+		return r;
+	}
+	
+	/**
 	 * One generation of OpenAI-ES: antithetic pairs on the same fights,
 	 * centered ranks, Adam, plus a pull toward the anchor.
 	 */
@@ -636,20 +1049,28 @@ public final class OnlineLearner
 		long genSeed = rnd.nextLong();
 		double[] fit = new double[PAIRS * 2];
 		float[][] eps = new float[PAIRS][];
-		float[] cand = new float[n];
+		float[][] cands = new float[PAIRS * 2][];
 		for(int i = 0; i < PAIRS; i++)
 		{
 			eps[i] = noise(genSeed, i, n);
 			for(int sign = 0; sign < 2; sign++)
 			{
 				float sg = sign == 0 ? 1 : -1;
+				float[] cand = cands[2 * i + sign] = new float[n];
 				for(int j = 0; j < n; j++)
 					cand[j] = s.theta[j] + sg * SIGMA * eps[i][j];
-				double sum = 0;
-				for(int g = 0; g < GAMES; g++)
-					sum += fitness.eval(genSeed * 31 + i * 1009L + g, cand);
-				fit[2 * i + sign] = sum / GAMES;
 			}
+		}
+		double[] scores = runFights(PAIRS * 2 * GAMES, k -> {
+			int c = k / GAMES, g = k % GAMES;
+			return fitness.eval(genSeed * 31 + c / 2 * 1009L + g, cands[c]);
+		});
+		for(int c = 0; c < PAIRS * 2; c++)
+		{
+			double sum = 0;
+			for(int g = 0; g < GAMES; g++)
+				sum += scores[c * GAMES + g];
+			fit[c] = sum / GAMES;
 		}
 		simFights += PAIRS * 2L * GAMES;
 		
@@ -681,40 +1102,56 @@ public final class OnlineLearner
 	double fight(float[] mine, float[] theirs, boolean theirsIsCopy,
 		double theirReach, long seed)
 	{
+		return fight(mine, theirs, theirsIsCopy, theirReach, seed, null, null);
+	}
+	
+	/** ... in this gear (null: PvpSim's default). */
+	double fight(float[] mine, float[] theirs, boolean theirsIsCopy,
+		double theirReach, long seed, PvpSim.Gear myGear, PvpSim.Gear theirGear)
+	{
 		// a copy of a player plays like they did, without an adapter
 		PvpSim sim = new PvpSim(seed, new NetPolicy(sizes, mine),
-			new NetPolicy(sizes, theirs, !theirsIsCopy), MAX_TICKS);
+			theirsIsCopy ? NetPolicy.copy(sizes, theirs)
+				: new NetPolicy(sizes, theirs, true),
+			MAX_TICKS);
 		sim.a.onlyGoodHits = true;
 		// a copied player hits however they like, from where they hit
 		sim.b.onlyGoodHits = !theirsIsCopy;
 		sim.b.reach = theirReach;
-		int result = sim.run();
-		SimFighter a = sim.a, b = sim.b;
-		double score = (a.damageDealt - b.damageDealt) / 20 + result;
-		score += 0.01 * a.sprintHits + 0.02 * a.crits;
-		score += 0.03 * Math.max(0, a.maxCombo - 1)
-			- 0.03 * Math.max(0, b.maxCombo - 1);
-		return score;
+		sim.setGear(myGear, theirGear);
+		return sim.score(sim.run());
 	}
 	
 	/** Win rate of A (a draw goes by health; even = half). */
 	double winRate(float[] mine, float[] theirs, boolean theirsIsCopy,
 		double theirReach, int games, long seed)
 	{
-		double sum = 0;
-		for(int g = 0; g < games; g++)
-		{
+		return winRate(mine, theirs, theirsIsCopy, theirReach, games, seed,
+			null, null);
+	}
+	
+	/** ... in this gear (null: PvpSim's default). */
+	double winRate(float[] mine, float[] theirs, boolean theirsIsCopy,
+		double theirReach, int games, long seed, PvpSim.Gear myGear,
+		PvpSim.Gear theirGear)
+	{
+		double[] results = runFights(games, g -> {
 			PvpSim sim =
 				new PvpSim(seed * 1_000_003L + g, new NetPolicy(sizes, mine),
-					new NetPolicy(sizes, theirs, !theirsIsCopy), MAX_TICKS);
+					theirsIsCopy ? NetPolicy.copy(sizes, theirs)
+						: new NetPolicy(sizes, theirs, true),
+					MAX_TICKS);
 			sim.a.onlyGoodHits = true;
 			sim.b.onlyGoodHits = !theirsIsCopy;
 			sim.b.reach = theirReach;
+			sim.setGear(myGear, theirGear);
 			int r = sim.run();
-			if(r == 0)
-				r = Float.compare(sim.a.health, sim.b.health);
-			sum += r > 0 ? 1 : r < 0 ? 0 : 0.5;
-		}
+			r = sim.outcome(r);
+			return r > 0 ? 1 : r < 0 ? 0 : 0.5;
+		});
+		double sum = 0;
+		for(double r : results)
+			sum += r;
 		simFights += games;
 		return sum / games;
 	}
@@ -744,11 +1181,17 @@ public final class OnlineLearner
 	 * A network playing in the simulator - adapting during the fight with a
 	 * {@link FightAdapter}, like AimAssist does in game.
 	 */
-	public static final class NetPolicy implements Policy
+	public static final class NetPolicy implements PvpSim.Batchable
 	{
 		private final FightAdapter adapter;
+		private final KeySmoother smoother = new KeySmoother();
+		private final MoveRules moveRules = new MoveRules();
+		private final NeuralHistory history = new NeuralHistory();
 		private final float[] in = new float[NeuralObservation.SIZE];
-		private int lastHits, lastCrits, lastHurtTick;
+		private double lastCandy;
+		private boolean copy;
+		/** A copy's draws for its one-off actions. */
+		private SplittableRandom copyRandom = new SplittableRandom(0);
 		
 		public NetPolicy(int[] sizes, float[] params)
 		{
@@ -759,6 +1202,56 @@ public final class OnlineLearner
 		{
 			adapter = new FightAdapter(sizes, params, 0, adapting);
 		}
+		
+		/**
+		 * A copy of a player: their keys as recorded, without our key
+		 * smoothing and item rules. With them, a copy of Counter ate on 20%
+		 * of the ticks (it 6%), kept eating when it was closed in on and
+		 * landed 2 sprint hits a fight to its 10 (2026-10-27).
+		 */
+		public static NetPolicy copy(int[] sizes, float[] params)
+		{
+			NetPolicy p = new NetPolicy(sizes, params, false);
+			p.copy = true;
+			return p;
+		}
+		
+		/**
+		 * Yes with the chance the training's weighted logit stands for: a
+		 * label of 1 counted {@code pos} times shifts it by ln(pos).
+		 */
+		private boolean draw(float logit, float pos)
+		{
+			double z = logit - Math.log(pos);
+			return copyRandom.nextDouble() < 1 / (1 + Math.exp(-z));
+		}
+		
+		/** A copy's held W/S and A/D (1, 0, -1). */
+		private int heldForward, heldStrafe;
+		
+		/**
+		 * A copy's movement key: held like a player holds one (a fresh draw
+		 * every ~{@link #KEY_RUN} ticks, or when the held one has become
+		 * unlikely), drawn by the net's odds. Always the likeliest, a copy
+		 * of Counter strafed 90% of the ticks to its 67% - it can't see
+		 * Counter's strafe timer, so A and D are near even and argmax picks
+		 * one of them every tick (2026-11-02).
+		 */
+		private int drawKey(float[] output, int from, int held)
+		{
+			float a = output[from], b = output[from + 1], c = output[from + 2];
+			float max = Math.max(a, Math.max(b, c));
+			double ea = Math.exp(a - max), eb = Math.exp(b - max),
+				ec = Math.exp(c - max), sum = ea + eb + ec;
+			double pHeld = (held > 0 ? ea : held < 0 ? ec : eb) / sum;
+			if(pHeld >= KEY_KEEP && copyRandom.nextInt(KEY_RUN) != 0)
+				return held;
+			double r = copyRandom.nextDouble() * sum;
+			return r < ea ? 1 : r < ea + eb ? 0 : -1;
+		}
+		
+		static final int KEY_RUN = 6;
+		static final double KEY_KEEP = 0.2;
 		
 		/** What it learned in earlier fights (a series against one player). */
 		public NetPolicy withDelta(float[] delta)
@@ -776,29 +1269,74 @@ public final class OnlineLearner
 		public void reset(SplittableRandom random)
 		{
 			adapter.restart(random.nextLong());
-			lastHits = lastCrits = 0;
-			lastHurtTick = PvpSim.NEVER;
+			// one draw for both: the fight's random stream stays as it was
+			long keySeed = random.nextLong();
+			smoother.reset(keySeed);
+			moveRules.reset(keySeed ^ 0x6D6F7665L);
+			history.reset();
+			lastCandy = 0;
+			if(copy)
+			{
+				copyRandom = new SplittableRandom(random.nextLong());
+				heldForward = heldStrafe = 0;
+			}
 		}
 		
 		@Override
 		public void act(SimFighter me, NeuralObservation o, NeuralAction out)
 		{
-			// the hits since last tick, scored like AimAssist scores them
-			if(me.hits != lastHits)
+			finish(me, o, out, adapter.forward(prepare(me, o)));
+		}
+		
+		@Override
+		public float[] prepare(SimFighter me, NeuralObservation o)
+		{
+			// the candy since last tick, squashed like AimAssist does it
+			double candy = me.candy.total();
+			if(candy != lastCandy)
 			{
-				int crits = me.crits - lastCrits;
-				int hits = me.hits - lastHits;
-				adapter.reward(hits + 0.5 * crits);
-				lastHits = me.hits;
-				lastCrits = me.crits;
+				adapter.reward(Candy.squash(candy - lastCandy));
+				lastCandy = candy;
 			}
-			if(me.lastHurtTick != lastHurtTick)
-			{
-				adapter.reward(-1);
-				lastHurtTick = me.lastHurtTick;
-			}
+			history.context(o.context, o.memoryLong);
 			o.encode(in);
-			out.decode(adapter.forward(in));
+			return in;
+		}
+		
+		@Override
+		public NeuralNet batchNet()
+		{
+			return adapter.net();
+		}
+		
+		@Override
+		public void finish(SimFighter me, NeuralObservation o, NeuralAction out,
+			float[] output)
+		{
+			out.decode(output);
+			history.push(adapter.net());
+			if(copy)
+			{
+				// one-off actions drawn as often as the player did them: the
+				// training counts a missed one 3-4x, so "> 0" fired far too
+				// often - a copy of Aggressor swung on 92% of the ticks it
+				// could hit, Aggressor on 17% (2026-11-02)
+				out.forward = heldForward = drawKey(output, 0, heldForward);
+				out.strafe = heldStrafe = drawKey(output, 3, heldStrafe);
+				out.jump = draw(output[6], Backprop.POS_JUMP);
+				out.attack = draw(output[9], Backprop.POS_ATTACK);
+				out.web = draw(output[10], Backprop.POS_ITEM);
+				out.pot = draw(output[12], Backprop.POS_ITEM);
+				out.water = draw(output[14], Backprop.POS_ITEM);
+				out.pearlIn = draw(output[15], Backprop.POS_ITEM);
+				out.pearlOut = draw(output[16], Backprop.POS_ITEM);
+				out.windJump = draw(output[17], Backprop.POS_ITEM);
+				out.windHit = draw(output[18], Backprop.POS_ITEM);
+				return;
+			}
+			smoother.apply(out);
+			ItemRules.apply(o, out);
+			moveRules.apply(o, out);
 		}
 	}
 	

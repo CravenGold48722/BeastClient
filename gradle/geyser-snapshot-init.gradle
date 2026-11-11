@@ -1,0 +1,10 @@
+// Init script for building Intave (../Testing2) and Shard (../Testing4) for
+// the anticheat tests: their Floodgate API snapshot asks for
+// org.geysermc:common:1.4.3-SNAPSHOT, which no repository serves any more
+// (2026-11-03) - they only compile against it for Bedrock players, which the
+// tests never have. Their own folders stay untouched.
+allprojects {
+	configurations.configureEach {
+		exclude group: "org.geysermc", module: "common"
+	}
+}

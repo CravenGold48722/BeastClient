@@ -150,6 +150,10 @@ loom {
 				vmArg("-Dwurst.test.only=$onlyTests")
 			if (testParts)
 				vmArg("-Dwurst.test.parts=$testParts")
+			// -PkeyPresserEvents=false: KeyPresser without its key-level
+			// events (diagnosis)
+			if (project.findProperty("keyPresserEvents"))
+				vmArg("-Dwurst.keypresser.events=${project.findProperty("keyPresserEvents")}")
 			if (recordFights)
 				vmArg("-Dwurst.test.record=true")
 			if (updateScreenshots)
@@ -384,6 +388,12 @@ spotless {
 
 test {
 	useJUnitPlatform()
+	jvmArgs("--add-modules", "jdk.incubator.vector")
+}
+
+// the neural trainer's SIMD forward pass (VectorKernel, src/test only)
+tasks.named("compileTestJava") {
+	options.compilerArgs += ["--add-modules", "jdk.incubator.vector"]
 }
 
 // AimAssist's "Neural network": trains it in a sword PvP simulator (src/test
@@ -395,6 +405,7 @@ tasks.register("trainNeuralAim", JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = "net.wurstclient.hacks.aimassist.neural.NeuralTrainer"
 	maxHeapSize = "1g"
+	jvmArgs("--add-modules", "jdk.incubator.vector")
 	workingDir = projectDir
 	args((project.findProperty("nnArgs") ?: "train 26,8,10 2000").toString().split(" "))
 }

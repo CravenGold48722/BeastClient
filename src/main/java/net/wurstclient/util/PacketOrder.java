@@ -43,6 +43,7 @@ public enum PacketOrder
 	;
 	
 	private static volatile boolean actedThisTick;
+	private static volatile long ticksEnded;
 	private static boolean lastShift;
 	private static boolean lastSprint;
 	
@@ -52,6 +53,7 @@ public enum PacketOrder
 		if(packet instanceof ServerboundClientTickEndPacket)
 		{
 			actedThisTick = false;
+			ticksEnded++;
 			return;
 		}
 		
@@ -68,9 +70,12 @@ public enum PacketOrder
 			return;
 		}
 		
-		// releasing a drawn bow, an eaten item, a raised shield...
-		if(packet instanceof ServerboundPlayerActionPacket action && action
-			.getAction() == ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM)
+		// releasing a drawn bow, an eaten item, a raised shield... and a
+		// spear's stab (MultiPlayerGameMode.piercingAttack sends it as an
+		// action; Grim's PacketOrderE counts it as attacking)
+		if(packet instanceof ServerboundPlayerActionPacket action && (action
+			.getAction() == ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM
+			|| action.getAction() == ServerboundPlayerActionPacket.Action.STAB))
 		{
 			actedThisTick = true;
 			return;
@@ -96,5 +101,16 @@ public enum PacketOrder
 	public static boolean canChangeSlotNow()
 	{
 		return !actedThisTick;
+	}
+	
+	/**
+	 * How many ticks have ended (tick-end packets sent) - tells "still the
+	 * tick something happened in" from "a later tick", wherever in the tick
+	 * each is asked (a click in handleKeybinds and the hack's own tick both
+	 * come before the tick end).
+	 */
+	public static long ticksEnded()
+	{
+		return ticksEnded;
 	}
 }

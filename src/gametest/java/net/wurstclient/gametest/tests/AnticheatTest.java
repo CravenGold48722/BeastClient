@@ -34,9 +34,16 @@ import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
+import net.minecraft.network.protocol.common.custom.BrandPayload;
+import net.minecraft.network.protocol.configuration.ServerboundSelectKnownPacks;
+import net.minecraft.network.protocol.login.ServerboundCustomQueryAnswerPacket;
+import net.minecraft.server.packs.repository.KnownPack;
+import net.wurstclient.WurstClient;
 import net.wurstclient.gametest.AnticheatServer;
 import net.wurstclient.gametest.PacketTrace;
 import net.wurstclient.gametest.WurstTest;
+import net.wurstclient.settings.CheckboxSetting;
 
 /**
  * Plays a few scenarios with Wurst's legit-meant hacks on a real server with
@@ -89,18 +96,54 @@ public final class AnticheatTest
 			server.takeFlags();
 			PacketTrace.takeStats();
 			
-			scenario("baseline", this::baseline);
-			scenario("control (Flight)", this::control);
-			// with -Pfeatures, only the setup checks (baseline, control)
-			if(AnticheatFeatureSweep.FEATURES.isEmpty())
+			// the plain server is only there for VanillaSpoof: nothing to
+			// flag, and Flight would just be kicked
+			if(server.isVanilla())
 			{
-				scenario("Killaura", this::killaura);
-				scenario("MaceAssist", this::maceAssist);
-				scenario("ScaffoldWalk", this::scaffoldWalk);
+				scenario("VanillaSpoof", this::vanillaSpoof);
+				return;
 			}
 			
+			scenario("baseline", this::baseline);
+			scenario("control (Flight)", this::control);
+			// Blatant Flight not flagged: the server's flags never reach the
+			// test, so every feature would read "clean" - skip them (Windfall
+			// 2.4.3 on Paper checks nobody: it makes its player data on
+			// LOGIN_SUCCESS, where packetevents has no Bukkit player yet)
+			boolean blind = server.mustFlagFlight()
+				&& report.get("control (Flight)").isEmpty();
+			if(blind)
+				logger.warn("{} didn't flag Flight - skipping its features",
+					server.getName());
+				
+			// with -Pfeatures, the setup checks (baseline, control) and the
+			// scenarios it names (-Pfeatures=maceassist: MaceAssist's)
+			if(!blind && isWanted("Killaura"))
+				scenario("Killaura", this::killaura);
+			if(!blind && isWanted("MaceAssist"))
+				scenario("MaceAssist", this::maceAssist);
+			if(!blind && isWanted("ScaffoldWalk"))
+			{
+				scenario("ScaffoldWalk", this::scaffoldWalk);
+				// a block every 7+ ticks: what Intave at its strictest allows
+				scenario("ScaffoldWalk (slow bridging)", () -> {
+					runWurstCommand(context,
+						"setcheckbox ScaffoldWalk Slow_bridging on");
+					try
+					{
+						return scaffoldWalk();
+					}finally
+					{
+						runWurstCommand(context,
+							"setcheckbox ScaffoldWalk Slow_bridging off");
+					}
+				});
+			}
+			if(!blind && isWanted("VanillaSpoof"))
+				scenario("VanillaSpoof", this::vanillaSpoof);
+			
 			// every hack and command, each with its own line
-			if(!Boolean.getBoolean("wurst.test.noFeatureSweep"))
+			if(!blind && !Boolean.getBoolean("wurst.test.noFeatureSweep"))
 				new AnticheatFeatureSweep(this, context).run();
 			
 		}finally
@@ -123,7 +166,7 @@ public final class AnticheatTest
 			throw new RuntimeException(server.getName() + " scenario(s) "
 				+ broken + " failed - see the log");
 		
-		if(report.get("control (Flight)").isEmpty())
+		if(server.mustFlagFlight() && report.get("control (Flight)").isEmpty())
 			throw new RuntimeException(server.getName()
 				+ " didn't flag Flight - its flags aren't reaching the test");
 	}
@@ -169,6 +212,85 @@ public final class AnticheatTest
 	
 	private static final Pattern TIMER_FLAG = Pattern
 		.compile("failed Timer(Limit)? |timer", Pattern.CASE_INSENSITIVE);
+	
+	/**
+	 * What the server is told at join, with VanillaSpoof on and off (user,
+	 * 2026-10-29): the packets that actually went out - PacketTrace records
+	 * them after VanillaSpoof rewrote or dropped them. On, it has to look
+	 * like a vanilla client: brand "vanilla", no other custom payload, every
+	 * login query answered "not understood", only vanilla data packs.
+	 */
+	private String vanillaSpoof()
+	{
+		String on = joinSeen(true);
+		String off = joinSeen(false);
+		setVanillaSpoof(true);
+		reconnect();
+		PacketTrace.takeSent();
+		return "spoof on: " + on + " | spoof off: " + off;
+	}
+	
+	private String joinSeen(boolean spoof)
+	{
+		setVanillaSpoof(spoof);
+		PacketTrace.takeSent();
+		reconnect();
+		context.waitTicks(20);
+		boolean joined = context
+			.computeOnClient(mc -> mc.player != null && mc.level != null);
+		
+		String brand = null;
+		List<String> channels = new ArrayList<>();
+		List<String> packs = new ArrayList<>();
+		int queries = 0, answered = 0;
+		for(PacketTrace.Sent sent : PacketTrace.takeSent())
+			if(sent.packet() instanceof ServerboundCustomPayloadPacket custom)
+			{
+				if(custom.payload() instanceof BrandPayload b)
+					brand = b.brand();
+				else
+					channels.add(custom.payload().type().id().toString());
+				
+			}else if(sent
+				.packet() instanceof ServerboundCustomQueryAnswerPacket answer)
+			{
+				queries++;
+				if(answer.payload() != null)
+					answered++;
+				
+			}else if(sent.packet() instanceof ServerboundSelectKnownPacks known)
+				for(KnownPack pack : known.knownPacks())
+					if(!pack.isVanilla())
+						packs.add(pack.namespace() + ":" + pack.id());
+					
+		String seen = String.format(Locale.ROOT,
+			"brand %s, %d other payload(s)%s, %d/%d login queries answered,"
+				+ " %d mod data pack(s)%s",
+			brand, channels.size(), channels.isEmpty() ? "" : " " + channels,
+			answered, queries, packs.size(),
+			packs.isEmpty() ? "" : " " + packs);
+		boolean vanilla = "vanilla".equals(brand) && channels.isEmpty()
+			&& answered == 0 && packs.isEmpty();
+		if(spoof && !vanilla)
+			seen = "NOT VANILLA: " + seen;
+		if(!joined)
+			seen = "DIDN'T JOIN: " + seen;
+		return seen;
+	}
+	
+	private void setVanillaSpoof(boolean on)
+	{
+		context.runOnClient(mc -> ((CheckboxSetting)WurstClient.INSTANCE
+			.getOtfs().vanillaSpoofOtf.getSettings().get("spoof vanilla"))
+				.setChecked(on));
+	}
+	
+	private static boolean isWanted(String scenario)
+	{
+		List<String> features = AnticheatFeatureSweep.FEATURES;
+		String name = scenario.toLowerCase(java.util.Locale.ROOT);
+		return features.isEmpty() || features.stream().anyMatch(name::contains);
+	}
 	
 	/**
 	 * Runs a scenario and records the flags it raised, plus what it did
@@ -417,6 +539,18 @@ public final class AnticheatTest
 		context.waitFor(
 			mc -> mc.player != null && mc.level != null && mc.screen == null,
 			20 * 120);
+		
+		// Windfall only logs the flags of a player whose own alerts are off
+		// (they start on for everyone, and the bot is op there for this).
+		// Its plugin.yml's /windfall (and /wf, /wfall) has no handler - only
+		// usage - and takes the name; the real one ends up as
+		// /windfall:windfall
+		if(server.isWindfall())
+		{
+			context.runOnClient(mc -> mc.player.connection
+				.sendCommand("windfall:windfall alerts"));
+			context.waitTicks(10);
+		}
 	}
 	
 	/**
@@ -518,6 +652,9 @@ public final class AnticheatTest
 	
 	private static final Pattern GRIM_CHECK = Pattern.compile("failed (\\S+)");
 	private static final Pattern INTAVE_CHECK = Pattern.compile("on (\\S+)\\)");
+	private static final Pattern WINDFALL_CHECK =
+		Pattern.compile("\\[Windfall\\] \\[([^\\]]+)\\]");
+	private static final Pattern SHARD_CHECK = Pattern.compile("Shard \\| ");
 	
 	/** "Reach x2, Simulation x5" */
 	static String summarize(List<String> flags)
@@ -525,10 +662,12 @@ public final class AnticheatTest
 		Map<String, Integer> counts = new TreeMap<>();
 		for(String flag : flags)
 		{
+			Matcher windfall = WINDFALL_CHECK.matcher(flag);
 			Matcher grim = GRIM_CHECK.matcher(flag);
 			Matcher intave = INTAVE_CHECK.matcher(flag);
-			String check = grim.find() ? grim.group(1)
-				: intave.find() ? intave.group(1) : "?";
+			String check = windfall.find() ? windfall.group(1)
+				: SHARD_CHECK.matcher(flag).find() ? "Shard" : grim.find()
+					? grim.group(1) : intave.find() ? intave.group(1) : "?";
 			counts.merge(check, 1, Integer::sum);
 		}
 		

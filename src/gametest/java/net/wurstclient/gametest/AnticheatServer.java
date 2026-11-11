@@ -90,6 +90,59 @@ public final class AnticheatServer
 			Pattern.compile("\\(DET\\) "), new File("plugins/Intave/logs"));
 	}
 	
+	/**
+	 * Windfall on Paper (with packetevents), or null if the build left it
+	 * out. Logs "[Windfall] [Check] player VL=n" once the player's own alerts
+	 * are off ({@code AnticheatTest.connect}).
+	 */
+	public static AnticheatServer windfall()
+	{
+		return fromProperty("Windfall", "wurst.test.windfallServer",
+			"paper.jar",
+			Pattern.compile("\\[Windfall\\] \\[[^\\]]+\\] \\S+ VL="), null);
+	}
+	
+	public boolean isWindfall()
+	{
+		return "Windfall".equals(name);
+	}
+	
+	/**
+	 * Whether blatant Flight must flag here. Not on Shard: with its AI check
+	 * off (the user's rule - it needs the paid API) it detects nothing, so
+	 * its run only shows what still works and what it kicks for.
+	 */
+	public boolean mustFlagFlight()
+	{
+		return !"Shard".equals(name);
+	}
+	
+	/**
+	 * Shard on Paper, or null if the build left it out. Its AI check is off
+	 * (it needs Shard's paid API) - all of its detections are that check, so
+	 * only what it says outside it ("Shard | ...") shows up.
+	 */
+	public static AnticheatServer shard()
+	{
+		return fromProperty("Shard", "wurst.test.shardServer", "paper.jar",
+			Pattern.compile("Shard \\| (?!.*[Aa]lerts (en|dis)abled)"), null);
+	}
+	
+	/**
+	 * A plain server - Fabric's launcher with no mods, so vanilla - only for
+	 * what VanillaSpoof shows a server. It never flags anything.
+	 */
+	public static AnticheatServer vanilla()
+	{
+		return fromProperty("Vanilla", "wurst.test.vanillaServer",
+			"fabric-server.jar", Pattern.compile("(?!)"), null);
+	}
+	
+	public boolean isVanilla()
+	{
+		return "Vanilla".equals(name);
+	}
+	
 	/** -Dwurst.test.xServer=folder:port (the folder may contain a colon) */
 	private static AnticheatServer fromProperty(String name, String property,
 		String jar, Pattern flagLine, File flagLogDir)

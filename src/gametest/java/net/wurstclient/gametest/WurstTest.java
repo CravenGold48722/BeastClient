@@ -9,9 +9,11 @@ package net.wurstclient.gametest;
 
 import static net.wurstclient.gametest.WurstClientTestHelper.*;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Stream;
 
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
@@ -130,10 +132,21 @@ public class WurstTest implements FabricClientGameTest
 		// singleplayer world. They don't use it, and closing it moments after
 		// it was created hit that same deadlock in 3 of 5 such runs
 		// (2026-10-15).
+		// a failure doesn't keep the rest from running; the run fails at the
+		// end (one chance-based pearl catch below its 3 of 5 cost a whole
+		// sweep, 2026-11-04)
+		ArrayList<String> failures = new ArrayList<>();
 		if(isAnticheatOnly())
 			LOGGER.info("Only anticheat tests selected - no test world");
 		else
-			testInNewWorld(context);
+			try
+			{
+				testInNewWorld(context);
+			}catch(RuntimeException | AssertionError e)
+			{
+				LOGGER.error("The in-world tests failed", e);
+				failures.add("in-world: " + e.getMessage());
+			}
 		
 		// joins each server like a player, at the normal 20 ticks/s
 		for(int i = 0; i < servers.size(); i++)
@@ -146,8 +159,17 @@ public class WurstTest implements FabricClientGameTest
 				server.awaitSettled();
 			}
 			if(isSelected("AnticheatTest" + server.getName()))
-				new AnticheatTest(context, server).run();
+				try
+				{
+					new AnticheatTest(context, server).run();
+				}catch(RuntimeException | AssertionError e)
+				{
+					LOGGER.error("{} failed", server.getName(), e);
+					failures.add(server.getName() + ": " + e.getMessage());
+				}
 		}
+		if(!failures.isEmpty())
+			throw new RuntimeException(String.join("; ", failures));
 	}
 	
 	private static void startServer(AnticheatServer server)
@@ -182,9 +204,9 @@ public class WurstTest implements FabricClientGameTest
 	 */
 	private static boolean isAnticheatOnly()
 	{
-		return !ONLY.isEmpty()
-			&& ONLY.stream().allMatch(s -> "anticheattestgrim".contains(s)
-				|| "anticheattestintave".contains(s));
+		return !ONLY.isEmpty() && ONLY.stream().allMatch(
+			s -> Stream.of("grim", "intave", "vanilla", "windfall", "shard")
+				.anyMatch(n -> ("anticheattest" + n).contains(s)));
 	}
 	
 	private void testInWorld(ClientGameTestContext context,
@@ -277,6 +299,9 @@ public class WurstTest implements FabricClientGameTest
 		
 		// Test special cases
 		run(new PistonTest(context, spContext));
+		
+		if(!inWorldFailures.isEmpty())
+			throw new RuntimeException(String.join("; ", inWorldFailures));
 	}
 	
 	private static boolean isSelected(String testName)
@@ -291,10 +316,23 @@ public class WurstTest implements FabricClientGameTest
 		return selected;
 	}
 	
+	/** In-world tests that failed; the rest still ran. */
+	private static final ArrayList<String> inWorldFailures = new ArrayList<>();
+	
 	private static void run(SingleplayerTest test)
 	{
-		if(isSelected(test.getClass().getSimpleName()))
+		String name = test.getClass().getSimpleName();
+		if(!isSelected(name))
+			return;
+		
+		try
+		{
 			test.run();
+		}catch(RuntimeException | AssertionError e)
+		{
+			LOGGER.error("{} failed", name, e);
+			inWorldFailures.add(name + ": " + e.getMessage());
+		}
 	}
 	
 	// because the grass texture is randomized and smooth stone isn't

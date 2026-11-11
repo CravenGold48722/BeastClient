@@ -70,6 +70,17 @@ public final class AimFriction
 	public static double[] slow(double userYaw, double userPitch, Target t,
 		double stickiness)
 	{
+		return slow(userYaw, userPitch, t, stickiness, stickiness);
+	}
+	
+	/**
+	 * {@link #slow(double, double, Target, double)} with its own slowdown
+	 * for leaving the target - 0 for an aim that's easy to pull away from
+	 * (MaceAssist): only closing in is slowed, so the crosshair settles.
+	 */
+	public static double[] slow(double userYaw, double userPitch, Target t,
+		double stickiness, double leaveStickiness)
+	{
 		// Along the way, a slice at a time: a big jump of the mouse in one
 		// frame (a flick at a low frame rate) is slowed only while the
 		// crosshair is still near the target, not all of it by how close it
@@ -94,10 +105,10 @@ public final class AimFriction
 			double p = slicePitch;
 			if(near > 0)
 			{
-				y *= factor(sliceYaw, errorYaw, t.halfWidth(), near,
-					stickiness);
+				y *= factor(sliceYaw, errorYaw, t.halfWidth(), near, stickiness,
+					leaveStickiness);
 				p *= factor(slicePitch, errorPitch, (t.bottom() - t.top()) / 2,
-					near, stickiness);
+					near, stickiness, leaveStickiness);
 			}
 			yaw += y;
 			pitch += p;
@@ -112,11 +123,11 @@ public final class AimFriction
 	private static final int MAX_SLICES = 2000;
 	
 	private static double factor(double move, double error, double half,
-		double near, double stickiness)
+		double near, double stickiness, double leaveStickiness)
 	{
 		// moving the same way as the error points makes it bigger: leaving
 		if(move * error > 0)
-			return 1 - stickiness * near;
+			return 1 - leaveStickiness * near;
 		
 		double center = 1 - smoothstep(Math.abs(error) / Math.max(half, 1e-6));
 		return 1 - stickiness * (0.5 + 0.5 * center) * near;

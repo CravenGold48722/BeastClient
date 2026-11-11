@@ -7,12 +7,14 @@
  */
 package net.wurstclient.hacks.aimassist.neural;
 
+import java.util.Arrays;
 import java.util.SplittableRandom;
 
 /**
  * Learning in the middle of a fight, every exchange: the network's biases
- * (the 10 output biases: how readily it walks in, strafes, jumps, sprints,
- * sneaks and swings) get a small offset that is trained from the hits
+ * (the output biases: how readily it walks in, strafes, jumps, sprints,
+ * sneaks, swings and uses its items) get a small offset that is trained from
+ * the hits
  * themselves.
  *
  * <p>
@@ -42,7 +44,7 @@ public final class FightAdapter
 	/** The offset never goes further than this per bias. */
 	static final float CAP = 0.6F;
 	/**
-	 * Only the output layer's biases (the 10 key tendencies): with the
+	 * Only the output layer's biases (the key and item tendencies): with the
 	 * hidden ones too the noise of ~15 hits a fight cost more than it found.
 	 */
 	static final boolean OUTPUT_ONLY = true;
@@ -82,6 +84,7 @@ public final class FightAdapter
 		this.adapting = adapting;
 		params = base.clone();
 		net = new NeuralNet(sizes, params);
+		net.sharedWeights = base;
 		delta = new float[n];
 		eps = new float[n];
 		restart(seed);
@@ -106,7 +109,14 @@ public final class FightAdapter
 		if(base.length != params.length)
 			throw new IllegalArgumentException("wrong size");
 		this.base = base;
+		net.sharedWeights = base;
 		apply();
+	}
+	
+	/** The net it runs (its activations: NeuralHistory). */
+	public NeuralNet net()
+	{
+		return net;
 	}
 	
 	/** Runs the adapted network; the result is valid until the next call. */
@@ -166,6 +176,16 @@ public final class FightAdapter
 		for(int k = 0; k < delta.length; k++)
 			delta[k] = Math.max(-CAP, Math.min(CAP, d[k]));
 		apply();
+	}
+	
+	/**
+	 * Forgets everything learned, as if new (the trainer reuses adapters
+	 * fight after fight instead of building them; restart() comes next).
+	 */
+	public void clearOffset()
+	{
+		Arrays.fill(delta, 0);
+		tests = 0;
 	}
 	
 	public int deltaSize()

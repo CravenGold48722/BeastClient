@@ -7,76 +7,66 @@
  */
 package net.wurstclient.hacks;
 
+import java.util.Random;
+
 import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
-import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
-import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
-import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
 import net.minecraft.world.entity.EquipmentSlot;
-import net.minecraft.world.entity.MoverType;
-import net.minecraft.world.phys.Vec3;
-import net.minecraft.util.Mth;
-import net.minecraft.world.entity.player.Input;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.wurstclient.Category;
 import net.wurstclient.SearchTags;
-import net.wurstclient.events.PacketOutputListener;
-import net.wurstclient.events.PacketOutputListener.PacketOutputEvent;
-import net.wurstclient.events.PacketInputListener;
-import net.wurstclient.events.PacketInputListener.PacketInputEvent;
 import net.wurstclient.events.UpdateListener;
 import net.wurstclient.hack.Hack;
 import net.wurstclient.settings.CheckboxSetting;
-import net.wurstclient.settings.SliderSetting;
-import net.wurstclient.settings.SliderSetting.ValueDisplay;
-import net.wurstclient.util.InventoryUtils;
-import net.wurstclient.util.PacketUtils;
 import net.wurstclient.util.ChatUtils;
-import net.wurstclient.mixinterface.ILocalPlayer;
+import net.wurstclient.util.InventoryUtils;
+import net.wurstclient.util.KeyPresser;
 
 /**
- * Keeps the elytra pose lit while walking, using the 26.2 player command flow.
+ * Skates along the ground in the gliding pose the way a player can in
+ * vanilla: elytra bouncing. Only keys are pressed (see {@link KeyPresser}) -
+ * vanilla jumps, opens the elytra (its own START_FALL_FLYING when jump is
+ * pressed again in the air) and moves; the camera stays yours.
+ *
+ * <p>
+ * Each hop: space goes down on the ground once the glide has ended (the
+ * server's "stopped gliding" comes back a tick or so after landing),
+ * stays down 1-2 ticks after take-off, is let go for 1-3 ticks and pressed
+ * again, which opens the elytra - vanilla only opens it on a fresh press in
+ * the air. It's held from there until the landing. Timings vary like a
+ * hand's.
+ *
+ * <p>
+ * The old version (ported from CevAPI) claimed to be off the ground while
+ * walking, opened the elytra on the ground with its own look packet and set
+ * the speed itself (1.5 blocks/tick): Grim GroundSpoof, ElytraB "no jump",
+ * TickTimer and Simulation, Intave physics and protocolscanner.
  */
-@SearchTags({"elytra walk", "ground skating"})
-public final class ElytraWalkHack extends Hack
-	implements UpdateListener, PacketOutputListener, PacketInputListener
+@SearchTags({"elytra walk", "ground skating", "elytra bounce", "ElytraBounce"})
+public final class ElytraWalkHack extends Hack implements UpdateListener
 {
-	private final SliderSetting flySpeed = new SliderSetting("Fly speed",
-		"description.wurst.setting.elytrawalk.fly_speed", 1.5, 0, 3, .1,
-		ValueDisplay.DECIMAL);
 	private final CheckboxSetting autoElytra =
 		new CheckboxSetting("Auto elytra",
 			"description.wurst.setting.elytrawalk.auto_elytra", true);
-	private final CheckboxSetting notify = new CheckboxSetting("Notify",
-		"description.wurst.setting.elytrawalk.notify", true);
-	private final CheckboxSetting showSelf = new CheckboxSetting("Show self",
-		"description.wurst.setting.elytrawalk.show_self", false);
-	private final CheckboxSetting hideNametag =
-		new CheckboxSetting("Hide nametag",
-			"description.wurst.setting.elytrawalk.hide_nametag", false);
-	private final CheckboxSetting spin = new CheckboxSetting("Spin",
-		"description.wurst.setting.elytrawalk.spin", false);
-	private final SliderSetting spinSpeed = new SliderSetting("Spin speed",
-		"description.wurst.setting.elytrawalk.spin_speed", 18, -90, 90, 1,
-		ValueDisplay.INTEGER);
-	private final SliderSetting pitchLock = new SliderSetting("Pitch lock",
-		"description.wurst.setting.elytrawalk.pitch_lock", -181, -181, 90, 1,
-		ValueDisplay.INTEGER);
-	private final CheckboxSetting bob = new CheckboxSetting("Bob",
-		"description.wurst.setting.elytrawalk.bob", false);
-	private final SliderSetting bobRange = new SliderSetting("Bob range",
-		"description.wurst.setting.elytrawalk.bob_range", 35, 0, 90, 1,
-		ValueDisplay.INTEGER);
-	private final SliderSetting bobSpeed = new SliderSetting("Bob speed",
-		"description.wurst.setting.elytrawalk.bob_speed", .1, .01, .5, .01,
-		ValueDisplay.DECIMAL);
-	private int retry, showTicks;
-	private float spinYaw;
-	private boolean serverGliding;
-	private int relightAttempts;
-	private int pendingAck;
-	private boolean announced;
+	
+	private final CheckboxSetting sprint = new CheckboxSetting("Sprint",
+		"Presses your sprint key while bouncing. A sprinting jump pushes you"
+			+ " forward, so the hops add up to speed.",
+		true);
+	
+	private final Random random = new Random();
+	
+	/** Ticks since leaving the ground (0 on it). */
+	private int airTicks;
+	/** This hop: ticks space stays down after take-off. */
+	private int holdAfterTakeoff;
+	/** This hop: ticks space is let go before the press that opens it. */
+	private int gap;
+	/** This hop's elytra press went out; space is held until landing. */
+	private boolean deployed;
+	/** Ticks to wait after a screen closed before the first hop. */
+	private int reactionTicks;
+	
 	private ItemStack originalChest;
 	private boolean warnedMissingElytra;
 	private int equipRetry;
@@ -85,44 +75,24 @@ public final class ElytraWalkHack extends Hack
 	{
 		super("ElytraWalk");
 		setCategory(Category.MOVEMENT);
-		addSetting(flySpeed);
 		addSetting(autoElytra);
-		addSetting(notify);
-		addSetting(showSelf);
-		addSetting(hideNametag);
-		addSetting(spin);
-		addSetting(spinSpeed);
-		addSetting(pitchLock);
-		addSetting(bob);
-		addSetting(bobRange);
-		addSetting(bobSpeed);
+		addSetting(sprint);
 	}
 	
 	@Override
 	protected void onEnable()
 	{
-		retry = showTicks = 0;
-		serverGliding = MC.player != null && MC.player.isFallFlying();
-		relightAttempts = 0;
-		pendingAck = 0;
-		announced = false;
+		resetHop();
 		originalChest = null;
 		warnedMissingElytra = false;
 		equipRetry = 0;
-		spinYaw = MC.player == null ? 0 : MC.player.getYRot();
 		EVENTS.add(UpdateListener.class, this);
-		EVENTS.add(PacketOutputListener.class, this);
-		EVENTS.add(PacketInputListener.class, this);
 	}
 	
 	@Override
 	protected void onDisable()
 	{
 		EVENTS.remove(UpdateListener.class, this);
-		EVENTS.remove(PacketOutputListener.class, this);
-		EVENTS.remove(PacketInputListener.class, this);
-		if(MC.player != null && MC.player.isFallFlying())
-			MC.player.stopFallFlying();
 		if(autoElytra.isChecked())
 			restoreElytra();
 	}
@@ -133,155 +103,124 @@ public final class ElytraWalkHack extends Hack
 		LocalPlayer p = MC.player;
 		if(p == null)
 			return;
-		if(pendingAck > 0)
-			pendingAck--;
+		
 		if(equipRetry > 0)
 			equipRetry--;
 		if(!hasUsableElytra())
 		{
+			resetHop();
 			if(autoElytra.isChecked() && equipRetry == 0 && MC.screen == null)
 			{
 				equipRetry = 20;
 				equipElytra();
 			}
-			if(!hasUsableElytra())
+			if(!hasUsableElytra() && !warnedMissingElytra)
 			{
-				if(!warnedMissingElytra)
-					ChatUtils
-						.warning("ElytraWalk: waiting for a usable elytra. "
-							+ "Equip or repair one, or put a spare in your inventory "
-							+ "with room to unequip your chest item.");
+				ChatUtils.warning("ElytraWalk: waiting for a usable elytra."
+					+ " Equip or repair one, or put a spare in your inventory"
+					+ " with room to unequip your chest item.");
 				warnedMissingElytra = true;
-				serverGliding = false;
-				pendingAck = retry = 0;
-				return;
 			}
+			return;
 		}
 		warnedMissingElytra = false;
-		if(!canClaimPose())
-			return;
-		((ILocalPlayer)p).elytraWalk$setPositionReminder(20);
-		if(!p.onGround())
-			return;
-		if(!serverGliding && pendingAck <= 0 && retry-- <= 0)
-			light(p);
-		if(serverGliding || p.isFallFlying())
+		
+		// walking forward drives it; nothing else is touched
+		if(!canBounce(p) || !MC.options.keyUp.isDown())
 		{
-			showTicks++;
-			if(serverGliding && !announced && notify.isChecked())
-			{
-				announced = true;
-				ChatUtils.message("ElytraWalk: elytra pose lit.");
-			}
+			resetHop();
+			// a hand needs a moment after a screen (Auto elytra's inventory)
+			// closes before it's on the keys
+			if(MC.screen != null)
+				reactionTicks = 3 + random.nextInt(4);
+			return;
 		}
-		if(!showSelf.isChecked() && (p.isFallFlying() || serverGliding))
-			p.stopFallFlying();
-		if(spin.isChecked())
-			spinYaw = Mth.wrapDegrees(spinYaw + (float)spinSpeed.getValue());
-	}
-	
-	@Override
-	public void onReceivedPacket(PacketInputEvent e)
-	{
-		if(MC.player == null
-			|| !(e.getPacket() instanceof ClientboundSetEntityDataPacket p)
-			|| p.id() != MC.player.getId())
-			return;
-		for(var value : p.packedItems())
+		if(reactionTicks > 0)
 		{
-			if(value == null || value.id() != 0
-				|| !(value.value() instanceof Byte flags))
-				continue;
-			boolean now = (flags & 0x80) != 0;
-			boolean changed = now != serverGliding;
-			serverGliding = now;
-			if(now || changed)
-			{
-				pendingAck = 0;
-				retry = 0;
-			}
-			if(now)
-				relightAttempts = 0;
-			break;
-		}
-	}
-	
-	@Override
-	public void onSentPacket(PacketOutputEvent e)
-	{
-		if(e.getPacket() instanceof ServerboundPlayerCommandPacket command
-			&& command
-				.getAction() == ServerboundPlayerCommandPacket.Action.START_FALL_FLYING)
-		{
-			pendingAck = echoWait();
+			reactionTicks--;
 			return;
 		}
 		
-		if(hideNametag.isChecked()
-			&& e.getPacket() instanceof ServerboundPlayerInputPacket input
-			&& canClaimPose())
+		if(sprint.isChecked() && !p.isSprinting())
+			KeyPresser.press(MC.options.keySprint);
+		
+		if(p.onGround())
 		{
-			Input i = input.input();
-			e.setPacket(new ServerboundPlayerInputPacket(
-				new Input(i.forward(), i.backward(), i.left(), i.right(),
-					i.jump(), true, i.sprint())));
+			// Still gliding on the ground - the server's "stopped" hasn't
+			// come back yet: let go and jump once it has, a tick later. A jump
+			// in that tick is vanilla, but Intave's elytra simulation doesn't
+			// expect one (physics, a 0.517 offset whenever it happened).
+			if(p.isFallFlying())
+			{
+				airTicks = 0;
+				deployed = false;
+				return;
+			}
+			
+			// space down: vanilla jumps right away
+			KeyPresser.press(MC.options.keyJump);
+			startHop();
 			return;
 		}
-		if(!(e.getPacket() instanceof ServerboundMovePlayerPacket p)
-			|| !canClaimPose())
-			return;
-		ServerboundMovePlayerPacket out = PacketUtils.modifyOnGround(p, false);
-		if(spin.isChecked() || bob.isChecked() || pitchLock.getValue() > -180.5)
+		
+		airTicks++;
+		if(deployed)
 		{
-			float yaw =
-				spin.isChecked() ? spinYaw : p.getYRot(MC.player.getYRot());
-			float pitch = bob.isChecked()
-				? (float)(Math.sin(showTicks * bobSpeed.getValue())
-					* bobRange.getValue())
-				: pitchLock.getValue() > -180.5 ? (float)pitchLock.getValue()
-					: p.getXRot(MC.player.getXRot());
-			out = PacketUtils.modifyRotation(out, yaw, pitch);
+			// held until the next landing
+			KeyPresser.press(MC.options.keyJump);
+			return;
 		}
-		e.setPacket(out);
+		
+		// still gliding from the last hop (the server's "stopped" not here
+		// yet): a press now wouldn't open it, wait
+		if(p.isFallFlying())
+			return;
+		
+		if(airTicks <= holdAfterTakeoff)
+		{
+			KeyPresser.press(MC.options.keyJump);
+			return;
+		}
+		
+		// let go, then press again: vanilla opens the elytra
+		if(airTicks <= holdAfterTakeoff + gap)
+			return;
+		
+		KeyPresser.press(MC.options.keyJump);
+		deployed = true;
+	}
+	
+	private void startHop()
+	{
+		airTicks = 0;
+		deployed = false;
+		// a hand: mostly a quick tap, now and then a longer one
+		holdAfterTakeoff = 1 + (random.nextInt(4) == 0 ? 1 : 0);
+		gap = 1 + random.nextInt(random.nextInt(3) == 0 ? 3 : 2);
+	}
+	
+	private void resetHop()
+	{
+		airTicks = 0;
+		deployed = false;
+		holdAfterTakeoff = 1;
+		gap = 1;
+	}
+	
+	private boolean canBounce(LocalPlayer p)
+	{
+		return MC.screen == null && !p.isPassenger() && !p.isInWater()
+			&& !p.isInLava() && !p.getAbilities().flying && !p.onClimbable();
 	}
 	
 	/**
-	 * Replaces horizontal SELF movement after travel has computed its velocity,
-	 * before vanilla collision resolution. Pose acknowledgements never gate
-	 * speed.
+	 * Whether it's bouncing right now; ElytraPitch leaves the pitch alone
+	 * then.
 	 */
-	public Vec3 getGroundMovement(MoverType type, Vec3 movement)
+	public boolean isBouncing()
 	{
-		LocalPlayer p = MC.player;
-		if(!isEnabled() || !canClaimPose() || type != MoverType.SELF
-			|| !p.onGround() || MC.screen != null)
-			return movement;
-		double forward = (MC.options.keyUp.isDown() ? 1 : 0)
-			- (MC.options.keyDown.isDown() ? 1 : 0);
-		double side = (MC.options.keyLeft.isDown() ? 1 : 0)
-			- (MC.options.keyRight.isDown() ? 1 : 0);
-		double length = Math.hypot(forward, side);
-		if(length < 1e-6)
-			return movement;
-		double yaw = Math.toRadians(p.getYRot());
-		double speed = flySpeed.getValue() / length;
-		return new Vec3(
-			(-Math.sin(yaw) * forward + Math.cos(yaw) * side) * speed,
-			movement.y,
-			(Math.cos(yaw) * forward + Math.sin(yaw) * side) * speed);
-	}
-	
-	private boolean canClaimPose()
-	{
-		return hasUsableElytra() && !MC.player.isPassenger()
-			&& !MC.player.isInWater() && !MC.player.isInLava()
-			&& !MC.player.getAbilities().flying;
-	}
-	
-	/** Allows other movement hacks to yield without changing their toggles. */
-	public boolean isGroundSkating()
-	{
-		return isEnabled() && canClaimPose() && MC.player.onGround();
+		return isEnabled() && MC.player != null && hasUsableElytra()
+			&& canBounce(MC.player) && MC.options.keyUp.isDown();
 	}
 	
 	private static boolean isUsableElytra(ItemStack stack)
@@ -296,40 +235,13 @@ public final class ElytraWalkHack extends Hack
 			&& isUsableElytra(MC.player.getItemBySlot(EquipmentSlot.CHEST));
 	}
 	
-	private void light(LocalPlayer p)
-	{
-		int wait = echoWait();
-		retry = wait;
-		pendingAck = wait;
-		relightAttempts++;
-		p.connection.send(new ServerboundMovePlayerPacket.PosRot(p.position(),
-			p.getYRot(), p.getXRot(), false, p.horizontalCollision));
-		p.connection.send(new ServerboundPlayerCommandPacket(p,
-			ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
-		if(relightAttempts == 8 && notify.isChecked())
-			ChatUtils
-				.warning("ElytraWalk: server is refusing the elytra pose.");
-	}
-	
-	private int echoWait()
-	{
-		int ping = 0;
-		if(MC.player != null && MC.getConnection() != null)
-		{
-			var info = MC.getConnection().getPlayerInfo(MC.player.getUUID());
-			if(info != null)
-				ping = Math.max(0, info.getLatency());
-		}
-		int rttTicks = (int)Math.ceil(ping / 50.0) + 3;
-		return Math.min(60, Math.max(4, rttTicks));
-	}
-	
 	private boolean hasElytra()
 	{
 		return MC.player != null
 			&& MC.player.getItemBySlot(EquipmentSlot.CHEST).is(Items.ELYTRA);
 	}
 	
+	/** Shift-clicks, through the real inventory screen (InventoryOpener). */
 	private void equipElytra()
 	{
 		LocalPlayer p = MC.player;
@@ -375,12 +287,5 @@ public final class ElytraWalkHack extends Hack
 	{
 		return MC.player != null && !hasUsableElytra()
 			? "[Waiting for usable elytra]" : null;
-	}
-	
-	public String getInfoString()
-	{
-		return MC.player == null ? null
-			: !hasUsableElytra() ? "waiting for usable elytra"
-				: serverGliding ? "soaring" : "lighting";
 	}
 }

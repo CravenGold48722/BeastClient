@@ -222,8 +222,14 @@ public final class AutoFarmHack extends Hack
 				if(checkLOS.isChecked() && !params.lineOfSight())
 					continue;
 				
-				MC.rightClickDelay = 4;
 				faceTarget.face(params.hitVec());
+				// the click goes out before this tick's movement packet: wait
+				// for the server to have the turn (Grim RotationPlace
+				// "post-flying" when planted in the tick of the turn)
+				if(BlockBreaker.isTurnPending(params.neighbor()))
+					return true;
+				
+				MC.rightClickDelay = 4;
 				InteractionSimulator.rightClickBlock(params.toHitResult(), hand,
 					swingHand.getSelected());
 				return true;
@@ -270,8 +276,12 @@ public final class AutoFarmHack extends Hack
 			if(MC.player.getMainHandItem().is(Items.BONE_MEAL))
 				return InventoryUtils.selectItem(s -> !s.is(Items.BONE_MEAL));
 			
-			MC.rightClickDelay = 4;
 			faceTarget.face(params.hitVec());
+			// see replant()
+			if(BlockBreaker.isTurnPending(params.pos()))
+				return true;
+			
+			MC.rightClickDelay = 4;
 			InteractionSimulator.rightClickBlock(params.toHitResult(),
 				swingHand.getSelected());
 			return true;
@@ -329,6 +339,16 @@ public final class AutoFarmHack extends Hack
 		faceTarget.face(params.hitVec());
 		if(BlockBreaker.isTurnPending(params.pos()))
 			return true;
+			
+		// with a rotation, only what the crosshair lands on: a crop in front
+		// catches the ray (Intave interactionraytrace "wheat block, but
+		// looking at a different wheat block"; "Check line of sight" is off
+		// by default)
+		if(faceTarget.getSelected() != FaceTarget.OFF
+			&& !BlockBreaker.isLookingAt(params.pos(),
+				WURST.getRotationFaker().getServerYaw(),
+				WURST.getRotationFaker().getServerPitch()))
+			return false;
 		
 		if(!MC.gameMode.continueDestroyBlock(params.pos(), params.side()))
 			return false;

@@ -10,11 +10,112 @@ became a checkbox, every config value a slider or dropdown. Implements `UpdateLi
 `RenderListener`, `PlayerAttacksEntityListener`, `LeftClickListener`, `RightClickListener`.
 
 Features: attribute swapping (best Density/Breach mace, smart switch, swap-back delay, swap scope),
-stun slam (axe shield break + queued mace slam + follow-up), pearl catching (pitch lock + wind
+stun slam (axe shield break, mace smash the next tick - see below), pearl catching (pitch lock + wind
 charge, return slot Previous/Sword/Axe/Elytra/**Pearl**), wind-on-right-click, air pots, lunge
 swapping (spear flick), mace aim assist (now the shared per-frame `CameraAim` / `HumanAim` engine, the
 same one AimAssist uses; "Humanize aim" switches the human-like curve on), mace trigger bot, auto
 chestplate.
+
+## Stun slam - what the videos teach (user, 2026-11-11)
+
+Sources, both watched in full: XCOW "Stun Slamming Is Easy, Actually" (5:42, the transcript only
+in Bengali) and Corzen01 "FULL COURSE on Spear Mace PvP | All 17 Techniques" (17:35). Notes with
+timestamps are in the session scratchpad (`video-notes.md`). Every vanilla claim below was checked
+against the 26.1.2 bytecode. There are no decompiled sources: use `javap -c -p` on
+`.gradle/loom-cache/minecraftMaven/.../minecraft-merged-*-26.1.2.jar`.
+
+**The technique.**
+- Tick N: axe key + click. Tick N+1: mace key + click (XCOW 0:46 / 4:30, Corzen #14 10:53).
+- Both clicks in tick N is only a "stun" (XCOW 4:36, a diagram of [axe, click, click | mace]).
+  `Minecraft.handleKeybinds` runs every hotbar key before the attack clicks, so both clicks go
+  out with the item selected in that tick: the axe.
+- XCOW's "tick lockout" (1:15-1:30): when two slot keys land in one tick, the later one in the loop
+  (the higher slot) wins. His hotbar has the mace on slot 1 and the axe on slot 9, so pressing
+  both together gives the axe. "Always stunning" can mean your mace key landed in the axe's tick
+  and lost (4:42-4:45): you were too fast.
+- Corzen's "the axe key ends the tick" diagram (11:53) contradicts the handleKeybinds order. Only
+  the order explains the timing.
+- Any height works (XCOW 4:51).
+- Pre-click at the first moment you can (Corzen trick 4): on a fast dive you are in reach for only 1-3
+  ticks, and the mace needs the tick after the axe.
+
+**Vanilla, from the bytecode (council MECHANICS).**
+- `MaceItem.canSmashAttack` = fallDistance > 1.5 (strict) and not gliding.
+- Smash bonus: 4/block up to 3, 2/block up to 8, then 1/block, plus Density 0.5 × level per block.
+  `Player.attack` adds it after the cooldown scaling, so it is not reduced by attack strength. That is
+  why the mace still smashes one tick after the axe reset your cooldown.
+- Shield (`LivingEntity.applyItemBlocking`):
+  - Blocks within 90° of the target's head yaw, horizontally only. Straight above (zero horizontal
+    vector) counts as blocked.
+  - Needs 5 ticks raised.
+  - An axe hit that is blocked disables it for 5 s (100 ticks). A mace never disables a shield.
+- A fully blocked axe hit leaves lastHurt = 0, so the mace in the i-frames deals its full damage.
+- Any hit within ~10 ticks after the mace deals only the part above the mace's damage, which is
+  nothing for a smash (it could matter after a very short drop). That is why the old 2-3 tick
+  "follow-up" hit was removed: it mostly just reset your own charge.
+- Elytra: while gliding, a y-velocity above -0.5 caps fallDistance at 1
+  (`Entity.checkFallDistanceAccumulation`). That is XCOW's "don't aim too high in a dive bomb or
+  your damage resets" ("Didn't Pop", 5:09).
+
+**How MaceAssist does it now.**
+- `doStunSlam` only selects the axe. The click or trigger-bot hit that fired the event is the axe
+  hit. It used to send a second axe attack of its own in the same tick.
+- When `willSmashNextTick` (in the air, not gliding, fallDistance plus this tick's fall above
+  max(1.5, Min fall distance)), `hacks/maceassist/StunSlamPlan` (`StunSlamPlanTest`) runs from N+1.
+- **Firing the mace:** SetCarried(mace), Attack, Swing, at the first tick `HitCheck.isVerifiable`
+  passes. The slot goes back after, held to the next tick's start.
+- **Waiting for aim:** the slot goes back at once, so you don't hold the axe.
+- **Giving up:** after 10 ticks, on landing, or if the target is gone or the mace was moved.
+- The tick of the axe hit itself is skipped via `PacketOrder.ticksEnded()`. A click (handleKeybinds)
+  and the trigger bot both come before the hack's tick.
+- **Backstab** (Corzen #10): if the shield can't block you (`canShieldBlockYou`: > 90° + 20° margin
+  for the lagging head yaw), there is no axe and the attribute swap sends the mace straight in. An
+  unblocked axe hit would deal damage first and leave the mace only the difference.
+- **Spear stun slam** (Corzen #15, "Spear stun slam" checkbox, **off by default**):
+  - The spear's 4.5 reach is the item component ATTACK_RANGE (min 2.0, max 4.5), not an attribute.
+  - Vanilla's crosshair picks with the held item's range (`LocalPlayer.raycastHitResult`).
+    `startAttack` re-checks only a new item that has its own range, so an axe has none to check.
+  - The vanilla server (`ServerGamePacketListenerImpl.handleAttack` -> `isWithinAttackRange(main
+    hand, box, 3.0)` -> `AttackRange.isInRange`) allows max range + hitbox margin + 3.0, so it
+    accepts the hit.
+  - Grim's `Reach` uses the start-of-tick stack's max range and margin when the current stack has
+    none (Reach.java:134-180), not its 2.0 minimum. `CompensatedInventory` sets the start stack at
+    each tick packet. This was read from Grim's source, not tested against a Grim server.
+  - Paper and Intave are unknown, hence off by default.
+  - So with the spear held since the tick before (`sameSlotTicks >= 2`), the trigger bot starts the
+    slam from 4.5 - 0.25 (`HitCheck.isVerifiable(target, reach)`). The mace hit at N+1 is back to
+    normal reach.
+  - By hand, a plain click with a spear goes out as a STAB, so you press the axe key with the click.
+- **Guards:**
+  - No new swaps while a slam is in flight. The trigger bot yields.
+  - Your own mace click during the slam replaces ours (`userMaced`).
+  - A slam started while an attribute swap was still waiting to switch back returns to your
+    pre-swap slot.
+  - `fullReset` on a new world or respawn (identity hashes).
+  - Trigger hits per fall resets on landing or on a real launch (rise faster than 0.6 b/t, not the
+    smash's 0.01 hop).
+- `PacketOrder` counts a spear STAB (ServerboundPlayerActionPacket) as acting, which Grim's
+  PacketOrderE does. `PacketBudgetTest` counts it too.
+- Gametest `MaceTriggerTest` (`gametest mace -parts stun`): a NoAI husk with a raised shield
+  (`startUsingItem` server-side), a 12-block fall from 1.2 blocks in front of it, and the trigger
+  bot. It checks the packets that went out (`PacketTrace`). Only a Player's shield can be disabled
+  (`Player.blockUsingItem` overrides it with `BlocksAttacks.disable`), so a mob keeps blocking.
+  - Facing you: the wire must read `S2 A | S7 A | S0`, the axe hit then the mace one tick later,
+    one attack each.
+  - From behind: no axe, one mace hit, a smash landed (2026-11-11: 45 damage), and the shield
+    still up.
+  - Both: you end on the sword.
+  - Passed 2026-11-11 (1 tick apart).
+
+**Not automated (and why).**
+- #9 d-tap (spear jab pops the totem, mace finishes it, 7:05): not this round. It needs the spear's
+  held charge, then a release (RELEASE_USE_ITEM, so the mace swap waits a tick), then the mace.
+  There's no test target that carries a totem yet.
+- #16 wind-charge reset: it slows your fall, the opposite of a smash. It's for repositioning.
+- #13 grappling (pearl at the target's future feet): it would need its own solver.
+- #3/#17 spear dash and dash chain: already covered by Lunge swapping and SpearAssist. Lunge
+  (`lunge.json`) pushes 0.458 × level along your look. Corzen (2:42, 7:05): the more level you look,
+  the farther the dash. How pitch scales it wasn't checked in the bytecode.
 
 Design points that were deliberate, don't "fix" them blindly:
 - **Trigger bot = real geometry, once per tick, in the tick.** It used to check sub-tick slices with
@@ -22,6 +123,19 @@ Design points that were deliberate, don't "fix" them blindly:
   the server never saw (Grim "HITBOX: hit without any intersection", user report 2026-10-02). Now
   `isCrosshairOnTarget`: current eyes, current look, min(Trigger range, `entityInteractionRange()`),
   hitbox + pick radius, block line of sight. Don't bring the prediction back.
+- **Mace aim turns like AimAssist and gives way (user, 2026-11-03: "like the one in
+  whataimassistturningshouldbelike.mp4 / MaceAimAssistTurning Inspirations, smooth, EXTREMELY
+  human, and easy to pull away from").** `CameraAim.assistYaw`: `HumanAim.pidStep` (AimAssist's
+  video-matched turn, `max(340, 8 x degrees left)` capped by Aim speed, tolerance = the
+  footprint's half width as seen), yaw only, scaled by `util/AimYield` (Kclient's ideas, no
+  code): your mouse dragging against the pull drops it to 3% within ~50 ms (at most ~10°/s
+  against you; 10% still held a 100°/s drag to 29° in 0.5 s), back over ~0.12 s once the mouse
+  is still for 150 ms; the target changing direction (> 6°/s both ways) eases the pull off for
+  300-400 ms, not again for 450 ms. `AimYieldTest.pullAwayThenBack`: 100°/s drag -> 38° off in
+  0.5 s, let go -> back from 37° to 0.5° in 0.3 s, no swing past. Mouse friction (`Aim
+  stickiness` 50%, `onMouseUpdate`, `AimFriction.slow(..., leaveStickiness 0)`) only while
+  closing in - never while pulling away. The spring below (`springYawStep`) is no longer used
+  by MaceAssist; the hold-on-footprint / turn / settle logic stays.
 - **Mace aim = yaw only, smooth (user, 2026-10-12, second pass).** It never touches pitch (the
   player aims up/down). A PID onto the 3D hitbox with yaw-first, flick-on-urgent and aiming from
   predicted eyes was tried first and made macing *worse than off* ("snapping, off target"):

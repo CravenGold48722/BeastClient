@@ -614,12 +614,26 @@ abstract class FeatureTestKit
 	// ── Inventory ──
 	
 	/**
+	 * {@code -PfromInventory}: what a test puts on the hotbar goes in the
+	 * main inventory instead, so every hack has to fetch it - the inventory
+	 * clicks InventoryOpener opens and closes the inventory for (what got
+	 * PvP Legacy's "invalid packets" kicks, 2026-10-28/29). The report's
+	 * "sent ContainerClick xN, ContainerClose xN" shows it happened.
+	 */
+	static final boolean FROM_INVENTORY =
+		Boolean.getBoolean("wurst.test.fromInventory");
+	
+	/**
 	 * Puts an item in a slot (hotbar.N, inventory.N, weapon.offhand,
 	 * armor.head/chest/legs/feet), e.g. "stone 64" or
 	 * "bow[enchantments={flame:1}]".
 	 */
 	void give(String slot, String item)
 	{
+		// hotbar.N -> the main inventory's bottom row (tests use its top
+		// rows themselves)
+		if(FROM_INVENTORY && slot.startsWith("hotbar."))
+			slot = "inventory." + (18 + Integer.parseInt(slot.substring(7)));
 		server.command(
 			"item replace entity " + BOT + " " + slot + " with " + item);
 		String id = item.split("[\\[ ]")[0];

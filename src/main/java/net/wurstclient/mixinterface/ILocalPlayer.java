@@ -12,8 +12,9 @@ public interface ILocalPlayer
 	public boolean isTouchingWaterBypass();
 	
 	/**
-	 * Sets vanilla's counter for the once-per-20-ticks position packet
-	 * (ElytraWalk).
+	 * Tells vanilla which position the server really got last, and how many
+	 * ticks ago - after a hack held back its movement packets (RemoteView).
 	 */
-	public void elytraWalk$setPositionReminder(int value);
+	public void wurst$setLastSentPosition(double x, double y, double z,
+		boolean onGround, int ticksAgo);
 }

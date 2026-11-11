@@ -59,6 +59,12 @@ public final class NeuralPolicy
 		return action;
 	}
 	
+	/** The net decide() runs (NeuralHistory reads its activations). */
+	public NeuralNet net()
+	{
+		return net;
+	}
+	
 	public int[] getSizes()
 	{
 		return net.getSizes();

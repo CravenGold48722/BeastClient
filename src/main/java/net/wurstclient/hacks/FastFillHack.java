@@ -132,7 +132,9 @@ public final class FastFillHack extends Hack
 		EVENTS.remove(RenderListener.class, this);
 		EVENTS.remove(GUIRenderListener.class, this);
 		
-		MC.gameMode.stopDestroyBlock();
+		// null once disconnected (kicked mid-run)
+		if(MC.gameMode != null)
+			MC.gameMode.stopDestroyBlock();
 		
 		posStart = null;
 		posEnd = null;

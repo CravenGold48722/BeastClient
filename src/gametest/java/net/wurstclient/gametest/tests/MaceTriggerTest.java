@@ -76,8 +76,78 @@ public final class MaceTriggerTest extends SingleplayerTest
 			testStunSlam(true);
 			testStunSlam(false);
 		}
+		if(part(parts, "reach"))
+			testSpearReachSwap();
 		if(part(parts, "chain"))
 			testPearlChain();
+	}
+	
+	/**
+	 * Corzen01's spear -> mace swap (#5) through the trigger bot: falling
+	 * past a husk 3.6 blocks off to the side - never within the 3 blocks a
+	 * mace reaches on its own - with a spear in hand, the hit has to go out
+	 * as a mace smash at the spear's reach.
+	 */
+	private void testSpearReachSwap()
+	{
+		logger.info("Testing MaceAssist spear reach swap");
+		BlockPos ground =
+			context.computeOnClient(mc -> mc.player.blockPosition());
+		BlockPos target = ground.offset(6, 0, -6);
+		Vec3 spot = Vec3.atBottomCenterOf(target);
+		
+		try
+		{
+			clearInventory();
+			runCommand("item replace entity @s hotbar.0 with netherite_spear");
+			runCommand("item replace entity @s hotbar.7 with mace");
+			context
+				.runOnClient(mc -> mc.player.getInventory().setSelectedSlot(0));
+			runCommand(String.format(Locale.ROOT,
+				"summon husk %.1f %d %.1f {NoAI:1b,Silent:1b,"
+					+ "PersistenceRequired:1b,Health:%.0ff,"
+					+ "attributes:[{id:\"minecraft:max_health\",base:%.0f}]}",
+				spot.x, target.getY(), spot.z, HEALTH, HEALTH));
+			runWurstCommand("setcheckbox MaceAssist Mace_trigger_bot on");
+			runWurstCommand("setcheckbox MaceAssist Mace_aim_assist on");
+			runWurstCommand("setcheckbox MaceAssist Attribute_swapping on");
+			runWurstCommand("setcheckbox MaceAssist Spear_reach_swap on");
+			runWurstCommand("setcheckbox MaceAssist Trigger_spear_reach on");
+			runWurstCommand("t MaceAssist on");
+			
+			// 3.6 blocks north of it, 12 up, 35 degrees down: the look ray
+			// crosses its near side 3.3 blocks out, ~4 blocks from the eyes,
+			// for ~2 blocks of the fall
+			PacketTrace.start();
+			PacketTrace.takeSent();
+			runCommand(String.format(Locale.ROOT, "tp @s %.1f %d %.1f 0 35",
+				spot.x, target.getY() + 12, spot.z - 3.6));
+			context.waitFor(mc -> !mc.player.onGround(), 20);
+			context.waitFor(mc -> mc.player.onGround(), 100);
+			context.waitTicks(5);
+			String wire = summarize(PacketTrace.takeSent());
+			PacketTrace.stop();
+			
+			float health = getTargetHealth(target);
+			int slot = context.computeOnClient(
+				mc -> mc.player.getInventory().getSelectedSlot());
+			logger.info("Spear reach swap: target health {} of {}, held slot"
+				+ " {}, sent: {}", health, HEALTH, slot, wire);
+			
+			if(!wire.contains("S7 A") || health > HEALTH - 15)
+				throw new RuntimeException(
+					"No mace smash from the spear's reach (health " + health
+						+ "): " + wire);
+			if(slot != 0)
+				throw new RuntimeException(
+					"Left holding slot " + slot + " instead of the spear");
+			
+		}finally
+		{
+			runWurstCommand("setcheckbox MaceAssist Trigger_spear_reach off");
+			PacketTrace.stop();
+			cleanUp(ground);
+		}
 	}
 	
 	private static boolean part(String parts, String name)

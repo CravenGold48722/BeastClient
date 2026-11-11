@@ -71,7 +71,20 @@ against the 26.1.2 bytecode. There are no decompiled sources: use `javap -c -p` 
 - **Backstab** (Corzen #10): if the shield can't block you (`canShieldBlockYou`: > 90° + 20° margin
   for the lagging head yaw), there is no axe and the attribute swap sends the mace straight in. An
   unblocked axe hit would deal damage first and leave the mace only the difference.
-- **Spear stun slam** (Corzen #15, "Spear stun slam" checkbox, **off by default**):
+- **Spear reach swap** (Corzen #5, checkbox, on):
+  - With a spear held since the onUpdate before last, falling for a smash, your click on a target
+    becomes a mace hit at the spear's reach. Against a raised shield it becomes the stun slam's axe
+    hit, if a mace can follow.
+  - `trySpearReachSwap` runs in LeftClickEvent, which fires in `startAttack` before the held item is
+    read (offset ~10 vs 104). A spear click would otherwise go out as a STAB, with no attack event.
+  - It's the same packets as a player pressing the mace key with the click. The swap back is the
+    attribute swap's.
+  - Gametest `-parts reach`: a husk 3.6 blocks off to the side of a 12-block fall (never within 3),
+    and the trigger bot has to land a mace smash on it.
+- **Trigger spear reach** (checkbox, **off by default**): the trigger bot itself hits from the
+  spear's reach (- 0.25), as a reach-swap mace hit or a stun slam's axe hit (Corzen #15). It is
+  off because the bot picks the 4.25-block hits itself and it hasn't been tried against Intave.
+- **Spear reach, why it works** (Corzen #15):
   - The spear's 4.5 reach is the item component ATTACK_RANGE (min 2.0, max 4.5), not an attribute.
   - Vanilla's crosshair picks with the held item's range (`LocalPlayer.raycastHitResult`).
     `startAttack` re-checks only a new item that has its own range, so an axe has none to check.
@@ -81,11 +94,15 @@ against the 26.1.2 bytecode. There are no decompiled sources: use `javap -c -p` 
   - Grim's `Reach` uses the start-of-tick stack's max range and margin when the current stack has
     none (Reach.java:134-180), not its 2.0 minimum. `CompensatedInventory` sets the start stack at
     each tick packet. This was read from Grim's source, not tested against a Grim server.
-  - Paper and Intave are unknown, hence off by default.
-  - So with the spear held since the tick before (`sameSlotTicks >= 2`), the trigger bot starts the
-    slam from 4.5 - 0.25 (`HitCheck.isVerifiable(target, reach)`). The mace hit at N+1 is back to
-    normal reach.
-  - By hand, a plain click with a spear goes out as a STAB, so you press the axe key with the click.
+  - Paper and Intave are unknown (ANTICHEAT: run the Intave test before defaulting the trigger
+    reach on).
+  - The spear has to be held since the onUpdate before last (`sameSlotTicks >= 2`, or `>= 1` plus
+    the same slot when asked before this tick's onUpdate). Then the server's start-of-tick stack is
+    the spear.
+  - The trigger's checks use `HitCheck.isVerifiable(target, reach)`. The stun slam's mace hit at N+1
+    is back to normal reach.
+  - Mace and axe have no ATTACK_RANGE of their own (MACE in the bytecode: tool, attributes, weapon
+    only).
 - **Guards:**
   - No new swaps while a slam is in flight. The trigger bot yields.
   - Your own mace click during the slam replaces ours (`userMaced`).

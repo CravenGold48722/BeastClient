@@ -37,6 +37,7 @@ import net.minecraft.world.item.enchantment.ItemEnchantments;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.wurstclient.Category;
@@ -140,20 +141,34 @@ public final class MaceAssistHack extends Hack
 			+ " afterwards, as long as §lSwap scope§r is set to §lAll§r.",
 		true);
 	
-	private final CheckboxSetting spearStunSlam =
-		new CheckboxSetting("Spear stun slam",
-			"With a spear held since the tick before, the trigger bot starts a"
-				+ " stun slam from the spear's reach (4.5 blocks): the axe hit"
-				+ " right after switching away from the spear still counts the"
-				+ " spear's range - in vanilla's crosshair and in Grim's Reach"
-				+ " check. One tick earlier on a fast dive, so the mace hit"
-				+ " the tick after is still in reach (Corzen01, #15).\n\n"
-				+ "By hand it's vanilla: press your axe key with the click (a"
-				+ " plain click with a spear goes out as a stab).\n\n"
-				+ "Off by default: a vanilla server accepts it and Grim's Reach"
-				+ " code models it, but it hasn't been tested against a real"
-				+ " anticheat server yet (Paper, Intave unknown).",
-			false);
+	private final CheckboxSetting spearReachSwap = new CheckboxSetting(
+		"Spear reach swap",
+		"Corzen01's spear -> mace swap (#5): with a spear in hand while"
+			+ " you're falling far enough for a smash, a click on a target"
+			+ " goes out as a mace hit - the mace key and the click in the"
+			+ " same tick - so the mace gets the spear's reach (4.5 blocks)."
+			+ " Then back to the spear (Swap-back delay).\n\n"
+			+ "Vanilla picked the target with the spear's reach and doesn't"
+			+ " re-check it for a mace; Grim's Reach check counts the item"
+			+ " held at the start of the tick. The spear has to be in hand"
+			+ " since the tick before last, or the server never saw it. The"
+			+ " trigger bot reaches as far too.",
+		true);
+	
+	private final CheckboxSetting triggerSpearReach = new CheckboxSetting(
+		"Trigger spear reach",
+		"With a spear held since the tick before last, the trigger bot"
+			+ " hits from the spear's reach (4.5 blocks) too: a mace smash"
+			+ " (Spear reach swap, Corzen01 #5) or, against a raised"
+			+ " shield, a stun slam's axe hit (#15) - one tick earlier on a"
+			+ " fast dive, so the mace the tick after is still in reach.\n\n"
+			+ "Your own clicks get the spear's reach from Spear reach swap"
+			+ " alone - the same packets a player pressing the mace key"
+			+ " with the click sends. Off by default: a vanilla server"
+			+ " accepts it and Grim's Reach code models it, but it hasn't"
+			+ " been tested against a real anticheat server (Intave,"
+			+ " Paper unknown).",
+		false);
 	
 	private final CheckboxSetting swapOnPlayers =
 		new CheckboxSetting("Swap on players",
@@ -625,7 +640,8 @@ public final class MaceAssistHack extends Hack
 		addSetting(swapBackDelay);
 		addSetting(swapScope);
 		addSetting(stunSlam);
-		addSetting(spearStunSlam);
+		addSetting(spearReachSwap);
+		addSetting(triggerSpearReach);
 		addSetting(swapOnPlayers);
 		addSetting(swapOnMobs);
 		
@@ -1373,7 +1389,7 @@ public final class MaceAssistHack extends Hack
 			&& MC.player.getAttackStrengthScale(0) < 0.9F)
 			return false;
 		
-		double spearReach = spearSlamReach(lockedTarget);
+		double spearReach = spearReach(lockedTarget);
 		double reach = spearReach > 0 ? spearReach : Math
 			.min(triggerRange.getValue(), MC.player.entityInteractionRange());
 		if(!isCrosshairOnTarget(lockedTarget, reach) || !HitCheck.isVerifiable(
@@ -1386,31 +1402,100 @@ public final class MaceAssistHack extends Hack
 	}
 	
 	/**
-	 * How far a stun slam starting now reaches from the spear in your hand,
-	 * or 0 if there's no such slam (Corzen01's spear stun slam, #15). The
-	 * axe hit right after switching away from a spear counts the spear's
-	 * range: vanilla's crosshair picks with the held item's attack range and
-	 * doesn't re-check it for an axe, and Grim's Reach uses the range of the
-	 * item held at the start of the tick when the new one has none. The spear
-	 * has to have been in hand since the tick before, or the server never
-	 * saw it there.
+	 * How far a trigger-bot hit reaches from the spear in your hand, or 0 if
+	 * it doesn't (Corzen01 #5 spear -> mace swap, #15 spear stun slam). A hit
+	 * right after switching away from a spear to an item with no attack range
+	 * of its own (a mace, an axe) counts the spear's range: vanilla's
+	 * crosshair picks with the held item's range and doesn't re-check it, and
+	 * Grim's Reach uses the range of the item held at the start of the tick.
+	 * The spear has to have been in hand since the tick before last, or the
+	 * server never saw it there.
 	 */
-	private double spearSlamReach(Entity target)
+	private double spearReach(Entity target)
 	{
-		if(!stunSlam.isChecked() || !spearStunSlam.isChecked()
-			|| sameSlotTicks < 2)
+		if(!triggerSpearReach.isChecked() || sameSlotTicks < 2)
 			return 0;
 		
 		AttackRange range =
 			MC.player.getMainHandItem().get(DataComponents.ATTACK_RANGE);
-		if(range == null || !(target instanceof LivingEntity living)
-			|| !living.isBlocking() || !canShieldBlockYou(living)
-			|| findItem(ItemTags.AXES) == -1 || !willSmashNextTick())
+		if(range == null)
+			return 0;
+		
+		boolean shieldUp = target instanceof LivingEntity living
+			&& living.isBlocking() && canShieldBlockYou(living);
+		boolean ok;
+		if(shieldUp)
+			// the axe now, the mace next tick (attribute swap's mace would
+			// only hit the shield)
+			ok = stunSlam.isChecked() && findItem(ItemTags.AXES) != -1
+				&& willSmashNextTick() && findBestMace(wantDensity()) != -1;
+		else
+			// the attribute swap puts the mace in hand for this hit
+			ok = spearReachSwap.isChecked() && attributeSwap.isChecked()
+				&& isSmashPossible() && findBestMace(wantDensity()) != -1;
+		if(!ok)
 			return 0;
 		
 		// a little short of it - the server's copy of the target lags yours
 		return Math.max(MC.player.entityInteractionRange(),
 			range.effectiveMaxRange(MC.player) - 0.25);
+	}
+	
+	/**
+	 * Spear reach swap, your own click (Corzen01 #5): with a spear held
+	 * since the tick before last and a smash on, a click on a target becomes
+	 * a mace hit - the mace goes in hand here, before vanilla's startAttack
+	 * reads the held item, so the click goes out as a plain attack with the
+	 * mace (a spear click would be a stab) at the target vanilla picked with
+	 * the spear's reach. The swap back is the attribute swap's.
+	 *
+	 * @return true if the mace is now in hand for this click.
+	 */
+	private boolean trySpearReachSwap()
+	{
+		if(MC.player == null || !spearReachSwap.isChecked()
+			|| !attributeSwap.isChecked() || maceSwapped || slamPlan.isActive()
+			|| !PacketOrder.canChangeSlotNow())
+			return false;
+			
+		// (this runs before this tick's onUpdate: the slot now has to be
+		// the one of the last two onUpdates)
+		Inventory inventory = MC.player.getInventory();
+		int slot = inventory.getSelectedSlot();
+		if(slot != lastTickSlot || sameSlotTicks < 1
+			|| !isSpear(MC.player.getMainHandItem()))
+			return false;
+		
+		if(!(MC.hitResult instanceof EntityHitResult hit) || !isSmashPossible())
+			return false;
+		
+		Entity target = hit.getEntity();
+		if(target instanceof Player && !swapOnPlayers.isChecked()
+			|| target instanceof Mob && !swapOnMobs.isChecked())
+			return false;
+			
+		// A raised shield: the axe takes this click instead (Corzen01 #15 by
+		// hand) - the stun slam runs from the attack event and goes back to
+		// the spear (it ends on originalSlot while a swap-back is pending).
+		int swapTo;
+		if(target instanceof LivingEntity living && living.isBlocking()
+			&& canShieldBlockYou(living))
+		{
+			// (and a smash to follow, or it's just an axe poke at spear reach)
+			if(!stunSlam.isChecked() || !willSmashNextTick()
+				|| findBestMace(wantDensity()) == -1)
+				return false;
+			swapTo = findItem(ItemTags.AXES);
+		}else
+			swapTo = findBestMace(wantDensity());
+		if(swapTo == -1)
+			return false;
+		
+		originalSlot = slot;
+		selectSlot(swapTo);
+		maceSwapped = true;
+		swapBackTimer = swapBackDelay.getValueI();
+		return true;
 	}
 	
 	/**
@@ -1731,7 +1816,8 @@ public final class MaceAssistHack extends Hack
 	@Override
 	public void onLeftClick(LeftClickEvent event)
 	{
-		tryLungeSwap();
+		if(!trySpearReachSwap())
+			tryLungeSwap();
 	}
 	
 	/**
